@@ -4,6 +4,7 @@
 #include "../L4D2VR/config.h"
 #include "../L4D2VR/tracking_space.h"
 #include "../L4D2VR/roomscale_motion.h"
+#include "../L4D2VR/portal_orientation.h"
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -46,6 +47,44 @@ static void expectVectorNear(const Vector &actual, const Vector &expected, const
 
 int main()
 {
+    const VMatrix quarterTurn{0,-1,0,12, 1,0,0,-5, 0,0,1,3, 0,0,0,1};
+    const auto turn = PortalOrientation::Rotation::FromVMatrix(quarterTurn);
+    expect(turn.has_value(), true, "rigid translated portal matrix accepted");
+    if (turn) {
+        expectVectorNear(turn->Rotate({1,0,0}), {0,1,0}, "90 degree portal rotation uses Source axes");
+        expectVectorNear(turn->Inverse().Rotate(turn->Rotate({2,3,4})), {2,3,4},
+                         "portal transform followed by inverse restores direction");
+        const auto twice = turn->Compose(*turn);
+        expectVectorNear(twice.Rotate({1,0,0}), {-1,0,0}, "two 90 degree crossings compose to 180");
+        expectVectorNear(turn->Rotate({0.3f,0.1f,1.6f}) - turn->Rotate({0.1f,0.1f,1.6f}),
+                         {0,0.2f,0}, "head and controller share relative portal rotation");
+        expectVectorNear(turn->YawOnly().Rotate({1,0,0}), {0,1,0},
+                         "yaw-only wall portal preserves horizontal heading");
+    }
+    const VMatrix floorExit{0,0,-1,0, 0,1,0,0, 1,0,0,0, 0,0,0,1};
+    const auto floorTurn = PortalOrientation::Rotation::FromVMatrix(floorExit);
+    expect(floorTurn.has_value(), true, "floor portal pitch matrix accepted");
+    if (floorTurn) {
+        expectVectorNear(floorTurn->Rotate({1,0,0}), {0,0,1},
+                         "wall-to-floor portal can point forward vertically");
+        expectVectorNear(floorTurn->YawOnly().Rotate({1,0,0}), {1,0,0},
+                         "vertical-forward yaw fallback uses portal left axis");
+        expectVectorNear(floorTurn->PreserveHorizon().Rotate({1,0,0}), {0,0,1},
+                         "horizon mode retains floor-portal pitch");
+    }
+    const VMatrix rollPortal{1,0,0,0, 0,0,-1,0, 0,1,0,0, 0,0,0,1};
+    const auto rollTurn = PortalOrientation::Rotation::FromVMatrix(rollPortal);
+    expect(rollTurn.has_value(), true, "rolled portal matrix accepted");
+    if (rollTurn)
+        expectVectorNear(rollTurn->PreserveHorizon().Rotate({0,0,1}), {0,0,1},
+                         "horizon mode removes portal-induced roll without head tracking input");
+    const VMatrix reflected{-1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    expect(PortalOrientation::Rotation::FromVMatrix(reflected).has_value(), false,
+           "reflected portal matrix is not a rigid rotation");
+    const VMatrix scaled{2,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    expect(PortalOrientation::Rotation::FromVMatrix(scaled).has_value(), false,
+           "scaled portal matrix is rejected");
+
     RoomscaleMotion::StepAccumulator roomscale;
     roomscale.Observe(true, {0.0f, 0.0f, 1.6f}, 1, 0.0f, 43.2f);
     expect(roomscale.Consume(100).has_value(), false, "first HMD sample establishes baseline");
