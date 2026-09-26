@@ -163,6 +163,7 @@ VR::VR(Game *game)
 
 VR::~VR()
 {
+    ReleaseMenuMouse();
     if (m_Overlay && m_MainMenuHandle != vr::k_ulOverlayHandleInvalid) {
         const auto result = m_Overlay->DestroyOverlay(m_MainMenuHandle);
         if (result != vr::VROverlayError_None)
@@ -332,6 +333,7 @@ void VR::Update()
         m_PrevFrameTime = std::chrono::steady_clock::now();
         UpdateTracking();
         ReleaseHeldActions();
+        ReleaseMenuMouse();
         return;
     }
     if (!m_Game->m_VguiSurface->IsCursorVisible())
@@ -343,6 +345,7 @@ void VR::Update()
         ReleaseHeldActions();
         ProcessMenuInput();
     } else {
+        ReleaseMenuMouse();
         ProcessInput();
     }
 }
@@ -676,138 +679,95 @@ bool VR::GetAnalogActionData(vr::VRActionHandle_t &actionHandle, vr::InputAnalog
     return false;
 }
 
+void VR::SendMenuMouse(UiInput::MouseTransition transition)
+{
+    if (transition == UiInput::MouseTransition::None)
+        return;
+    INPUT input{};
+    input.type = INPUT_MOUSE;
+    input.mi.dwFlags = transition == UiInput::MouseTransition::Press ?
+        MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
+    if (SendInput(1, &input, sizeof(input)) != 1) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= m_NextMenuInputErrorLog) {
+            Logger::Write("Menu mouse SendInput failed: " + std::to_string(GetLastError()));
+            m_NextMenuInputErrorLog = now + std::chrono::seconds(5);
+        }
+    }
+}
+
+void VR::ReleaseMenuMouse()
+{
+    SendMenuMouse(m_MenuPointerState.LoseFocus());
+}
+
 void VR::ProcessMenuInput()
 {
-    //vr::VROverlayHandle_t currentOverlay = m_Game->m_EngineClient->IsInGame() ? m_HUDHandle : m_MainMenuHandle;
-    vr::VROverlayHandle_t currentOverlay = m_MainMenuHandle;
+    const auto overlay = m_MainMenuHandle;
+    const bool hovering = m_Overlay->IsOverlayVisible(overlay) &&
+        (CheckOverlayIntersectionForController(overlay, vr::TrackedControllerRole_LeftHand) ||
+         CheckOverlayIntersectionForController(overlay, vr::TrackedControllerRole_RightHand));
+    m_Overlay->SetOverlayFlag(overlay, vr::VROverlayFlags_MakeOverlaysInteractiveIfVisible, hovering);
+    if (!hovering)
+        ReleaseMenuMouse();
 
-    // Check if left or right hand controller is pointing at the overlay
-    const bool isHoveringOverlay = CheckOverlayIntersectionForController(currentOverlay, vr::TrackedControllerRole_LeftHand) ||
-                                   CheckOverlayIntersectionForController(currentOverlay, vr::TrackedControllerRole_RightHand);
-
-    // Overlays can't process action inputs if the laser is active, so
-    // only activate laser if a controller is pointing at the overlay
-    if (isHoveringOverlay)
-    {
-        vr::VROverlay()->SetOverlayFlag(currentOverlay, vr::VROverlayFlags_MakeOverlaysInteractiveIfVisible, true);
-
-        int windowWidth, windowHeight;
-        m_Game->m_MaterialSystem->GetRenderContext()->GetWindowSize(windowWidth, windowHeight);
-
-        vr::VREvent_t vrEvent;
-        while (vr::VROverlay()->PollNextOverlayEvent(currentOverlay, &vrEvent, sizeof(vrEvent)))
-        {
-            INPUT input;
-            switch (vrEvent.eventType)
-            {
-            case vr::VREvent_MouseMove:
-            {
-                float laserX = vrEvent.data.mouse.x;
-                float laserY = vrEvent.data.mouse.y;
-
-                if (m_Game->m_EngineClient->IsInGame())
-                {
-                    laserY -= (m_RenderHeight - windowHeight);
-                    laserY = windowHeight - laserY;
-                }
-                else // main menu (uses render sized texture)
-                {
-                    laserX = (laserX / m_RenderWidth) * windowWidth;
-                    laserY = ((-laserY + m_RenderHeight) / m_RenderHeight) * windowHeight;
-                }
-
-                m_Game->m_VguiInput->SetCursorPos(laserX, laserY);
-                break;
+    int windowWidth = 0, windowHeight = 0;
+    IMatRenderContext *context = m_Game->m_MaterialSystem->GetRenderContext();
+    context->GetWindowSize(windowWidth, windowHeight);
+    context->Release();
+    const bool inGame = m_Game->m_EngineClient->IsInGame();
+    vr::VREvent_t event{};
+    // Drain releases even when a controller leaves the overlay after a press.
+    while (m_Overlay->PollNextOverlayEvent(overlay, &event, sizeof(event))) {
+        switch (event.eventType) {
+        case vr::VREvent_MouseMove:
+            if (hovering) {
+                const auto point = UiInput::MapMenuPointer(event.data.mouse.x, event.data.mouse.y,
+                    m_RenderWidth, m_RenderHeight, windowWidth, windowHeight, inGame);
+                if (point)
+                    m_Game->m_VguiInput->SetCursorPos(point->x, point->y);
             }
-
-            case vr::VREvent_MouseButtonDown:
-                // Don't allow holding down the mouse down in the pause menu. The resume button can be clicked before
-                // the MouseButtonUp event is polled, which causes issues with the overlay.
-                if (currentOverlay == m_MainMenuHandle)
-                {
-                    input.type = INPUT_MOUSE;
-                    input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-                    SendInput(1, &input, sizeof(INPUT));
-                }
-                break;
-
-            case vr::VREvent_MouseButtonUp:
-                /*if (currentOverlay == m_HUDHandle)
-                {
-                    input.type = INPUT_MOUSE;
-                    input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-                    SendInput(1, &input, sizeof(INPUT));
-                }*/
-                input.type = INPUT_MOUSE;
-                input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
-                SendInput(1, &input, sizeof(INPUT));
-                break;
-
-            case vr::VREvent_ScrollDiscrete:
-                m_Game->m_VguiInput->InternalMouseWheeled((int)vrEvent.data.scroll.ydelta);
-                break;
-            }
+            break;
+        case vr::VREvent_MouseButtonDown:
+            if (hovering)
+                SendMenuMouse(m_MenuPointerState.Press());
+            break;
+        case vr::VREvent_MouseButtonUp:
+            SendMenuMouse(m_MenuPointerState.Release());
+            break;
+        case vr::VREvent_ScrollDiscrete:
+            if (hovering)
+                m_Game->m_VguiInput->InternalMouseWheeled((int)event.data.scroll.ydelta);
+            break;
         }
     }
-    else
-    {
-        vr::VROverlay()->SetOverlayFlag(currentOverlay, vr::VROverlayFlags_MakeOverlaysInteractiveIfVisible, false);
-        
-        if (PressedDigitalAction(m_MenuSelect, true))
-        {
-            INPUT input {};
-            input.type = INPUT_KEYBOARD;
-            input.ki.wVk = VK_RETURN;
-            SendInput(1, &input, sizeof(INPUT));
-            input.ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(1, &input, sizeof(INPUT));
+    if (hovering)
+        return;
+
+    const auto sendKey = [this](WORD key) {
+        INPUT inputs[2]{};
+        inputs[0].type = inputs[1].type = INPUT_KEYBOARD;
+        inputs[0].ki.wVk = inputs[1].ki.wVk = key;
+        inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+        const UINT sent = SendInput(2, inputs, sizeof(INPUT));
+        if (sent == 1)
+            SendInput(1, &inputs[1], sizeof(INPUT)); // best-effort key release
+        if (sent != 2) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= m_NextMenuInputErrorLog) {
+                Logger::Write("Menu keyboard SendInput failed: " + std::to_string(GetLastError()));
+                m_NextMenuInputErrorLog = now + std::chrono::seconds(5);
+            }
         }
-        if (PressedDigitalAction(m_MenuBack, true) || PressedDigitalAction(m_Pause, true))
-        {
-            INPUT input {};
-            input.type = INPUT_KEYBOARD;
-            input.ki.wVk = VK_ESCAPE;
-            SendInput(1, &input, sizeof(INPUT));
-            input.ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(1, &input, sizeof(INPUT));
-        }
-        if (PressedDigitalAction(m_MenuUp, true))
-        {
-            INPUT input {};
-            input.type = INPUT_KEYBOARD;
-            input.ki.wVk = VK_UP;
-            SendInput(1, &input, sizeof(INPUT));
-            input.ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(1, &input, sizeof(INPUT));
-        }
-        if (PressedDigitalAction(m_MenuDown, true))
-        {
-            INPUT input {};
-            input.type = INPUT_KEYBOARD;
-            input.ki.wVk = VK_DOWN;
-            SendInput(1, &input, sizeof(INPUT));
-            input.ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(1, &input, sizeof(INPUT));
-        }
-        if (PressedDigitalAction(m_MenuLeft, true))
-        {
-            INPUT input {};
-            input.type = INPUT_KEYBOARD;
-            input.ki.wVk = VK_LEFT;
-            SendInput(1, &input, sizeof(INPUT));
-            input.ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(1, &input, sizeof(INPUT));
-        }
-        if (PressedDigitalAction(m_MenuRight, true))
-        {
-            INPUT input {};
-            input.type = INPUT_KEYBOARD;
-            input.ki.wVk = VK_RIGHT;
-            SendInput(1, &input, sizeof(INPUT));
-            input.ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(1, &input, sizeof(INPUT));
-        }
-    }
+    };
+    if (PressedDigitalAction(m_MenuSelect, true)) sendKey(VK_RETURN);
+    const bool back = PressedDigitalAction(m_MenuBack, true);
+    const bool pause = PressedDigitalAction(m_Pause, true);
+    if (back || pause) sendKey(VK_ESCAPE);
+    if (PressedDigitalAction(m_MenuUp, true)) sendKey(VK_UP);
+    if (PressedDigitalAction(m_MenuDown, true)) sendKey(VK_DOWN);
+    if (PressedDigitalAction(m_MenuLeft, true)) sendKey(VK_LEFT);
+    if (PressedDigitalAction(m_MenuRight, true)) sendKey(VK_RIGHT);
 }
 
 void VR::ProcessViewActions()

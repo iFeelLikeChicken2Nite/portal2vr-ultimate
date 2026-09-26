@@ -5,6 +5,7 @@
 #include "digital_input.h"
 #include "tracked_device.h"
 #include "config.h"
+#include "ui_input.h"
 #include <filesystem>
 
 #define MAX_STR_LEN 256
@@ -44,6 +45,8 @@ public:
 	vr::IVRRenderModels *m_RenderModels = nullptr;
 
 	vr::VROverlayHandle_t m_MainMenuHandle = vr::k_ulOverlayHandleInvalid;
+	UiInput::MenuPointerState m_MenuPointerState;
+	std::chrono::steady_clock::time_point m_NextMenuInputErrorLog{};
 	bool m_OpenVRStarted = false;
 	int m_LastPoseError = 0;
 	int m_LastInputError = 0;
@@ -250,6 +253,8 @@ public:
 	bool UpdatePosesAndActions();
 	void GetViewParameters();
 	void ProcessMenuInput();
+	void SendMenuMouse(UiInput::MouseTransition transition);
+	void ReleaseMenuMouse();
 	void ProcessInput();
 	void ProcessViewActions();
 	Vector GetMovementForward();
