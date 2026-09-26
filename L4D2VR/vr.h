@@ -99,6 +99,9 @@ public:
 	Vector m_SetupOrigin = { 0,0,0 };
 	TrackingSpace::PlayspaceState m_Playspace;
 	bool m_TrackingOutputValid = false;
+	bool m_HmdLostSinceLastValid = false;
+	bool m_HasLastHmdOffset = false;
+	Vector m_LastHmdOffsetUnits{0.0f, 0.0f, 0.0f};
 	bool m_HasEyeHeight = false;
 	bool m_EyeHeightWasInvalid = false;
 	int m_EyeHeightPlayerIndex = -1;
@@ -235,6 +238,7 @@ public:
 	void GetViewParameters();
 	void ProcessMenuInput();
 	void ProcessInput();
+	void ProcessViewActions();
 	void ProcessHeldAction(vr::VRActionHandle_t actionHandle, DigitalButtonState &state,
 	                       const char *pressCommand, const char *releaseCommand);
 	void ReleaseHeldActions();

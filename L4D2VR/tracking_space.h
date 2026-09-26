@@ -81,6 +81,13 @@ struct PlayspaceState {
         translationUnits.x += before.x - after.x;
         translationUnits.y += before.y - after.y;
     }
+
+    void PreserveOffsetOnRecovery(const Vector &freshHmdMeters,
+                                  const Vector &lastRenderedOffsetUnits, float eyeHeightUnits)
+    {
+        const Vector correction = lastRenderedOffsetUnits - HmdOffsetUnits(freshHmdMeters, eyeHeightUnits);
+        translationUnits += correction;
+    }
 };
 
 } // namespace TrackingSpace

@@ -317,11 +317,16 @@ void VR::Update()
     }
 
     SubmitVRTextures();
-    if (!UpdatePosesAndActions()) {
+    const bool actionsReady = UpdatePosesAndActions();
+    GetPoses();
+    if (!actionsReady) {
+        m_PrevFrameTime = std::chrono::steady_clock::now();
         UpdateTracking();
         ReleaseHeldActions();
         return;
     }
+    if (!m_Game->m_VguiSurface->IsCursorVisible())
+        ProcessViewActions();
     UpdateTracking();
 
     if (m_Game->m_VguiSurface->IsCursorVisible()) {
@@ -795,6 +800,54 @@ void VR::ProcessMenuInput()
     }
 }
 
+void VR::ProcessViewActions()
+{
+    if (!m_IsVREnabled) {
+        m_PrevFrameTime = std::chrono::steady_clock::now();
+        return;
+    }
+    using duration = std::chrono::duration<float, std::milli>;
+    const auto currentTime = std::chrono::steady_clock::now();
+    const float deltaTime = duration(currentTime - m_PrevFrameTime).count();
+    m_PrevFrameTime = currentTime;
+
+    if (PressedDigitalAction(m_ActionResetPosition, true))
+        ResetPosition();
+    if (!m_HmdPose.valid)
+        return;
+
+    vr::InputAnalogActionData_t analogActionData{};
+    if (!GetAnalogActionData(m_ActionTurn, analogActionData))
+        return;
+
+    float deltaYaw = 0.0f;
+    if (m_SnapTurning) {
+        if (!m_PressedTurn && analogActionData.x > 0.5f) {
+            deltaYaw = -m_SnapTurnAngle;
+            m_PressedTurn = true;
+        } else if (!m_PressedTurn && analogActionData.x < -0.5f) {
+            deltaYaw = m_SnapTurnAngle;
+            m_PressedTurn = true;
+        } else if (analogActionData.x > -0.3f && analogActionData.x < 0.3f) {
+            m_PressedTurn = false;
+        }
+    } else {
+        constexpr float deadzone = 0.2f;
+        if (std::fabs(analogActionData.x) > deadzone) {
+            const float normalized = (std::fabs(analogActionData.x) - deadzone) / (1.0f - deadzone);
+            deltaYaw = -std::copysign(m_TurnSpeed * deltaTime * normalized, analogActionData.x);
+        }
+    }
+
+    if (deltaYaw != 0.0f) {
+        m_Playspace.yawDegrees = m_RotationOffset.y;
+        m_Playspace.TurnAboutHmd(deltaYaw, m_HmdPose.TrackedDevicePos, m_LastEyeHeightUnits);
+        m_RotationOffset.y = m_Playspace.yawDegrees;
+        m_RotationOffset.y -= 360.0f * std::floor(m_RotationOffset.y / 360.0f);
+        m_Playspace.yawDegrees = m_RotationOffset.y;
+    }
+}
+
 void VR::ProcessInput()
 {
     if (!m_IsVREnabled) {
@@ -803,51 +856,6 @@ void VR::ProcessInput()
     }
 
     //vr::VROverlay()->SetOverlayFlag(m_HUDHandle, vr::VROverlayFlags_MakeOverlaysInteractiveIfVisible, false);
-
-    typedef std::chrono::duration<float, std::milli> duration;
-    auto currentTime = std::chrono::steady_clock::now();
-    duration elapsed = currentTime - m_PrevFrameTime;
-    float deltaTime = elapsed.count();
-    m_PrevFrameTime = currentTime;
-
-    vr::InputAnalogActionData_t analogActionData;
-
-    if (GetAnalogActionData(m_ActionTurn, analogActionData))
-    {
-        if (m_SnapTurning)
-        {
-            if (!m_PressedTurn && analogActionData.x > 0.5)
-            {
-                m_RotationOffset.y -= m_SnapTurnAngle;
-                m_PressedTurn = true;
-            }
-            else if (!m_PressedTurn && analogActionData.x < -0.5)
-            {
-                m_RotationOffset.y += m_SnapTurnAngle;
-                m_PressedTurn = true;
-            }
-            else if (analogActionData.x < 0.3 && analogActionData.x > -0.3)
-                m_PressedTurn = false;
-        }
-        // Smooth turning
-        else
-        {
-            float deadzone = 0.2;
-            // smoother turning
-            float xNormalized = (abs(analogActionData.x) - deadzone) / (1 - deadzone);
-            if (analogActionData.x > deadzone)
-            {
-                m_RotationOffset.y -= m_TurnSpeed * deltaTime * xNormalized;
-            }
-            if (analogActionData.x < -deadzone)
-            {
-                m_RotationOffset.y += m_TurnSpeed * deltaTime * xNormalized;
-            }
-        }
-
-        // Wrap from 0 to 360
-        m_RotationOffset.y -= 360 * std::floor(m_RotationOffset.y / 360);
-    }
 
     ProcessHeldAction(m_ActionPrimaryAttack, m_PrimaryAttackState, "+attack", "-attack");
     ProcessHeldAction(m_ActionSecondaryAttack, m_SecondaryAttackState, "+attack2", "-attack2");
@@ -863,11 +871,6 @@ void VR::ProcessInput()
     else if (PressedDigitalAction(m_ActionNextItem, true))
     {
         m_Game->ClientCmd_Unrestricted("invnext");
-    }
-
-    if (PressedDigitalAction(m_ActionResetPosition, true))
-    {
-        ResetPosition();
     }
 
     if (PressedDigitalAction(m_ActionFlashlight, true))
@@ -1087,17 +1090,25 @@ void VR::UpdateHMDAngles() {
 void VR::ResetPosition()
 {
     if (m_HmdPose.valid) {
+        if (m_VRScale != m_Config.vrScale ||
+            m_Playspace.heightOffsetMeters != m_Config.heightOffsetMeters) {
+            m_VRScale = m_Config.vrScale;
+            m_Playspace.scale = m_VRScale;
+            m_Playspace.heightOffsetMeters = m_Config.heightOffsetMeters;
+            Logger::Write("Applied staged VRScale/HeightOffsetMeters at recenter");
+        }
         m_Playspace.Recenter(m_HmdPose.TrackedDevicePos);
         m_Center = m_HmdPose.TrackedDevicePos;
+        m_HmdLostSinceLastValid = false;
     }
 }
 
 void VR::UpdateTracking()
 {
     m_TrackingOutputValid = false;
-    GetPoses();
 
     if (!m_HmdPose.valid) {
+        m_HmdLostSinceLastValid = true;
         if (m_Game->m_Offsets->m_LaserAvailable) {
             const int index = m_Game->m_EngineClient->GetLocalPlayer();
             C_Portal_Player* player = (C_Portal_Player*)m_Game->GetClientEntity(index);
@@ -1148,9 +1159,19 @@ void VR::UpdateTracking()
 
     m_Playspace.yawDegrees = m_RotationOffset.y;
     m_Playspace.scale = m_VRScale;
+    if (m_HmdLostSinceLastValid) {
+        if (m_HasLastHmdOffset) {
+            m_Playspace.PreserveOffsetOnRecovery(hmdPosLocal, m_LastHmdOffsetUnits,
+                                                  m_LastEyeHeightUnits);
+            Logger::Write("HMD tracking recovered; preserving previous view offset until recenter");
+        }
+        m_HmdLostSinceLastValid = false;
+    }
     UpdateHMDAngles();
 
     m_HmdPosRelative = m_Playspace.HmdOffsetUnits(hmdPosLocal, m_LastEyeHeightUnits);
+    m_LastHmdOffsetUnits = m_HmdPosRelative;
+    m_HasLastHmdOffset = true;
     m_TrackingOutputValid = true;
 
     // Roomscale setup
@@ -1527,12 +1548,21 @@ void VR::ParseConfigFile()
         Logger::Write("Config: AntiAliasing change requires a restart; keeping current value");
         parsed.value.antiAliasing = m_AntiAliasing;
     }
+    if (m_IsInitialized && parsed.value.trackingMode != m_Playspace.mode) {
+        Logger::Write("Config: TrackingMode change requires restart; keeping active compositor origin");
+        parsed.value.trackingMode = m_Playspace.mode;
+    }
+    if (m_IsInitialized && m_VRScale != parsed.value.vrScale)
+        Logger::Write("Config: VRScale change staged until recenter");
+    if (m_IsInitialized && m_Playspace.heightOffsetMeters != parsed.value.heightOffsetMeters)
+        Logger::Write("Config: HeightOffsetMeters change staged until recenter");
     m_Config = parsed.value;
     m_SnapTurning = m_Config.snapTurning;
     m_SnapTurnAngle = m_Config.snapTurnAngle;
     m_TurnSpeed = m_Config.turnSpeed;
     m_LeftHanded = m_Config.leftHanded;
-    m_VRScale = m_Config.vrScale;
+    if (!m_IsInitialized)
+        m_VRScale = m_Config.vrScale;
     if (!m_IsInitialized) {
         m_Playspace.mode = m_Config.trackingMode;
         m_Playspace.heightOffsetMeters = m_Config.heightOffsetMeters;

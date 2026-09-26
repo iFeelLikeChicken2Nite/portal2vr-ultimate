@@ -100,6 +100,14 @@ int main()
     turning.Recenter(turnHmd);
     expectVectorNear(turning.HmdOffsetUnits(turnHmd, 70.0f),
                      {0.0f, 0.0f, 0.0f}, "recenter clears turn translation");
+    const Vector lastRenderedOffset{12.0f, -8.0f, 5.0f};
+    turning.PreserveOffsetOnRecovery({0.8f, -0.3f, 1.1f}, lastRenderedOffset, 70.0f);
+    expectVectorNear(turning.HmdOffsetUnits({0.8f, -0.3f, 1.1f}, 70.0f),
+                     lastRenderedOffset, "tracking recovery holds last rendered offset");
+    turning.Recenter({0.8f, -0.3f, 1.1f});
+    expectVectorNear(turning.HmdOffsetUnits({0.8f, -0.3f, 1.1f}, 70.0f),
+                     {0.0f, 0.0f, 0.0f}, "recenter clears recovery compensation");
+    expectNear(standing.centerMeters.z, 0.0f, "standing recenter keeps floor origin");
 
     DigitalButtonState attack;
     expectCommand(attack.HeldCommand(true, false, false, "+attack", "-attack"), nullptr, "released to released");
