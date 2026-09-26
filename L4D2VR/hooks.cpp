@@ -215,7 +215,7 @@ ITexture* __fastcall Hooks::dGetRenderTarget(void* ecx, void* edx)
 
 void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CViewSetup &hudViewSetup, int nClearFlags, int whatToDraw)
 {
-    if (!m_VR->m_HmdPose.valid)
+    if (!m_VR->m_TrackingOutputValid)
         return hkRenderView.fOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
 	if (!m_VR->m_CreatedVRTextures) {
 		m_VR->CreateVRTextures();
@@ -344,7 +344,7 @@ bool __fastcall Hooks::dCreateMove(void *ecx, void *edx, float flInputSampleTime
 	if (!cmd->command_number)
 		return hkCreateMove.fOriginal(ecx, flInputSampleTime, cmd);
 
-	if (m_VR->m_IsVREnabled && m_VR->m_HmdPose.valid)
+	if (m_VR->m_IsVREnabled && m_VR->m_TrackingOutputValid)
 	{
 		cmd->viewangles = m_VR->m_HmdAngAbs;
 
@@ -421,7 +421,7 @@ void __fastcall Hooks::dCalcViewModelView(void *ecx, void *edx, const Vector &ey
 
 	//std::cout << "dCalcViewModelView: (" << m_VR->m_IsVREnabled << ")\n";
 
-	if (m_VR->m_IsVREnabled && m_VR->m_RightControllerPose.valid)
+	if (m_VR->m_IsVREnabled && m_VR->m_TrackingOutputValid && m_VR->m_RightControllerPose.valid)
 	{
 		vecNewOrigin = m_VR->GetRecommendedViewmodelAbsPos(eyePosition);
 		vecNewAngles = m_VR->GetRecommendedViewmodelAbsAngle();
@@ -446,7 +446,7 @@ int Hooks::dWriteUsercmd(bf_write *buf, CUserCmd *to, CUserCmd *from)
 	auto result =  hkWriteUsercmd.fOriginal(buf, to, from);
 
 	// Let's write our stuff into the buffer
-	if (m_VR->m_IsVREnabled && m_VR->m_RightControllerPose.valid)
+	if (m_VR->m_IsVREnabled && m_VR->m_TrackingOutputValid && m_VR->m_RightControllerPose.valid)
 	{
 		Vector controllerPos = m_VR->GetRightControllerAbsPos();
 		QAngle controllerAngles = m_VR->GetRightControllerAbsAngle();
@@ -633,7 +633,7 @@ Vector* Hooks::dWeapon_ShootPosition(void* ecx, void* edx, Vector* eyePos)
 
 	auto vrPlayer = m_Game->m_PlayersVRInfo[index];
 
-	if (m_VR->m_IsVREnabled && m_VR->m_RightControllerPose.valid && localIndex == index) {
+	if (m_VR->m_IsVREnabled && m_VR->m_TrackingOutputValid && m_VR->m_RightControllerPose.valid && localIndex == index) {
 		*result = m_VR->GetRightControllerAbsPos();	
 	}
 	else if (vrPlayer.isUsingVR)
@@ -672,7 +672,7 @@ bool __fastcall Hooks::dTraceFirePortal(void* ecx, void* edx, const Vector& vTra
 
 			auto vrPlayer = m_Game->m_PlayersVRInfo[index];
 
-			if (m_VR->m_IsVREnabled && m_VR->m_RightControllerPose.valid && localIndex == index) {
+			if (m_VR->m_IsVREnabled && m_VR->m_TrackingOutputValid && m_VR->m_RightControllerPose.valid && localIndex == index) {
 				vNewTraceStart = m_VR->GetRightControllerAbsPos();
 				vNewDirection = m_VR->m_RightControllerForward;
 			}
@@ -899,7 +899,7 @@ QAngle& __fastcall Hooks::dEyeAngles(void* ecx, void* edx) {
 
 		auto& vrPlayer = m_Game->m_PlayersVRInfo[index];
 
-		if (m_VR->m_IsVREnabled && m_VR->m_RightControllerPose.valid && localIndex == index) {
+		if (m_VR->m_IsVREnabled && m_VR->m_TrackingOutputValid && m_VR->m_RightControllerPose.valid && localIndex == index) {
 			return m_VR->GetRightControllerAbsAngleConst();
 		}
 		else if (vrPlayer.isUsingVR)

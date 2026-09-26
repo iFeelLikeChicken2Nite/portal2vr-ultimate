@@ -97,6 +97,12 @@ public:
 
 	Vector m_Center = { 0,0,0 };
 	Vector m_SetupOrigin = { 0,0,0 };
+	TrackingSpace::PlayspaceState m_Playspace;
+	bool m_TrackingOutputValid = false;
+	bool m_HasEyeHeight = false;
+	bool m_EyeHeightWasInvalid = false;
+	int m_EyeHeightPlayerIndex = -1;
+	float m_LastEyeHeightUnits = 0.0f;
 
 	float m_HeightOffset = 0.0;
 	bool m_RoomscaleActive = false;

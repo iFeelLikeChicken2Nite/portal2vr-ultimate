@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <sstream>
 
 static int failures = 0;
@@ -75,6 +76,13 @@ int main()
                      {0.0f, 0.0f, 20.0f}, "standing floor height uses measured eye height");
     expectVectorNear(standing.HmdOffsetUnits({2.0f, 3.0f, 1.8f}, 70.0f),
                      {0.0f, 0.0f, 25.0f}, "standing HMD height change");
+    const auto measuredEyeHeight = TrackingSpace::EyeHeightUnits(72.0f, 5.0f);
+    expect(measuredEyeHeight.has_value(), true, "finite Source eye height available");
+    if (measuredEyeHeight) expectNear(*measuredEyeHeight, 67.0f, "Source eye height difference");
+    expect(TrackingSpace::EyeHeightUnits(std::numeric_limits<float>::quiet_NaN(), 5.0f).has_value(),
+           false, "NaN eye position rejected");
+    expect(TrackingSpace::EyeHeightUnits(72.0f, std::numeric_limits<float>::infinity()).has_value(),
+           false, "infinite player origin rejected");
 
     TrackingSpace::PlayspaceState turning;
     turning.scale = 50.0f;

@@ -2,6 +2,7 @@
 
 #include "sdk/vector.h"
 #include <cmath>
+#include <optional>
 
 // Tracking positions are Source-oriented meters until converted at this boundary.
 namespace TrackingSpace {
@@ -28,6 +29,16 @@ inline Vector RotateYawDegrees(const Vector &sourceVector, float degrees)
 
 enum class TrackingMode { Seated, Standing };
 enum class MovementDirection { Hmd, LeftController, RightController };
+
+inline std::optional<float> EyeHeightUnits(float eyeZ, float originZ)
+{
+    if (!std::isfinite(eyeZ) || !std::isfinite(originZ))
+        return std::nullopt;
+    const float height = eyeZ - originZ;
+    if (!std::isfinite(height))
+        return std::nullopt;
+    return height;
+}
 
 struct PlayspaceState {
     Vector centerMeters{0.0f, 0.0f, 0.0f};

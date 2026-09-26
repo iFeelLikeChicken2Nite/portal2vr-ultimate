@@ -91,6 +91,15 @@ VR::VR(Game *game)
         return;
 
     ParseConfigFile();
+    const auto trackingOrigin = m_Playspace.mode == TrackingSpace::TrackingMode::Standing ?
+        vr::TrackingUniverseStanding : vr::TrackingUniverseSeated;
+    vr::VRCompositor()->SetTrackingSpace(trackingOrigin);
+    if (vr::VRCompositor()->GetTrackingSpace() != trackingOrigin) {
+        Game::errorMsg("OpenVR compositor did not accept the configured tracking space.");
+        return;
+    }
+    Logger::Write(std::string("OpenVR tracking space: ") +
+                  (trackingOrigin == vr::TrackingUniverseStanding ? "Standing" : "Seated"));
     std::error_code configTimeError;
     m_ConfigLastModified = std::filesystem::last_write_time("VR\\config.txt", configTimeError);
 
@@ -431,15 +440,12 @@ void VR::GetPoseData(vr::TrackedDevicePose_t &poseRaw, TrackedDevicePoseData &po
         Vector vel;
         QAngle ang;
         QAngle angvel;
-        pos.x = -mat.m[2][3];
-        pos.y = -mat.m[0][3];
-        pos.z = mat.m[1][3];
+        pos = TrackingSpace::OpenVrToSourceMeters({mat.m[0][3], mat.m[1][3], mat.m[2][3]});
         ang.x = asin(mat.m[1][2]) * (180.0 / 3.141592654);
         ang.y = atan2f(mat.m[0][2], mat.m[2][2]) * (180.0 / 3.141592654);
         ang.z = atan2f(-mat.m[1][0], mat.m[1][1]) * (180.0 / 3.141592654);
-        vel.x = -poseRaw.vVelocity.v[2];
-        vel.y = -poseRaw.vVelocity.v[0];
-        vel.z = poseRaw.vVelocity.v[1];
+        vel = TrackingSpace::OpenVrToSourceMeters({poseRaw.vVelocity.v[0],
+            poseRaw.vVelocity.v[1], poseRaw.vVelocity.v[2]});
         angvel.x = -poseRaw.vAngularVelocity.v[2] * (180.0 / 3.141592654);
         angvel.y = -poseRaw.vAngularVelocity.v[0] * (180.0 / 3.141592654);
         angvel.z = poseRaw.vAngularVelocity.v[1] * (180.0 / 3.141592654);
@@ -1080,12 +1086,15 @@ void VR::UpdateHMDAngles() {
 
 void VR::ResetPosition()
 {
-    if (m_HmdPose.valid)
+    if (m_HmdPose.valid) {
+        m_Playspace.Recenter(m_HmdPose.TrackedDevicePos);
         m_Center = m_HmdPose.TrackedDevicePos;
+    }
 }
 
 void VR::UpdateTracking()
 {
+    m_TrackingOutputValid = false;
     GetPoses();
 
     if (!m_HmdPose.valid) {
@@ -1105,20 +1114,44 @@ void VR::UpdateTracking()
     if (!localPlayer)
         return;
 
+    if (playerIndex != m_EyeHeightPlayerIndex) {
+        m_EyeHeightPlayerIndex = playerIndex;
+        m_HasEyeHeight = false;
+        m_EyeHeightWasInvalid = false;
+    }
+    if (m_Playspace.mode == TrackingSpace::TrackingMode::Standing && m_6DOF) {
+        const Vector eyePosition = localPlayer->EyePosition();
+        const Vector playerOrigin = localPlayer->GetAbsOrigin();
+        const auto measuredHeight = TrackingSpace::EyeHeightUnits(eyePosition.z, playerOrigin.z);
+        if (measuredHeight) {
+            m_LastEyeHeightUnits = *measuredHeight;
+            m_HasEyeHeight = true;
+            if (m_EyeHeightWasInvalid)
+                Logger::Write("Source player eye height available again");
+            m_EyeHeightWasInvalid = false;
+        } else {
+            if (!m_EyeHeightWasInvalid)
+                Logger::Write("Source player eye height unavailable; keeping last valid height or deferring standing view");
+            m_EyeHeightWasInvalid = true;
+            if (!m_HasEyeHeight)
+                return;
+        }
+    }
+
     // HMD tracking
     Vector hmdPosLocal = m_HmdPose.TrackedDevicePos;
-    Vector hmdPosCentered = hmdPosLocal - m_Center;
+    Vector hmdPosCentered = hmdPosLocal - m_Playspace.centerMeters;
 
     m_HmdPosRelativeRaw = hmdPosCentered;
 
     //std::cout << "HMD - X: " << hmdWorldPos.x << ", Y: " << hmdWorldPos.y << ", Z: " << hmdWorldPos.z << "\n";
 
-    Vector hmdPosCorrected = hmdPosCentered;
-    VectorPivotXY(hmdPosCorrected, { 0, 0, 0 }, m_RotationOffset.y);
-    
+    m_Playspace.yawDegrees = m_RotationOffset.y;
+    m_Playspace.scale = m_VRScale;
     UpdateHMDAngles();
 
-    m_HmdPosRelative = hmdPosCorrected * m_VRScale;
+    m_HmdPosRelative = m_Playspace.HmdOffsetUnits(hmdPosLocal, m_LastEyeHeightUnits);
+    m_TrackingOutputValid = true;
 
     // Roomscale setup
     /*Vector cameraMovingDirection = m_Center - m_SetupOriginPrev;
@@ -1174,25 +1207,27 @@ void VR::UpdateTracking()
     m_Ipd = m_EyeToHeadTransformPosRight.x * 2;
     m_EyeZ = m_EyeToHeadTransformPosRight.z;
 
+    // Hand tracking
+    if (m_LeftControllerPose.valid) {
+        QAngle leftControllerAng = m_LeftControllerPose.TrackedDeviceAng;
+        leftControllerAng.y += m_RotationOffset.y;
+        QAngle::AngleVectors(leftControllerAng, &m_LeftControllerForward,
+                             &m_LeftControllerRight, &m_LeftControllerUp);
+        m_LeftControllerForward = VectorRotate(m_LeftControllerForward, m_LeftControllerRight, -30.0f);
+        m_LeftControllerUp = VectorRotate(m_LeftControllerUp, m_LeftControllerRight, -30.0f);
+        QAngle::VectorAngles(m_LeftControllerForward, m_LeftControllerUp, m_LeftControllerAngAbs);
+    }
+
     if (!m_RightControllerPose.valid)
         return;
-
-    // Hand tracking
-    Vector leftControllerPosLocal = m_LeftControllerPose.TrackedDevicePos;
-    QAngle leftControllerAngLocal = m_LeftControllerPose.TrackedDeviceAng;
 
     Vector rightControllerPosLocal = m_RightControllerPose.TrackedDevicePos;
     QAngle rightControllerAngLocal = m_RightControllerPose.TrackedDeviceAng;
 
     //std::cout << "Right Controller - X: " << rightControllerPosLocal.x << "Y: " << rightControllerPosLocal.y << "Z: " << rightControllerPosLocal.z << "\n";
 
-    Vector hmdToController = rightControllerPosLocal - hmdPosLocal;
-    //Vector rightControllerPosCorrected = hmdPosCorrected + hmdToController;
-
-    // When using stick turning, pivot the controllers around the HMD
-    VectorPivotXY(hmdToController, { 0, 0, 0 }, m_RotationOffset.y);
-
-    m_RightControllerPosRel = hmdToController * m_VRScale;
+    m_RightControllerPosRel = m_Playspace.ControllerOffsetUnits(rightControllerPosLocal,
+        hmdPosLocal, m_LastEyeHeightUnits) - m_HmdPosRelative;
 
     //rightControllerAngLocal += m_RotationOffset;
     rightControllerAngLocal.x += m_RotationOffset.x;
@@ -1202,19 +1237,11 @@ void VR::UpdateTracking()
     // Wrap angle from -180 to 180
     //rightControllerAngLocal.Normalize();
 
-    if (m_LeftControllerPose.valid)
-        QAngle::AngleVectors(leftControllerAngLocal, &m_LeftControllerForward, &m_LeftControllerRight, &m_LeftControllerUp);
     QAngle::AngleVectors(rightControllerAngLocal, &m_RightControllerForward, &m_RightControllerRight, &m_RightControllerUp);
 
     const float offset = -30;
 
     // Adjust controller angle downward
-    if (m_LeftControllerPose.valid) {
-        m_LeftControllerForward = VectorRotate(m_LeftControllerForward, m_LeftControllerRight, offset);
-        m_LeftControllerUp = VectorRotate(m_LeftControllerUp, m_LeftControllerRight, offset);
-        QAngle::VectorAngles(m_LeftControllerForward, m_LeftControllerUp, m_LeftControllerAngAbs);
-    }
-
     m_RightControllerForward = VectorRotate(m_RightControllerForward, m_RightControllerRight, offset);
     m_RightControllerUp = VectorRotate(m_RightControllerUp, m_RightControllerRight, offset);
 
@@ -1506,6 +1533,11 @@ void VR::ParseConfigFile()
     m_TurnSpeed = m_Config.turnSpeed;
     m_LeftHanded = m_Config.leftHanded;
     m_VRScale = m_Config.vrScale;
+    if (!m_IsInitialized) {
+        m_Playspace.mode = m_Config.trackingMode;
+        m_Playspace.heightOffsetMeters = m_Config.heightOffsetMeters;
+        m_Playspace.scale = m_VRScale;
+    }
     m_IpdScale = m_Config.ipdScale;
     m_6DOF = m_Config.sixDof;
     m_AimMode = m_Config.aimMode;
