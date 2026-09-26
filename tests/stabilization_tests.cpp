@@ -5,6 +5,7 @@
 #include "../L4D2VR/tracking_space.h"
 #include "../L4D2VR/roomscale_motion.h"
 #include "../L4D2VR/portal_orientation.h"
+#include "../L4D2VR/ui_input.h"
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -152,6 +153,32 @@ int main()
                      "recenter changes tracking anchor without moving the virtual head");
     expectVectorNear(portalRig.MapHmd({1,0,0}, *turn), {10,22,30},
                      "post-recenter physical delta retains portal orientation");
+
+    UiInput::MenuPointerState menuMouse;
+    expect(menuMouse.Press() == UiInput::MouseTransition::Press, true,
+           "menu press creates one synthetic down event");
+    expect(menuMouse.Press() == UiInput::MouseTransition::None, true,
+           "held menu selection does not repeat mouse down");
+    expect(menuMouse.LoseFocus() == UiInput::MouseTransition::Release, true,
+           "lost hover or menu focus releases a held synthetic click");
+    expect(menuMouse.Release() == UiInput::MouseTransition::None, true,
+           "late mouse up after focus loss is ignored");
+    expect(menuMouse.Press() == UiInput::MouseTransition::Press, true,
+           "next menu click still works after focus recovery");
+    expect(menuMouse.Release() == UiInput::MouseTransition::Release, true,
+           "ordinary release emits one up event");
+    const auto mainTopLeft = UiInput::MapMenuPointer(0, 1080, 1920, 1080, 1280, 720, false);
+    expect(mainTopLeft && mainTopLeft->x == 0 && mainTopLeft->y == 0, true,
+           "main-menu overlay top-left maps to desktop top-left");
+    const auto mainBottomRight = UiInput::MapMenuPointer(1920, 0, 1920, 1080, 1280, 720, false);
+    expect(mainBottomRight && mainBottomRight->x == 1279 && mainBottomRight->y == 719, true,
+           "main-menu overlay edges clamp to desktop bounds");
+    const auto pausePoint = UiInput::MapMenuPointer(100, 1000, 1920, 1200, 800, 600, true);
+    expect(pausePoint && pausePoint->x == 100 && pausePoint->y == 200, true,
+           "pause-menu crop retains existing render-texture pointer convention");
+    expect(UiInput::MapMenuPointer(std::numeric_limits<float>::quiet_NaN(), 0,
+                                  1920, 1080, 800, 600, false).has_value(), false,
+           "nonfinite overlay coordinates cannot reach VGUI");
 
     RoomscaleMotion::StepAccumulator roomscale;
     roomscale.Observe(true, {0.0f, 0.0f, 1.6f}, 1, 0.0f, 43.2f);
