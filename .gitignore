@@ -400,3 +400,6 @@ FodyWeavers.xsd
 /tests/bin/
 /tests/obj/
 /portal2vr.log
+
+# Project notes are maintained locally, not published to origin.
+/docs/**/*.md
