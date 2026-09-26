@@ -431,6 +431,26 @@ int main()
            "roomscale observation defaults off");
     expect(m2Defaults.portalOrientationMode == PortalOrientation::Mode::LegacyYaw, true,
            "portal orientation keeps legacy yaw by default");
+    expect(m2Defaults.experimentalHudOverlay, false,
+           "unverified HUD overlay is disabled by default");
+    std::istringstream hudOptions("ExperimentalHUDOverlay=true\nHUDDistanceMeters=1.6\n"
+                                  "HUDWidthMeters=1.4\nHUDVerticalOffsetMeters=-0.25\n");
+    const auto hudConfig = ParseConfig(hudOptions, m2Defaults);
+    expect(hudConfig.errors.empty(), true, "bounded experimental HUD settings parse");
+    expect(hudConfig.value.experimentalHudOverlay, true, "HUD overlay requires explicit opt-in");
+    expectNear(hudConfig.value.hudDistanceMeters, 1.6f, "HUD distance parsed");
+    expectNear(hudConfig.value.hudWidthMeters, 1.4f, "HUD width parsed");
+    expectNear(hudConfig.value.hudVerticalOffsetMeters, -0.25f, "HUD vertical offset parsed");
+    std::istringstream hudBad("ExperimentalHUDOverlay=maybe\nHUDDistanceMeters=0\n"
+                              "HUDWidthMeters=10\nHUDVerticalOffsetMeters=nan\n");
+    const auto hudFallback = ParseConfig(hudBad, hudConfig.value);
+    expect(hudFallback.errors.size() == 4, true, "invalid HUD fields are all diagnosed");
+    expect(hudFallback.value.experimentalHudOverlay, true,
+           "invalid HUD toggle retains prior valid value");
+    expectNear(hudFallback.value.hudDistanceMeters, 1.6f, "invalid HUD distance retains prior");
+    expectNear(hudFallback.value.hudWidthMeters, 1.4f, "invalid HUD width retains prior");
+    expectNear(hudFallback.value.hudVerticalOffsetMeters, -0.25f,
+               "invalid HUD vertical offset retains prior");
     std::istringstream portalModeFull("PortalOrientationMode=FullRotation\n");
     const auto fullModeConfig = ParseConfig(portalModeFull, m2Defaults);
     expect(fullModeConfig.value.portalOrientationMode == PortalOrientation::Mode::FullRotation,

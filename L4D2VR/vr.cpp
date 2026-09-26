@@ -127,17 +127,16 @@ VR::VR(Game *game)
             m_Overlay->GetOverlayErrorNameFromEnum(overlayError)).c_str());
         return;
     }
-    //m_Overlay->CreateOverlay("HUDOverlayKey", "HUDOverlay", &m_HUDHandle);
     if (m_Overlay->SetOverlayInputMethod(m_MainMenuHandle, vr::VROverlayInputMethod_Mouse) != vr::VROverlayError_None ||
         m_Overlay->SetOverlayFlag(m_MainMenuHandle, vr::VROverlayFlags_SendVRDiscreteScrollEvents, true) != vr::VROverlayError_None) {
         Game::errorMsg("OpenVR menu overlay configuration failed.");
         return;
     }
-   // m_Overlay->SetOverlayInputMethod(m_HUDHandle, vr::VROverlayInputMethod_Mouse);
-    //m_Overlay->SetOverlayFlag(m_HUDHandle, vr::VROverlayFlags_SendVRDiscreteScrollEvents, true);
 
     int windowWidth, windowHeight;
-    m_Game->m_MaterialSystem->GetRenderContext()->GetWindowSize(windowWidth, windowHeight);
+    IMatRenderContext *menuContext = m_Game->m_MaterialSystem->GetRenderContext();
+    menuContext->GetWindowSize(windowWidth, windowHeight);
+    menuContext->Release();
 
     //const vr::HmdVector2_t mouseScaleHUD = {windowWidth, windowHeight};
     //m_Overlay->SetOverlayMouseScale(m_HUDHandle, &mouseScaleHUD);
@@ -149,6 +148,8 @@ VR::VR(Game *game)
         Game::errorMsg("OpenVR menu overlay geometry setup failed.");
         return;
     }
+    if (m_Config.experimentalHudOverlay)
+        CreateExperimentalHUDOverlay();
 
     if (!UpdatePosesAndActions()) {
         Game::errorMsg("Initial OpenVR pose/action update failed.");
@@ -164,6 +165,11 @@ VR::VR(Game *game)
 VR::~VR()
 {
     ReleaseMenuMouse();
+    if (m_Overlay && m_HUDHandle != vr::k_ulOverlayHandleInvalid) {
+        const auto result = m_Overlay->DestroyOverlay(m_HUDHandle);
+        if (result != vr::VROverlayError_None)
+            Logger::Write("HUD overlay cleanup failed: " + std::to_string(result));
+    }
     if (m_Overlay && m_MainMenuHandle != vr::k_ulOverlayHandleInvalid) {
         const auto result = m_Overlay->DestroyOverlay(m_MainMenuHandle);
         if (result != vr::VROverlayError_None)
@@ -173,6 +179,39 @@ VR::~VR()
         vr::VR_Shutdown();
         Logger::Write("OpenVR shutdown complete");
     }
+}
+
+void VR::CreateExperimentalHUDOverlay()
+{
+    const auto created = m_Overlay->CreateOverlay("Portal2VR.HUD.Experimental", "Portal2VR HUD",
+                                                   &m_HUDHandle);
+    if (created != vr::VROverlayError_None) {
+        Logger::Write(std::string("Experimental HUD overlay unavailable: ") +
+            m_Overlay->GetOverlayErrorNameFromEnum(created));
+        m_HUDHandle = vr::k_ulOverlayHandleInvalid;
+        return;
+    }
+    vr::HmdMatrix34_t transform{};
+    transform.m[0][0] = transform.m[1][1] = transform.m[2][2] = 1.0f;
+    transform.m[1][3] = m_Config.hudVerticalOffsetMeters;
+    transform.m[2][3] = -m_Config.hudDistanceMeters; // OpenVR HMD forward is -Z
+    const auto inputError = m_Overlay->SetOverlayInputMethod(m_HUDHandle, vr::VROverlayInputMethod_None);
+    const auto transformError = m_Overlay->SetOverlayTransformTrackedDeviceRelative(
+        m_HUDHandle, vr::k_unTrackedDeviceIndex_Hmd, &transform);
+    const auto widthError = m_Overlay->SetOverlayWidthInMeters(m_HUDHandle, m_Config.hudWidthMeters);
+    if (inputError != vr::VROverlayError_None || transformError != vr::VROverlayError_None ||
+        widthError != vr::VROverlayError_None) {
+        Logger::Write("Experimental HUD overlay geometry/input setup failed: " +
+            std::to_string(inputError) + "," + std::to_string(transformError) + "," +
+            std::to_string(widthError));
+        m_Overlay->DestroyOverlay(m_HUDHandle);
+        m_HUDHandle = vr::k_ulOverlayHandleInvalid;
+        return;
+    }
+    Logger::Write("EXPERIMENTAL HUD overlay created: " +
+        std::to_string(m_Config.hudWidthMeters) + "m wide, " +
+        std::to_string(m_Config.hudDistanceMeters) +
+        "m from HMD; shown only with controller-laser aim; alpha/subtitles unverified");
 }
 
 bool VR::SetActionManifest(const char *fileName)
@@ -372,7 +411,9 @@ void VR::CreateVRTextures()
     m_RightEyeTexture = m_Game->m_MaterialSystem->CreateNamedRenderTargetTextureEx("rightEye0", m_RenderWidth, m_RenderHeight, RT_SIZE_NO_CHANGE, m_Game->m_MaterialSystem->GetBackBufferFormat(), MATERIAL_RT_DEPTH_SEPARATE, TEXTUREFLAGS_NOMIP);
 
     m_CreatingTextureID = Texture_HUD;
-    m_HUDTexture = m_Game->m_MaterialSystem->CreateNamedRenderTargetTextureEx("vrHUD", m_RenderWidth, m_RenderHeight, RT_SIZE_NO_CHANGE, m_Game->m_MaterialSystem->GetBackBufferFormat(), MATERIAL_RT_DEPTH_SHARED, TEXTUREFLAGS_NOMIP);
+    const ImageFormat hudFormat = m_Config.experimentalHudOverlay ?
+        IMAGE_FORMAT_BGRA8888 : m_Game->m_MaterialSystem->GetBackBufferFormat();
+    m_HUDTexture = m_Game->m_MaterialSystem->CreateNamedRenderTargetTextureEx("vrHUD", m_RenderWidth, m_RenderHeight, RT_SIZE_NO_CHANGE, hudFormat, MATERIAL_RT_DEPTH_SHARED, TEXTUREFLAGS_NOMIP);
     
     m_CreatingTextureID = Texture_Blank;
     m_BlankTexture = m_Game->m_MaterialSystem->CreateNamedRenderTargetTextureEx("blankTexture", 512, 512, RT_SIZE_NO_CHANGE, m_Game->m_MaterialSystem->GetBackBufferFormat(), MATERIAL_RT_DEPTH_SHARED, TEXTUREFLAGS_NOMIP);
@@ -381,11 +422,17 @@ void VR::CreateVRTextures()
 
     m_Game->m_MaterialSystem->EndRenderTargetAllocation();
 
+    if (m_Config.experimentalHudOverlay &&
+        (!m_HUDTexture || !m_VKHUD.m_VRTexture.handle))
+        Logger::Write("Experimental HUD: render target or Vulkan share unavailable; overlay stays hidden");
+
     m_CreatedVRTextures = true;
 }
 
 void VR::SubmitVRTextures()
 {
+    SubmitExperimentalHUDOverlay();
+    m_RenderedHud = false;
     if (!m_RenderedNewFrame)
     {
         if (!m_BlankTexture)
@@ -414,7 +461,6 @@ void VR::SubmitVRTextures()
         vr::VROverlay()->SetOverlayTextureBounds(m_MainMenuHandle, &bounds);
         vr::VROverlay()->SetOverlayTexture(m_MainMenuHandle, &m_VKBackBuffer.m_VRTexture);
         vr::VROverlay()->ShowOverlay(m_MainMenuHandle);
-        //vr::VROverlay()->HideOverlay(m_HUDHandle);
 
         //if (!m_Game->m_EngineClient->IsInGame())
         {
@@ -426,18 +472,41 @@ void VR::SubmitVRTextures()
     }
     vr::VROverlay()->HideOverlay(m_MainMenuHandle);
 
-    //vr::VROverlay()->SetOverlayTexture(m_HUDHandle, &m_VKHUD.m_VRTexture);
-
-    if (m_Game->m_VguiSurface->IsCursorVisible())
-    {
-        // We're in the pause menu
-        //vr::VROverlay()->ShowOverlay(m_HUDHandle);
-    }
-
     vr::VRCompositor()->Submit(vr::Eye_Left, &m_VKLeftEye.m_VRTexture, &(m_TextureBounds)[0], vr::Submit_Default);
     vr::VRCompositor()->Submit(vr::Eye_Right, &m_VKRightEye.m_VRTexture, &(m_TextureBounds)[1], vr::Submit_Default);
 
     m_RenderedNewFrame = false;
+}
+
+void VR::SubmitExperimentalHUDOverlay()
+{
+    if (!m_Overlay || m_HUDHandle == vr::k_ulOverlayHandleInvalid)
+        return;
+    if (m_RenderedHud && !m_HUDCaptureLogged) {
+        Logger::Write("Experimental HUD: first VGUI capture observed (visual contents unverified)");
+        m_HUDCaptureLogged = true;
+    }
+    const bool worldAimSeparated = m_AimMode == 2 && m_Game->m_Offsets->m_LaserAvailable;
+    const bool canShow = worldAimSeparated && m_RenderedNewFrame && m_RenderedHud && m_CreatedVRTextures &&
+        m_HmdPose.valid && !m_Game->m_VguiSurface->IsCursorVisible() && m_HUDTexture &&
+        m_VKHUD.m_VRTexture.handle;
+    if (!canShow) {
+        if (m_Overlay->IsOverlayVisible(m_HUDHandle))
+            m_Overlay->HideOverlay(m_HUDHandle);
+        return;
+    }
+    const auto textureError = m_Overlay->SetOverlayTexture(m_HUDHandle, &m_VKHUD.m_VRTexture);
+    const auto showError = textureError == vr::VROverlayError_None ?
+        m_Overlay->ShowOverlay(m_HUDHandle) : textureError;
+    if (textureError != vr::VROverlayError_None || showError != vr::VROverlayError_None) {
+        m_Overlay->HideOverlay(m_HUDHandle);
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= m_NextHUDOverlayErrorLog) {
+            Logger::Write("Experimental HUD overlay submission failed: " +
+                std::to_string(textureError) + "," + std::to_string(showError));
+            m_NextHUDOverlayErrorLog = now + std::chrono::seconds(5);
+        }
+    }
 }
 
 void VR::GetPoseData(vr::TrackedDevicePose_t &poseRaw, TrackedDevicePoseData &poseOut)
@@ -484,7 +553,9 @@ void VR::RepositionOverlays()
     Vector hmdForward = { -hmdMat.m[0][2], 0, -hmdMat.m[2][2] };
 
     int windowWidth, windowHeight;
-    m_Game->m_MaterialSystem->GetRenderContext()->GetWindowSize(windowWidth, windowHeight);
+    IMatRenderContext *menuContext = m_Game->m_MaterialSystem->GetRenderContext();
+    menuContext->GetWindowSize(windowWidth, windowHeight);
+    menuContext->Release();
 
     vr::HmdMatrix34_t menuTransform = 
     {
@@ -1725,6 +1796,17 @@ void VR::ParseConfigFile()
         Logger::Write("Config: PortalOrientationMode change requires restart; keeping active mode");
         parsed.value.portalOrientationMode = m_ActivePortalMode;
     }
+    if (m_IsInitialized &&
+        (parsed.value.experimentalHudOverlay != m_Config.experimentalHudOverlay ||
+         parsed.value.hudDistanceMeters != m_Config.hudDistanceMeters ||
+         parsed.value.hudWidthMeters != m_Config.hudWidthMeters ||
+         parsed.value.hudVerticalOffsetMeters != m_Config.hudVerticalOffsetMeters)) {
+        Logger::Write("Config: HUD overlay settings require restart; keeping active geometry");
+        parsed.value.experimentalHudOverlay = m_Config.experimentalHudOverlay;
+        parsed.value.hudDistanceMeters = m_Config.hudDistanceMeters;
+        parsed.value.hudWidthMeters = m_Config.hudWidthMeters;
+        parsed.value.hudVerticalOffsetMeters = m_Config.hudVerticalOffsetMeters;
+    }
     if (m_IsInitialized && m_VRScale != parsed.value.vrScale)
         Logger::Write("Config: VRScale change staged until recenter");
     if (m_IsInitialized && m_Playspace.heightOffsetMeters != parsed.value.heightOffsetMeters)
@@ -1771,5 +1853,6 @@ void VR::ParseConfigFile()
         " VRScale=" + std::to_string(m_VRScale) +
         " IPDScale=" + std::to_string(m_IpdScale) +
         " AimMode=" + std::to_string(m_AimMode) +
-        " AntiAliasing=" + std::to_string(m_AntiAliasing));
+        " AntiAliasing=" + std::to_string(m_AntiAliasing) +
+        " ExperimentalHUDOverlay=" + std::to_string(m_Config.experimentalHudOverlay));
 }

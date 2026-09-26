@@ -19,6 +19,10 @@ struct ConfigSnapshot {
     TrackingSpace::MovementDirection movementDirection = TrackingSpace::MovementDirection::Hmd;
     RoomscaleMotion::Mode roomscaleMode = RoomscaleMotion::Mode::Off;
     PortalOrientation::Mode portalOrientationMode = PortalOrientation::Mode::LegacyYaw;
+    bool experimentalHudOverlay = false;
+    float hudDistanceMeters = 1.3f;
+    float hudWidthMeters = 1.4f;
+    float hudVerticalOffsetMeters = -0.15f;
     float heightOffsetMeters = 0.0f;
     float controllerPitchDegrees = -30.0f;
     float turnSpeed = 0.15f;
@@ -137,6 +141,10 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
         else
             result.errors.push_back("PortalOrientationMode is invalid; keeping previous value");
     }
+    readBool("ExperimentalHUDOverlay", result.value.experimentalHudOverlay);
+    readFloat("HUDDistanceMeters", result.value.hudDistanceMeters, 0.6f, 3.0f);
+    readFloat("HUDWidthMeters", result.value.hudWidthMeters, 0.5f, 2.5f);
+    readFloat("HUDVerticalOffsetMeters", result.value.hudVerticalOffsetMeters, -0.6f, 0.6f);
     if (entries.find("SeatedMode") != entries.end())
         result.errors.push_back("SeatedMode is unsupported; use TrackingMode");
     readFloat("HeightOffsetMeters", result.value.heightOffsetMeters, -0.5f, 0.5f);

@@ -30,8 +30,8 @@ struct TrackedDevicePoseData
 class SharedTextureHolder
 {
 public:
-	vr::VRVulkanTextureData_t m_VulkanData;
-	vr::Texture_t m_VRTexture;
+	vr::VRVulkanTextureData_t m_VulkanData{};
+	vr::Texture_t m_VRTexture{};
 };
 
 class VR
@@ -45,12 +45,14 @@ public:
 	vr::IVRRenderModels *m_RenderModels = nullptr;
 
 	vr::VROverlayHandle_t m_MainMenuHandle = vr::k_ulOverlayHandleInvalid;
+	vr::VROverlayHandle_t m_HUDHandle = vr::k_ulOverlayHandleInvalid;
+	std::chrono::steady_clock::time_point m_NextHUDOverlayErrorLog{};
+	bool m_HUDCaptureLogged = false;
 	UiInput::MenuPointerState m_MenuPointerState;
 	std::chrono::steady_clock::time_point m_NextMenuInputErrorLog{};
 	bool m_OpenVRStarted = false;
 	int m_LastPoseError = 0;
 	int m_LastInputError = 0;
-	//vr::VROverlayHandle_t m_HUDHandle;
 
 	float m_HorizontalOffsetLeft;
 	float m_VerticalOffsetLeft;
@@ -158,7 +160,7 @@ public:
 
 	IDirect3DSurface9 *m_D9LeftEyeSurface;
 	IDirect3DSurface9 *m_D9RightEyeSurface;
-	IDirect3DSurface9 *m_D9HUDSurface;
+	IDirect3DSurface9 *m_D9HUDSurface = nullptr;
 	IDirect3DSurface9 *m_D9BlankSurface;
 
 	SharedTextureHolder m_VKLeftEye;
@@ -249,6 +251,8 @@ public:
 	void CreateVRTextures();
 	void SubmitVRTextures();
 	void RepositionOverlays();
+	void CreateExperimentalHUDOverlay();
+	void SubmitExperimentalHUDOverlay();
 	void GetPoses();
 	bool UpdatePosesAndActions();
 	void GetViewParameters();
