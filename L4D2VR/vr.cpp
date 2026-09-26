@@ -208,6 +208,7 @@ void VR::Update()
     UpdateTracking();
 
     if (m_Game->m_VguiSurface->IsCursorVisible()) {
+        ReleaseHeldActions();
         ProcessMenuInput();
     } else {
         ProcessInput();
@@ -444,18 +445,45 @@ void VR::GetViewParameters()
 
 bool VR::PressedDigitalAction(vr::VRActionHandle_t &actionHandle, bool checkIfActionChanged)
 {
-    vr::InputDigitalActionData_t digitalActionData;
+    vr::InputDigitalActionData_t digitalActionData{};
     vr::EVRInputError result = m_Input->GetDigitalActionData(actionHandle, &digitalActionData, sizeof(digitalActionData), vr::k_ulInvalidInputValueHandle);
     
-    if (result == vr::VRInputError_None)
+    if (result == vr::VRInputError_None && digitalActionData.bActive)
     {
         if (checkIfActionChanged)
-            return digitalActionData.bState && digitalActionData.bChanged;
+            return DigitalButtonState::PressEdge(true, digitalActionData.bChanged, digitalActionData.bState);
         else
             return digitalActionData.bState;
     }
 
     return false;
+}
+
+void VR::ProcessHeldAction(vr::VRActionHandle_t actionHandle, DigitalButtonState &state,
+                           const char *pressCommand, const char *releaseCommand)
+{
+    vr::InputDigitalActionData_t data{};
+    const auto result = m_Input->GetDigitalActionData(actionHandle, &data, sizeof(data),
+                                                      vr::k_ulInvalidInputValueHandle);
+    const bool active = result == vr::VRInputError_None && data.bActive;
+    if (const char *command = state.HeldCommand(active, data.bChanged, data.bState,
+                                                 pressCommand, releaseCommand))
+        m_Game->ClientCmd_Unrestricted(command);
+}
+
+void VR::ReleaseHeldActions()
+{
+    const struct {
+        DigitalButtonState *state;
+        const char *releaseCommand;
+    } actions[] = {
+        { &m_PrimaryAttackState, "-attack" }, { &m_SecondaryAttackState, "-attack2" },
+        { &m_JumpState, "-jump" }, { &m_CrouchState, "-duck" },
+        { &m_UseState, "-use" }, { &m_ReloadState, "-reload" }
+    };
+    for (const auto &action : actions)
+        if (const char *command = action.state->HeldCommand(false, false, false, "", action.releaseCommand))
+            m_Game->ClientCmd_Unrestricted(command);
 }
 
 bool VR::GetAnalogActionData(vr::VRActionHandle_t &actionHandle, vr::InputAnalogActionData_t &analogDataOut)
@@ -604,8 +632,10 @@ void VR::ProcessMenuInput()
 
 void VR::ProcessInput()
 {
-    if (!m_IsVREnabled)
+    if (!m_IsVREnabled) {
+        ReleaseHeldActions();
         return;
+    }
 
     //vr::VROverlay()->SetOverlayFlag(m_HUDHandle, vr::VROverlayFlags_MakeOverlaysInteractiveIfVisible, false);
 
@@ -654,59 +684,12 @@ void VR::ProcessInput()
         m_RotationOffset.y -= 360 * std::floor(m_RotationOffset.y / 360);
     }
 
-    if (PressedDigitalAction(m_ActionPrimaryAttack))
-    {
-        m_Game->ClientCmd_Unrestricted("+attack");
-    }
-    else
-    {
-        m_Game->ClientCmd_Unrestricted("-attack");
-    }
-
-    if (PressedDigitalAction(m_ActionSecondaryAttack))
-    {
-        m_Game->ClientCmd_Unrestricted("+attack2");
-    }
-    else
-    {
-        m_Game->ClientCmd_Unrestricted("-attack2");
-    }
-
-    if (PressedDigitalAction(m_ActionJump))
-    {
-        m_Game->ClientCmd_Unrestricted("+jump");
-    }
-    else
-    {
-        m_Game->ClientCmd_Unrestricted("-jump");
-    }
-
-    if (PressedDigitalAction(m_ActionCrouch))
-    {
-        m_Game->ClientCmd_Unrestricted("+duck");
-    }
-    else
-    {
-        m_Game->ClientCmd_Unrestricted("-duck");
-    }
-
-    if (PressedDigitalAction(m_ActionUse))
-    {
-        m_Game->ClientCmd_Unrestricted("+use");
-    }
-    else
-    {
-        m_Game->ClientCmd_Unrestricted("-use");
-    }
-
-    if (PressedDigitalAction(m_ActionReload))
-    {
-        m_Game->ClientCmd_Unrestricted("+reload");
-    }
-    else
-    {
-        m_Game->ClientCmd_Unrestricted("-reload");
-    }
+    ProcessHeldAction(m_ActionPrimaryAttack, m_PrimaryAttackState, "+attack", "-attack");
+    ProcessHeldAction(m_ActionSecondaryAttack, m_SecondaryAttackState, "+attack2", "-attack2");
+    ProcessHeldAction(m_ActionJump, m_JumpState, "+jump", "-jump");
+    ProcessHeldAction(m_ActionCrouch, m_CrouchState, "+duck", "-duck");
+    ProcessHeldAction(m_ActionUse, m_UseState, "+use", "-use");
+    ProcessHeldAction(m_ActionReload, m_ReloadState, "+reload", "-reload");
 
     if (PressedDigitalAction(m_ActionPrevItem, true))
     {

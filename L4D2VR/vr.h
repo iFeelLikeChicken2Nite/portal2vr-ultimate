@@ -2,6 +2,7 @@
 #include "openvr.h"
 #include "vector.h"
 #include <chrono>
+#include "digital_input.h"
 
 #define MAX_STR_LEN 256
 
@@ -143,6 +144,12 @@ public:
 	bool m_PressedTurn = false;
 	bool m_PushingThumbstick = false;
 	bool m_PointerCreated = false;
+	DigitalButtonState m_PrimaryAttackState;
+	DigitalButtonState m_SecondaryAttackState;
+	DigitalButtonState m_JumpState;
+	DigitalButtonState m_CrouchState;
+	DigitalButtonState m_UseState;
+	DigitalButtonState m_ReloadState;
 
 	// action set
 	vr::VRActionSetHandle_t m_ActionSet;
@@ -209,6 +216,9 @@ public:
 	void GetViewParameters();
 	void ProcessMenuInput();
 	void ProcessInput();
+	void ProcessHeldAction(vr::VRActionHandle_t actionHandle, DigitalButtonState &state,
+	                       const char *pressCommand, const char *releaseCommand);
+	void ReleaseHeldActions();
 	VMatrix VMatrixFromHmdMatrix(const vr::HmdMatrix34_t &hmdMat);
 	vr::HmdMatrix34_t VMatrixToHmdMatrix(const VMatrix &vMat);
 	vr::HmdMatrix34_t GetControllerTipMatrix(vr::ETrackedControllerRole controllerRole);
