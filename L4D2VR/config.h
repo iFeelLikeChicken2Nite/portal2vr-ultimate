@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tracking_space.h"
+#include "roomscale_motion.h"
 
 #include <array>
 #include <cmath>
@@ -15,6 +16,7 @@
 struct ConfigSnapshot {
     TrackingSpace::TrackingMode trackingMode = TrackingSpace::TrackingMode::Seated;
     TrackingSpace::MovementDirection movementDirection = TrackingSpace::MovementDirection::Hmd;
+    RoomscaleMotion::Mode roomscaleMode = RoomscaleMotion::Mode::Off;
     float heightOffsetMeters = 0.0f;
     float controllerPitchDegrees = -30.0f;
     float turnSpeed = 0.15f;
@@ -110,6 +112,15 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
             result.value.movementDirection = TrackingSpace::MovementDirection::RightController;
         else
             result.errors.push_back("MovementDirection is invalid; keeping previous value");
+    }
+    const auto roomscaleMode = entries.find("RoomscaleMode");
+    if (roomscaleMode != entries.end()) {
+        if (roomscaleMode->second == "Off")
+            result.value.roomscaleMode = RoomscaleMotion::Mode::Off;
+        else if (roomscaleMode->second == "Observe")
+            result.value.roomscaleMode = RoomscaleMotion::Mode::Observe;
+        else
+            result.errors.push_back("RoomscaleMode is invalid; only Off and Observe are supported");
     }
     if (entries.find("SeatedMode") != entries.end())
         result.errors.push_back("SeatedMode is unsupported; use TrackingMode");

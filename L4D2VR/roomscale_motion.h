@@ -4,9 +4,12 @@
 
 #include <cmath>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 
 namespace RoomscaleMotion {
+
+enum class Mode { Off, Observe };
 
 enum class Observation {
     Baseline, StepQueued, NoStep, TrackingLost, TrackingRecovered,
@@ -101,6 +104,68 @@ private:
     float m_PreviousYawDegrees = 0.0f;
     float m_PreviousScale = 43.2f;
     int m_LastCommand = 0;
+};
+
+// Observe-only bridge. The render/pose and CreateMove hooks may have different cadences.
+struct Summary {
+    std::uint64_t steps = 0;
+    float distanceUnits = 0.0f;
+};
+
+class Observer {
+public:
+    bool SetMode(Mode mode)
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        if (m_Mode == mode)
+            return false;
+        m_Mode = mode;
+        m_Steps.Reset();
+        m_Summary = {};
+        return true;
+    }
+
+    void Reset()
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        m_Steps.Reset();
+    }
+
+    Observation OnPose(bool valid, const Vector &hmdMeters, float yawDegrees, float scale)
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        if (m_Mode == Mode::Off)
+            return Observation::NoStep;
+        return m_Steps.Observe(valid, hmdMeters, ++m_PoseSequence, yawDegrees, scale);
+    }
+
+    std::optional<Vector> OnCommand(int commandNumber)
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        if (m_Mode == Mode::Off)
+            return std::nullopt;
+        const auto step = m_Steps.Consume(commandNumber);
+        if (step) {
+            ++m_Summary.steps;
+            m_Summary.distanceUnits += std::sqrt(step->x * step->x + step->y * step->y);
+        }
+        return step;
+    }
+
+    Summary TakeSummary()
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        const Summary summary = m_Summary;
+        m_Summary = {};
+        return summary;
+    }
+
+private:
+    std::mutex m_Mutex;
+    Mode m_Mode = Mode::Off;
+    StepAccumulator m_Steps;
+    Summary m_Summary;
+    std::uint64_t m_PoseSequence = 0;
 };
 
 } // namespace RoomscaleMotion

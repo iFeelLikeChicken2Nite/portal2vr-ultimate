@@ -88,10 +88,8 @@ public:
 	QAngle m_HmdAngAbs;
 
 	Vector m_HmdPosRelativeRaw = { 0,0,0 };
-	Vector m_HmdPosRelativeRawPrev = { 0,0,0 };
 
 	Vector m_HmdPosRelative = { 0,0,0 };
-	Vector m_HmdPosRelativePrev = { 0,0,0 };
 
 	Vector m_AimPos = { 0, 0, 0 };
 	bool m_Traced = false;
@@ -99,6 +97,9 @@ public:
 	Vector m_Center = { 0,0,0 };
 	Vector m_SetupOrigin = { 0,0,0 };
 	TrackingSpace::PlayspaceState m_Playspace;
+	RoomscaleMotion::Observer m_RoomscaleObserver;
+	std::chrono::steady_clock::time_point m_NextRoomscaleSummary{};
+	std::chrono::steady_clock::time_point m_NextRoomscaleAnomalyLog{};
 	bool m_TrackingOutputValid = false;
 	bool m_HmdLostSinceLastValid = false;
 	bool m_HasLastHmdOffset = false;
@@ -112,7 +113,6 @@ public:
 	float m_LastEyeHeightUnits = 0.0f;
 
 	float m_HeightOffset = 0.0;
-	bool m_RoomscaleActive = false;
 
 	Vector m_LeftControllerPosAbs;											
 	Vector m_LeftControllerPosRel{0.0f, 0.0f, 0.0f};
@@ -260,6 +260,7 @@ public:
 	QAngle GetRecommendedViewmodelAbsAngle();
 	void UpdateHMDAngles();
 	void UpdateTracking();
+	void ObserveRoomscaleCommand(int commandNumber);
 	Vector GetViewAngle();
 	Vector GetViewOrigin(Vector setupOrigin);
 	Vector GetViewOriginLeft(Vector setupOrigin);

@@ -298,6 +298,15 @@ void VR::Update()
         }
     }
 
+    if (now >= m_NextRoomscaleSummary) {
+        m_NextRoomscaleSummary = now + std::chrono::seconds(30);
+        const auto summary = m_RoomscaleObserver.TakeSummary();
+        if (summary.steps)
+            Logger::Write("Roomscale observe: " + std::to_string(summary.steps) +
+                " physical intents, " + std::to_string(summary.distanceUnits) +
+                " requested Source units (not accepted movement)");
+    }
+
     if (m_IsVREnabled && g_D3DVR9)
     {
         bool inGame = m_Game->m_EngineClient->IsInGame();
@@ -1100,6 +1109,7 @@ void VR::ResetPosition()
         m_Playspace.Recenter(m_HmdPose.TrackedDevicePos);
         m_Center = m_HmdPose.TrackedDevicePos;
         m_HmdLostSinceLastValid = false;
+        m_RoomscaleObserver.Reset();
     }
 }
 
@@ -1129,6 +1139,9 @@ void VR::UpdateTracking()
     m_RightControllerPosRel = {0.0f, 0.0f, 0.0f};
 
     if (!m_HmdPose.valid) {
+        if (m_RoomscaleObserver.OnPose(false, {}, 0.0f, 1.0f) ==
+            RoomscaleMotion::Observation::TrackingLost)
+            Logger::Write("Roomscale observe: HMD tracking lost; pending physical intent discarded");
         m_HmdLostSinceLastValid = true;
         if (m_Game->m_Offsets->m_LaserAvailable) {
             const int index = m_Game->m_EngineClient->GetLocalPlayer();
@@ -1145,6 +1158,7 @@ void VR::UpdateTracking()
     C_BasePlayer* localPlayer = playerIndex > 0 ?
         (C_BasePlayer*)m_Game->GetClientEntity(playerIndex) : nullptr;
     if (!localPlayer) {
+        m_RoomscaleObserver.Reset();
         m_EyeHeightPlayerEntity = nullptr;
         m_HasEyeHeight = false;
         m_HasLastHmdOffset = false;
@@ -1152,6 +1166,7 @@ void VR::UpdateTracking()
     }
 
     if (playerIndex != m_EyeHeightPlayerIndex || localPlayer != m_EyeHeightPlayerEntity) {
+        m_RoomscaleObserver.Reset();
         m_EyeHeightPlayerIndex = playerIndex;
         m_EyeHeightPlayerEntity = localPlayer;
         m_HasEyeHeight = false;
@@ -1173,7 +1188,10 @@ void VR::UpdateTracking()
                 Logger::Write("Source player eye height unavailable; keeping last valid height or deferring standing view");
             m_EyeHeightWasInvalid = true;
             if (!m_HasEyeHeight)
+            {
+                m_RoomscaleObserver.Reset();
                 return;
+            }
         }
     }
 
@@ -1201,21 +1219,20 @@ void VR::UpdateTracking()
     m_LastHmdOffsetUnits = m_HmdPosRelative;
     m_HasLastHmdOffset = true;
     m_TrackingOutputValid = true;
-
-    // Roomscale setup
-    /*Vector cameraMovingDirection = m_Center - m_SetupOriginPrev;
-    Vector cameraToPlayer = m_HmdPosAbsPrev - m_SetupOriginPrev;
-    cameraMovingDirection.z = 0;
-    cameraToPlayer.z = 0;
-    float cameraFollowing = DotProduct(cameraMovingDirection, cameraToPlayer);
-    float cameraDistance = VectorLength(cameraToPlayer);
-
-    if (localPlayer->m_hGroundEntity != -1 && localPlayer->m_vecVelocity.IsZero())
-        m_RoomscaleActive = true;
-
-    // TODO: Get roomscale to work while using thumbstick
-    if ((cameraFollowing < 0 && cameraDistance > 1) || (m_PushingThumbstick))
-        m_RoomscaleActive = false;*/
+    const auto roomscaleStatus = m_RoomscaleObserver.OnPose(
+        true, hmdPosLocal, m_Playspace.yawDegrees, m_Playspace.scale);
+    if (roomscaleStatus == RoomscaleMotion::Observation::TrackingRecovered)
+        Logger::Write("Roomscale observe: HMD tracking recovered; using fresh movement baseline");
+    else if (roomscaleStatus == RoomscaleMotion::Observation::Discontinuity ||
+             roomscaleStatus == RoomscaleMotion::Observation::InvalidSample) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= m_NextRoomscaleAnomalyLog) {
+            Logger::Write(roomscaleStatus == RoomscaleMotion::Observation::Discontinuity ?
+                "Roomscale observe: pose discontinuity; pending physical intent discarded" :
+                "Roomscale observe: invalid pose/mapping; physical intent discarded");
+            m_NextRoomscaleAnomalyLog = now + std::chrono::seconds(5);
+        }
+    }
 
     if ((!m_RightControllerPose.valid || m_AimMode != 2) &&
         m_Game->m_Offsets->m_LaserAvailable) {
@@ -1345,6 +1362,11 @@ void VR::UpdateTracking()
             portalPlayer->m_PointLaser = NULL;
         }
     }
+}
+
+void VR::ObserveRoomscaleCommand(int commandNumber)
+{
+    (void)m_RoomscaleObserver.OnCommand(commandNumber);
 }
 
 Vector VR::GetViewAngle()
@@ -1592,6 +1614,10 @@ void VR::ParseConfigFile()
     if (m_IsInitialized && m_Playspace.heightOffsetMeters != parsed.value.heightOffsetMeters)
         Logger::Write("Config: HeightOffsetMeters change staged until recenter");
     m_Config = parsed.value;
+    if (m_RoomscaleObserver.SetMode(m_Config.roomscaleMode))
+        Logger::Write(m_Config.roomscaleMode == RoomscaleMotion::Mode::Observe ?
+            "RoomscaleMode=Observe: diagnostics only; physical movement is disabled" :
+            "RoomscaleMode=Off: roomscale diagnostics disabled");
     m_SnapTurning = m_Config.snapTurning;
     m_SnapTurnAngle = m_Config.snapTurnAngle;
     m_TurnSpeed = m_Config.turnSpeed;

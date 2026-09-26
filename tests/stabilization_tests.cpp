@@ -288,6 +288,37 @@ int main()
            "legacy config defaults to HMD locomotion");
     expectNear(m2Defaults.heightOffsetMeters, 0.0f, "default height offset");
     expectNear(m2Defaults.controllerPitchDegrees, -30.0f, "default controller pitch");
+    expect(m2Defaults.roomscaleMode == RoomscaleMotion::Mode::Off, true,
+           "roomscale observation defaults off");
+    std::istringstream roomscaleObserve("RoomscaleMode=Observe\n");
+    const auto observedConfig = ParseConfig(roomscaleObserve, m2Defaults);
+    expect(observedConfig.errors.empty(), true, "roomscale observe config is valid");
+    expect(observedConfig.value.roomscaleMode == RoomscaleMotion::Mode::Observe, true,
+           "roomscale observe config selects no-motion diagnostics");
+    std::istringstream roomscaleBad("RoomscaleMode=Active\n");
+    const auto badRoomscaleConfig = ParseConfig(roomscaleBad, observedConfig.value);
+    expect(badRoomscaleConfig.value.roomscaleMode == RoomscaleMotion::Mode::Observe, true,
+           "invalid roomscale config retains previous mode");
+    expect(badRoomscaleConfig.errors.size() == 1, true,
+           "unsupported roomscale activation is diagnosed");
+    RoomscaleMotion::Observer diagnostic;
+    diagnostic.OnPose(true, {0.0f, 0.0f, 1.6f}, 0.0f, 43.2f);
+    diagnostic.OnPose(true, {0.1f, 0.0f, 1.6f}, 0.0f, 43.2f);
+    expect(diagnostic.OnCommand(1).has_value(), false, "off roomscale mode ignores poses and commands");
+    expect(diagnostic.SetMode(RoomscaleMotion::Mode::Observe), true, "observe mode transition reported");
+    diagnostic.OnPose(true, {5.0f, 0.0f, 1.6f}, 0.0f, 43.2f);
+    diagnostic.OnPose(true, {5.1f, 0.0f, 1.6f}, 0.0f, 43.2f);
+    const auto observedStep = diagnostic.OnCommand(2);
+    expect(observedStep.has_value(), true, "observe mode computes diagnostic intent");
+    if (observedStep)
+        expectVectorNear(*observedStep, {4.32f, 0.0f, 0.0f}, "observe mode reports unmoved intent");
+    const auto observedSummary = diagnostic.TakeSummary();
+    expect(observedSummary.steps == 1, true, "diagnostic summary counts consumed steps");
+    expectNear(observedSummary.distanceUnits, 4.32f, "diagnostic summary measures intended distance");
+    expect(diagnostic.TakeSummary().steps == 0, true, "diagnostic summary drains once");
+    expect(diagnostic.SetMode(RoomscaleMotion::Mode::Off), true, "disabling observation reported");
+    diagnostic.OnPose(true, {5.2f, 0.0f, 1.6f}, 0.0f, 43.2f);
+    expect(diagnostic.OnCommand(3).has_value(), false, "disabled observer emits no movement intent");
     std::istringstream m2Options("TrackingMode=Standing\nMovementDirection=LeftController\n"
                                  "HeightOffsetMeters=0.25\nControllerPitchDegrees=15\n");
     const auto m2Valid = ParseConfig(m2Options, m2Defaults);

@@ -381,32 +381,8 @@ bool __fastcall Hooks::dCreateMove(void *ecx, void *edx, float flInputSampleTime
 
 		}
 
-		if (m_VR->m_RoomscaleActive)
-		{
-			// How much have we moved since last CreateMove?
-			Vector setupOriginToHMD = (m_VR->m_HmdPosRelativeRaw - m_VR->m_HmdPosRelativeRawPrev) * m_VR->m_VRScale; //m_VR->m_HmdPosRelative - m_VR->m_HmdPosRelativePrev;
-			m_VR->m_HmdPosRelativeRawPrev = m_VR->m_HmdPosRelativeRaw;
-
-			setupOriginToHMD.z = 0;
-			float distance = VectorLength(setupOriginToHMD);
-			if (distance > 0)
-			{
-				float forwardSpeed = DotProduct2D(setupOriginToHMD, m_VR->m_HmdForward);
-				float sideSpeed = DotProduct2D(setupOriginToHMD, m_VR->m_HmdRight);
-				cmd->forwardmove += distance * forwardSpeed;
-				cmd->sidemove += distance * sideSpeed;
-
-				// Let's update the position and the previous too
-				/*m_VR->m_HmdPosRelative -= setupOriginToHMD;
-				m_VR->m_HmdPosRelativePrev = m_VR->m_HmdPosRelative;*/
-
-				/*m_VR->m_Center += m_VR->m_HmdPosRelativeRaw - m_VR->m_HmdPosRelativeRawPrev;
-				m_VR->m_HmdPosRelativeRawPrev = m_VR->m_HmdPosRelativeRaw;*/
-
-				//m_VR->ResetPosition();
-			}
-		}
 	}
+	m_VR->ObserveRoomscaleCommand(cmd->command_number); // diagnostic only; never changes CUserCmd
 
 	return false;
 }
