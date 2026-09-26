@@ -122,6 +122,8 @@ int main()
     const auto otherPlayerFrame = portalEvents.Drain(2);
     expect(otherPlayerFrame.applied == 0, true,
            "player replacement discards pending portal event");
+    expect(otherPlayerFrame.playerChanged, true,
+           "player replacement explicitly reports rig reset even without applied event");
     expectVectorNear(otherPlayerFrame.effective.Rotate({1,0,0}), {1,0,0},
                      "player replacement resets old world alignment");
     portalEvents.SetMode(PortalOrientation::Mode::YawOnly);

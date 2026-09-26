@@ -270,8 +270,9 @@ public:
 	bool ExperimentalPortalOrientation() const;
 	void QueuePortalTraversal(std::uintptr_t playerKey, std::uintptr_t portalKey,
 	                          const std::optional<PortalOrientation::Rotation> &rotation);
-	void ApplyPendingPortalOrientation();
+	void ApplyPendingPortalOrientation(const Vector &renderOrigin);
 	void ApplyPortalRigToDerivedPose();
+	void ResetPortalOrientation();
 	void ObserveRoomscaleCommand(int commandNumber);
 	Vector GetViewAngle();
 	Vector GetViewOrigin(Vector setupOrigin);

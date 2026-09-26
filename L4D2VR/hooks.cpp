@@ -236,7 +236,7 @@ ITexture* __fastcall Hooks::dGetRenderTarget(void* ecx, void* edx)
 
 void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CViewSetup &hudViewSetup, int nClearFlags, int whatToDraw)
 {
-    m_VR->ApplyPendingPortalOrientation();
+	m_VR->ApplyPendingPortalOrientation(setup.origin);
     if (!m_VR->m_TrackingOutputValid)
         return hkRenderView.fOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
 	if (!m_VR->m_CreatedVRTextures) {

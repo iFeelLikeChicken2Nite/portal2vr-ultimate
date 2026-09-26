@@ -1145,6 +1145,9 @@ void VR::UpdateTracking()
     m_LeftControllerPosRel = {0.0f, 0.0f, 0.0f};
     m_RightControllerPosRel = {0.0f, 0.0f, 0.0f};
 
+    if (ExperimentalPortalOrientation() && !m_Game->m_EngineClient->IsInGame())
+        ResetPortalOrientation();
+
     if (!m_HmdPose.valid) {
         m_PortalCoordinator.CancelPending();
         if (m_RoomscaleObserver.OnPose(false, {}, m_PoseFetchSequence, 0.0f, 1.0f, true) ==
@@ -1172,9 +1175,7 @@ void VR::UpdateTracking()
         (C_BasePlayer*)m_Game->GetClientEntity(playerIndex) : nullptr;
     if (!localPlayer) {
         m_RoomscaleObserver.Reset();
-        m_PortalCoordinator.Reset();
-        m_PortalRigAnchor.Reset();
-        m_PortalEffectiveRotation = PortalOrientation::Rotation::Identity();
+        ResetPortalOrientation();
         m_EyeHeightPlayerEntity = nullptr;
         m_HasEyeHeight = false;
         m_HasLastHmdOffset = false;
@@ -1183,9 +1184,7 @@ void VR::UpdateTracking()
 
     if (playerIndex != m_EyeHeightPlayerIndex || localPlayer != m_EyeHeightPlayerEntity) {
         m_RoomscaleObserver.Reset();
-        m_PortalCoordinator.Reset();
-        m_PortalRigAnchor.Reset();
-        m_PortalEffectiveRotation = PortalOrientation::Rotation::Identity();
+        ResetPortalOrientation();
         m_EyeHeightPlayerIndex = playerIndex;
         m_EyeHeightPlayerEntity = localPlayer;
         m_HasEyeHeight = false;
@@ -1424,23 +1423,57 @@ void VR::QueuePortalTraversal(std::uintptr_t playerKey, std::uintptr_t portalKey
     const auto queued = m_PortalCoordinator.Queue(playerKey, portalKey, *rotation);
     if (queued == PortalOrientation::QueueResult::Queued)
         Logger::Write("Experimental portal orientation: local crossing queued");
-    else if (queued == PortalOrientation::QueueResult::Full)
-        Logger::Write("Experimental portal orientation: event queue full; crossing ignored");
+    else if (queued == PortalOrientation::QueueResult::Full) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= m_NextPortalEventLog) {
+            Logger::Write("Experimental portal orientation: event queue full; crossing ignored");
+            m_NextPortalEventLog = now + std::chrono::seconds(5);
+        }
+    }
 }
 
-void VR::ApplyPendingPortalOrientation()
+void VR::ResetPortalOrientation()
+{
+    m_PortalCoordinator.Reset();
+    m_PortalRigAnchor.Reset();
+    m_PortalEffectiveRotation = PortalOrientation::Rotation::Identity();
+}
+
+void VR::ApplyPendingPortalOrientation(const Vector &renderOrigin)
 {
     if (!ExperimentalPortalOrientation())
         return;
+    if (!m_Game->m_EngineClient->IsInGame()) {
+        ResetPortalOrientation();
+        m_TrackingOutputValid = false;
+        return;
+    }
     const int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
     C_BasePlayer* player = playerIndex > 0 ?
         (C_BasePlayer*)m_Game->GetClientEntity(playerIndex) : nullptr;
-    if (!player || !m_HmdPose.valid || !m_TrackingOutputValid ||
-        !m_Game->m_EngineClient->IsInGame() || m_Game->m_VguiSurface->IsCursorVisible()) {
+    if (!player) {
+        ResetPortalOrientation();
+        m_TrackingOutputValid = false;
+        return;
+    }
+    if (playerIndex != m_EyeHeightPlayerIndex || player != m_EyeHeightPlayerEntity) {
+        ResetPortalOrientation();
+        m_SetupOrigin = renderOrigin;
+        UpdateTracking();
+        return;
+    }
+    if (!m_HmdPose.valid || !m_TrackingOutputValid ||
+        m_Game->m_VguiSurface->IsCursorVisible()) {
         m_PortalCoordinator.CancelPending();
         return;
     }
     const auto frame = m_PortalCoordinator.Drain(reinterpret_cast<std::uintptr_t>(player));
+    if (frame.playerChanged) {
+        ResetPortalOrientation();
+        m_SetupOrigin = renderOrigin;
+        UpdateTracking();
+        return;
+    }
     if (!frame.applied)
         return;
     const Vector baseOffset = m_Playspace.HmdOffsetUnits(
@@ -1448,6 +1481,7 @@ void VR::ApplyPendingPortalOrientation()
     m_PortalRigAnchor.Reanchor(baseOffset, m_HmdPosRelative);
     m_PortalEffectiveRotation = frame.effective;
     m_RoomscaleObserver.Reset();
+    m_SetupOrigin = renderOrigin; // traces rebuilt below must use the teleported render origin
     UpdateTracking(); // rebuild head and hands from the same pose before either eye is rendered
     Logger::Write("Experimental portal orientation: applied " +
         std::to_string(frame.applied) + " crossing(s) before stereo render");

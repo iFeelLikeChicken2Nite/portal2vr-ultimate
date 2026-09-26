@@ -162,6 +162,7 @@ struct FrameResult {
     Rotation world;
     Rotation effective;
     unsigned applied = 0;
+    bool playerChanged = false;
 };
 
 class RigAnchor {
@@ -239,11 +240,13 @@ public:
     FrameResult Drain(std::uintptr_t playerKey)
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
-        if (m_PlayerKey && playerKey != m_PlayerKey)
+        const bool playerChanged = m_PlayerKey && playerKey != m_PlayerKey;
+        if (playerChanged)
             ClearAll();
         m_PlayerKey = playerKey;
         ++m_FrameSequence;
         FrameResult result;
+        result.playerChanged = playerChanged;
         while (!m_Pending.empty()) {
             const auto event = m_Pending.front();
             m_Pending.pop_front();
