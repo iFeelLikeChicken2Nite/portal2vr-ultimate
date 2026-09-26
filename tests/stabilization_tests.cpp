@@ -66,6 +66,18 @@ int main()
                      {0.0f, 50.0f, 10.0f}, "seated HMD displacement at scale 50");
     expectVectorNear(seated.ControllerOffsetUnits({3.0f, 4.0f, 1.2f}, seatedHmd, 70.0f),
                      {-50.0f, 50.0f, 10.0f}, "controller uses HMD playspace transform");
+    const auto leftOnly = seated.ControllerRelativeOffsetUnits(true,
+        {3.0f, 4.0f, 1.2f}, seatedHmd, 70.0f);
+    const auto rightLost = seated.ControllerRelativeOffsetUnits(false,
+        {4.0f, 3.0f, 1.2f}, seatedHmd, 70.0f);
+    expect(leftOnly.has_value(), true, "left position valid without right pose");
+    if (leftOnly) expectVectorNear(*leftOnly, {-50.0f, 0.0f, 0.0f}, "left relative playspace offset");
+    expect(rightLost.has_value(), false, "lost right position invalid independently");
+    const auto rightReconnected = seated.ControllerRelativeOffsetUnits(true,
+        {4.0f, 3.0f, 1.2f}, seatedHmd, 70.0f);
+    expect(rightReconnected.has_value(), true, "right position recovers from fresh pose");
+    if (rightReconnected) expectVectorNear(*rightReconnected,
+        {0.0f, 50.0f, 0.0f}, "right relative offset after reconnect");
 
     TrackingSpace::PlayspaceState standing;
     standing.mode = TrackingSpace::TrackingMode::Standing;

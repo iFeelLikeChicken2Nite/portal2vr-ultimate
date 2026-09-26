@@ -124,6 +124,15 @@ struct PlayspaceState {
                RotateYawDegrees(controllerMeters - hmdMeters, yawDegrees) * scale;
     }
 
+    std::optional<Vector> ControllerRelativeOffsetUnits(bool valid, const Vector &controllerMeters,
+                                                        const Vector &hmdMeters, float eyeHeightUnits) const
+    {
+        if (!valid)
+            return std::nullopt;
+        return ControllerOffsetUnits(controllerMeters, hmdMeters, eyeHeightUnits) -
+               HmdOffsetUnits(hmdMeters, eyeHeightUnits);
+    }
+
     void TurnAboutHmd(float deltaDegrees, const Vector &hmdMeters, float eyeHeightUnits)
     {
         const Vector before = HmdOffsetUnits(hmdMeters, eyeHeightUnits);

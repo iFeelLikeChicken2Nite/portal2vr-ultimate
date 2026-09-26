@@ -104,6 +104,7 @@ public:
 	bool m_HasLastHmdOffset = false;
 	Vector m_LastHmdOffsetUnits{0.0f, 0.0f, 0.0f};
 	bool m_MovementFallbackActive = false;
+	bool m_StandingHeightInactiveLogged = false;
 	bool m_HasEyeHeight = false;
 	bool m_EyeHeightWasInvalid = false;
 	int m_EyeHeightPlayerIndex = -1;
@@ -114,6 +115,8 @@ public:
 	bool m_RoomscaleActive = false;
 
 	Vector m_LeftControllerPosAbs;											
+	Vector m_LeftControllerPosRel{0.0f, 0.0f, 0.0f};
+	bool m_LeftControllerOutputValid = false;
 	QAngle m_LeftControllerAngAbs;
 	Vector m_RightControllerPosRel;											
 	QAngle m_RightControllerAngAbs;

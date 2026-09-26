@@ -1106,7 +1106,7 @@ void VR::ResetPosition()
 Vector VR::GetMovementForward()
 {
     const TrackingSpace::DeviceDirection hmd{m_TrackingOutputValid, m_HmdForward};
-    const TrackingSpace::DeviceDirection left{m_LeftControllerPose.valid, m_LeftControllerForward};
+    const TrackingSpace::DeviceDirection left{m_LeftControllerOutputValid, m_LeftControllerForward};
     const TrackingSpace::DeviceDirection right{m_RightControllerPose.valid, m_RightControllerForward};
     bool fallback = false;
     if (m_Config.movementDirection == TrackingSpace::MovementDirection::LeftController)
@@ -1124,6 +1124,9 @@ Vector VR::GetMovementForward()
 void VR::UpdateTracking()
 {
     m_TrackingOutputValid = false;
+    m_LeftControllerOutputValid = false;
+    m_LeftControllerPosRel = {0.0f, 0.0f, 0.0f};
+    m_RightControllerPosRel = {0.0f, 0.0f, 0.0f};
 
     if (!m_HmdPose.valid) {
         m_HmdLostSinceLastValid = true;
@@ -1254,7 +1257,11 @@ void VR::UpdateTracking()
     m_EyeZ = m_EyeToHeadTransformPosRight.z;
 
     // Hand tracking
-    if (m_LeftControllerPose.valid) {
+    if (const auto leftOffset = m_Playspace.ControllerRelativeOffsetUnits(
+            m_LeftControllerPose.valid, m_LeftControllerPose.TrackedDevicePos,
+            hmdPosLocal, m_LastEyeHeightUnits)) {
+        m_LeftControllerPosRel = *leftOffset;
+        m_LeftControllerOutputValid = true;
         QAngle leftControllerAng = m_LeftControllerPose.TrackedDeviceAng;
         leftControllerAng.x += m_RotationOffset.x;
         leftControllerAng.y += m_RotationOffset.y;
@@ -1268,16 +1275,15 @@ void VR::UpdateTracking()
         QAngle::VectorAngles(m_LeftControllerForward, m_LeftControllerUp, m_LeftControllerAngAbs);
     }
 
-    if (!m_RightControllerPose.valid)
+    const auto rightOffset = m_Playspace.ControllerRelativeOffsetUnits(
+        m_RightControllerPose.valid, m_RightControllerPose.TrackedDevicePos,
+        hmdPosLocal, m_LastEyeHeightUnits);
+    if (!rightOffset)
         return;
 
-    Vector rightControllerPosLocal = m_RightControllerPose.TrackedDevicePos;
     QAngle rightControllerAngLocal = m_RightControllerPose.TrackedDeviceAng;
 
-    //std::cout << "Right Controller - X: " << rightControllerPosLocal.x << "Y: " << rightControllerPosLocal.y << "Z: " << rightControllerPosLocal.z << "\n";
-
-    m_RightControllerPosRel = m_Playspace.ControllerOffsetUnits(rightControllerPosLocal,
-        hmdPosLocal, m_LastEyeHeightUnits) - m_HmdPosRelative;
+    m_RightControllerPosRel = *rightOffset;
 
     //rightControllerAngLocal += m_RotationOffset;
     rightControllerAngLocal.x += m_RotationOffset.x;
@@ -1599,6 +1605,14 @@ void VR::ParseConfigFile()
     }
     m_IpdScale = m_Config.ipdScale;
     m_6DOF = m_Config.sixDof;
+    const bool standingHeightInactive =
+        m_Playspace.mode == TrackingSpace::TrackingMode::Standing && !m_6DOF;
+    if (standingHeightInactive != m_StandingHeightInactiveLogged) {
+        Logger::Write(standingHeightInactive ?
+            "Config: Standing height and HeightOffsetMeters are inactive while 6DOF=false" :
+            "Config: Standing height placement active again");
+        m_StandingHeightInactiveLogged = standingHeightInactive;
+    }
     m_AimMode = m_Config.aimMode;
     m_AntiAliasing = m_Config.antiAliasing;
     m_RenderWindow = m_Config.renderWindow;
