@@ -98,8 +98,10 @@ public:
 	Vector m_SetupOrigin = { 0,0,0 };
 	TrackingSpace::PlayspaceState m_Playspace;
 	RoomscaleMotion::Observer m_RoomscaleObserver;
+	std::uint64_t m_PoseFetchSequence = 0; // increments only after a successful WaitGetPoses
 	std::chrono::steady_clock::time_point m_NextRoomscaleSummary{};
 	std::chrono::steady_clock::time_point m_NextRoomscaleAnomalyLog{};
+	std::chrono::steady_clock::time_point m_NextRoomscaleTrackingLog{};
 	bool m_TrackingOutputValid = false;
 	bool m_HmdLostSinceLastValid = false;
 	bool m_HasLastHmdOffset = false;

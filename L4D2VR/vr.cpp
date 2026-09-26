@@ -596,6 +596,7 @@ bool VR::UpdatePosesAndActions()
         m_HmdPose.valid = m_LeftControllerPose.valid = m_RightControllerPose.valid = false;
     } else {
         m_LastPoseError = 0;
+        ++m_PoseFetchSequence;
     }
     const auto inputError = m_Input->UpdateActionState(&m_ActiveActionSet,
         sizeof(vr::VRActiveActionSet_t), 1);
@@ -1139,9 +1140,14 @@ void VR::UpdateTracking()
     m_RightControllerPosRel = {0.0f, 0.0f, 0.0f};
 
     if (!m_HmdPose.valid) {
-        if (m_RoomscaleObserver.OnPose(false, {}, 0.0f, 1.0f) ==
-            RoomscaleMotion::Observation::TrackingLost)
-            Logger::Write("Roomscale observe: HMD tracking lost; pending physical intent discarded");
+        if (m_RoomscaleObserver.OnPose(false, {}, m_PoseFetchSequence, 0.0f, 1.0f, true) ==
+            RoomscaleMotion::Observation::TrackingLost) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= m_NextRoomscaleTrackingLog) {
+                Logger::Write("Roomscale observe: HMD tracking lost; pending physical intent discarded");
+                m_NextRoomscaleTrackingLog = now + std::chrono::seconds(5);
+            }
+        }
         m_HmdLostSinceLastValid = true;
         if (m_Game->m_Offsets->m_LaserAvailable) {
             const int index = m_Game->m_EngineClient->GetLocalPlayer();
@@ -1220,9 +1226,15 @@ void VR::UpdateTracking()
     m_HasLastHmdOffset = true;
     m_TrackingOutputValid = true;
     const auto roomscaleStatus = m_RoomscaleObserver.OnPose(
-        true, hmdPosLocal, m_Playspace.yawDegrees, m_Playspace.scale);
-    if (roomscaleStatus == RoomscaleMotion::Observation::TrackingRecovered)
-        Logger::Write("Roomscale observe: HMD tracking recovered; using fresh movement baseline");
+        true, hmdPosLocal, m_PoseFetchSequence, m_Playspace.yawDegrees, m_Playspace.scale,
+        m_Game->m_EngineClient->IsInGame() && !m_Game->m_VguiSurface->IsCursorVisible());
+    if (roomscaleStatus == RoomscaleMotion::Observation::TrackingRecovered) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= m_NextRoomscaleTrackingLog) {
+            Logger::Write("Roomscale observe: HMD tracking recovered; using fresh movement baseline");
+            m_NextRoomscaleTrackingLog = now + std::chrono::seconds(5);
+        }
+    }
     else if (roomscaleStatus == RoomscaleMotion::Observation::Discontinuity ||
              roomscaleStatus == RoomscaleMotion::Observation::InvalidSample) {
         const auto now = std::chrono::steady_clock::now();
@@ -1366,7 +1378,13 @@ void VR::UpdateTracking()
 
 void VR::ObserveRoomscaleCommand(int commandNumber)
 {
-    (void)m_RoomscaleObserver.OnCommand(commandNumber);
+    if (m_Config.roomscaleMode != RoomscaleMotion::Mode::Observe)
+        return;
+    const int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
+    const bool gameplayEligible = m_IsVREnabled && m_HmdPose.valid &&
+        m_Game->m_EngineClient->IsInGame() && !m_Game->m_VguiSurface->IsCursorVisible() &&
+        playerIndex > 0 && m_Game->GetClientEntity(playerIndex) != nullptr;
+    (void)m_RoomscaleObserver.OnCommand(commandNumber, gameplayEligible);
 }
 
 Vector VR::GetViewAngle()

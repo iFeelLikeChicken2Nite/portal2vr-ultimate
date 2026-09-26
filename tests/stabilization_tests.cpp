@@ -56,6 +56,11 @@ int main()
         expectVectorNear(*roomscaleStep, {4.32f, 0.0f, 0.0f}, "physical step is horizontal Source units");
     expect(roomscale.Consume(101).has_value(), false, "same command does not repeat physical step");
     expect(roomscale.Consume(102).has_value(), false, "new command without pose does not repeat step");
+    roomscale.Reset();
+    roomscale.Observe(true, {1.0f, 0.0f, 1.6f}, 3, 0.0f, 43.2f);
+    roomscale.Observe(true, {1.1f, 0.0f, 1.6f}, 4, 0.0f, 43.2f);
+    expect(roomscale.Consume(102).has_value(), false,
+           "recenter cannot replay an already consumed command number");
 
     RoomscaleMotion::StepAccumulator recoveredRoomscale;
     recoveredRoomscale.Observe(true, {0.0f, 0.0f, 1.6f}, 1, 0.0f, 43.2f);
@@ -302,13 +307,14 @@ int main()
     expect(badRoomscaleConfig.errors.size() == 1, true,
            "unsupported roomscale activation is diagnosed");
     RoomscaleMotion::Observer diagnostic;
-    diagnostic.OnPose(true, {0.0f, 0.0f, 1.6f}, 0.0f, 43.2f);
-    diagnostic.OnPose(true, {0.1f, 0.0f, 1.6f}, 0.0f, 43.2f);
-    expect(diagnostic.OnCommand(1).has_value(), false, "off roomscale mode ignores poses and commands");
+    diagnostic.OnPose(true, {0.0f, 0.0f, 1.6f}, 1, 0.0f, 43.2f, true);
+    diagnostic.OnPose(true, {0.1f, 0.0f, 1.6f}, 2, 0.0f, 43.2f, true);
+    expect(diagnostic.OnCommand(1, true).has_value(), false, "off roomscale mode ignores poses and commands");
     expect(diagnostic.SetMode(RoomscaleMotion::Mode::Observe), true, "observe mode transition reported");
-    diagnostic.OnPose(true, {5.0f, 0.0f, 1.6f}, 0.0f, 43.2f);
-    diagnostic.OnPose(true, {5.1f, 0.0f, 1.6f}, 0.0f, 43.2f);
-    const auto observedStep = diagnostic.OnCommand(2);
+    diagnostic.OnPose(true, {5.0f, 0.0f, 1.6f}, 3, 0.0f, 43.2f, true);
+    diagnostic.OnPose(true, {5.1f, 0.0f, 1.6f}, 4, 0.0f, 43.2f, true);
+    diagnostic.OnPose(true, {9.0f, 0.0f, 1.6f}, 4, 0.0f, 43.2f, true);
+    const auto observedStep = diagnostic.OnCommand(2, true);
     expect(observedStep.has_value(), true, "observe mode computes diagnostic intent");
     if (observedStep)
         expectVectorNear(*observedStep, {4.32f, 0.0f, 0.0f}, "observe mode reports unmoved intent");
@@ -316,9 +322,21 @@ int main()
     expect(observedSummary.steps == 1, true, "diagnostic summary counts consumed steps");
     expectNear(observedSummary.distanceUnits, 4.32f, "diagnostic summary measures intended distance");
     expect(diagnostic.TakeSummary().steps == 0, true, "diagnostic summary drains once");
+    diagnostic.OnPose(true, {5.2f, 0.0f, 1.6f}, 5, 0.0f, 43.2f, true);
+    expect(diagnostic.OnCommand(3, false).has_value(), false,
+           "menu or missing gameplay gate discards pending intent");
+    diagnostic.OnPose(true, {8.0f, 0.0f, 1.6f}, 6, 0.0f, 43.2f, true);
+    expect(diagnostic.OnCommand(4, true).has_value(), false,
+           "return from menu establishes a fresh baseline");
+    diagnostic.OnPose(true, {8.1f, 0.0f, 1.6f}, 7, 0.0f, 43.2f, false);
+    expect(diagnostic.OnCommand(5, true).has_value(), false,
+           "poses observed in menus do not queue movement");
+    diagnostic.OnPose(false, {}, 8, 0.0f, 43.2f, true);
+    expect(diagnostic.OnCommand(6, true).has_value(), false,
+           "invalid HMD pose blocks command consumption");
     expect(diagnostic.SetMode(RoomscaleMotion::Mode::Off), true, "disabling observation reported");
-    diagnostic.OnPose(true, {5.2f, 0.0f, 1.6f}, 0.0f, 43.2f);
-    expect(diagnostic.OnCommand(3).has_value(), false, "disabled observer emits no movement intent");
+    diagnostic.OnPose(true, {5.2f, 0.0f, 1.6f}, 9, 0.0f, 43.2f, true);
+    expect(diagnostic.OnCommand(7, true).has_value(), false, "disabled observer emits no movement intent");
     std::istringstream m2Options("TrackingMode=Standing\nMovementDirection=LeftController\n"
                                  "HeightOffsetMeters=0.25\nControllerPitchDegrees=15\n");
     const auto m2Valid = ParseConfig(m2Options, m2Defaults);

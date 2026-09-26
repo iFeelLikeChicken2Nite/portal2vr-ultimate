@@ -23,7 +23,6 @@ public:
         m_HasBaseline = false;
         m_TrackingLost = false;
         m_PreviousSequence = 0;
-        m_LastCommand = 0;
         m_PendingUnits = {0.0f, 0.0f, 0.0f};
     }
 
@@ -35,7 +34,6 @@ public:
             m_HasBaseline = false;
             m_TrackingLost = true;
             m_PendingUnits = {0.0f, 0.0f, 0.0f};
-            m_LastCommand = 0;
             return wasTracking ? Observation::TrackingLost : Observation::NoStep;
         }
         if (!std::isfinite(hmdMeters.x) || !std::isfinite(hmdMeters.y) ||
@@ -55,6 +53,8 @@ public:
             m_TrackingLost = false;
             return recovered ? Observation::TrackingRecovered : Observation::Baseline;
         }
+        if (poseSequence <= m_PreviousSequence)
+            return Observation::NoStep;
         if (yawDegrees != m_PreviousYawDegrees || scale != m_PreviousScale) {
             m_PreviousMeters = hmdMeters;
             m_PreviousSequence = poseSequence;
@@ -63,8 +63,6 @@ public:
             m_PendingUnits = {0.0f, 0.0f, 0.0f};
             return Observation::MappingChanged;
         }
-        if (poseSequence <= m_PreviousSequence)
-            return Observation::NoStep;
         Vector delta = hmdMeters - m_PreviousMeters;
         // A larger single-pose jump is treated as tracking relocalization, not walking.
         constexpr float kMaxPoseStepMeters = 0.35f;
@@ -121,6 +119,7 @@ public:
             return false;
         m_Mode = mode;
         m_Steps.Reset();
+        m_Eligible = false;
         m_Summary = {};
         return true;
     }
@@ -129,20 +128,36 @@ public:
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
         m_Steps.Reset();
+        m_Eligible = false;
     }
 
-    Observation OnPose(bool valid, const Vector &hmdMeters, float yawDegrees, float scale)
+    Observation OnPose(bool valid, const Vector &hmdMeters, std::uint64_t poseSequence,
+                       float yawDegrees, float scale, bool gameplayEligible)
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
         if (m_Mode == Mode::Off)
             return Observation::NoStep;
-        return m_Steps.Observe(valid, hmdMeters, ++m_PoseSequence, yawDegrees, scale);
+        if (!gameplayEligible) {
+            m_Steps.Reset();
+            m_Eligible = false;
+            return Observation::NoStep;
+        }
+        const auto status = m_Steps.Observe(valid, hmdMeters, poseSequence, yawDegrees, scale);
+        m_Eligible = valid && status != Observation::InvalidSample;
+        return status;
     }
 
-    std::optional<Vector> OnCommand(int commandNumber)
+    std::optional<Vector> OnCommand(int commandNumber, bool gameplayEligible)
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
         if (m_Mode == Mode::Off)
+            return std::nullopt;
+        if (!gameplayEligible) {
+            m_Steps.Reset();
+            m_Eligible = false;
+            return std::nullopt;
+        }
+        if (!m_Eligible)
             return std::nullopt;
         const auto step = m_Steps.Consume(commandNumber);
         if (step) {
@@ -163,9 +178,9 @@ public:
 private:
     std::mutex m_Mutex;
     Mode m_Mode = Mode::Off;
+    bool m_Eligible = false;
     StepAccumulator m_Steps;
     Summary m_Summary;
-    std::uint64_t m_PoseSequence = 0;
 };
 
 } // namespace RoomscaleMotion
