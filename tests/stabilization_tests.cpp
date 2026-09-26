@@ -1,4 +1,5 @@
 #include "../L4D2VR/digital_input.h"
+#include "../L4D2VR/tracked_device.h"
 #include <cstring>
 #include <iostream>
 
@@ -38,6 +39,11 @@ int main()
     expect(DigitalButtonState::PressEdge(true, false, true), false, "one shot hold");
     expect(DigitalButtonState::PressEdge(true, true, false), false, "one shot release");
     expect(DigitalButtonState::PressEdge(false, true, true), false, "inactive one shot");
+
+    expect(IsUsableTrackedDeviceIndex(0, 64, 0xffffffffu), true, "HMD index is in range");
+    expect(IsUsableTrackedDeviceIndex(63, 64, 0xffffffffu), true, "last tracked index is in range");
+    expect(IsUsableTrackedDeviceIndex(64, 64, 0xffffffffu), false, "out of range tracked index");
+    expect(IsUsableTrackedDeviceIndex(0xffffffffu, 64, 0xffffffffu), false, "invalid controller role index");
 
     if (failures) return 1;
     std::cout << "digital input tests passed\n";

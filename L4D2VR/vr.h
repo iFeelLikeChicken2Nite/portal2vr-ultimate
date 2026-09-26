@@ -3,6 +3,7 @@
 #include "vector.h"
 #include <chrono>
 #include "digital_input.h"
+#include "tracked_device.h"
 
 #define MAX_STR_LEN 256
 
@@ -14,6 +15,7 @@ class ITexture;
 
 struct TrackedDevicePoseData 
 {
+	bool valid = false;
 	std::string TrackedDeviceName;
 	Vector TrackedDevicePos;
 	Vector TrackedDeviceVel;

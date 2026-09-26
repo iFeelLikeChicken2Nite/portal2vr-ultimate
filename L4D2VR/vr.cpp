@@ -306,6 +306,14 @@ void VR::SubmitVRTextures()
 
 void VR::GetPoseData(vr::TrackedDevicePose_t &poseRaw, TrackedDevicePoseData &poseOut)
 {
+    poseOut.valid = poseRaw.bPoseIsValid;
+    if (!poseOut.valid) {
+        poseOut.TrackedDevicePos = { 0, 0, 0 };
+        poseOut.TrackedDeviceVel = { 0, 0, 0 };
+        poseOut.TrackedDeviceAng = { 0, 0, 0 };
+        poseOut.TrackedDeviceAngVel = { 0, 0, 0 };
+        return;
+    }
     if (poseRaw.bPoseIsValid) 
     {
         vr::HmdMatrix34_t mat = poseRaw.mDeviceToAbsoluteTracking;
@@ -335,6 +343,8 @@ void VR::GetPoseData(vr::TrackedDevicePose_t &poseRaw, TrackedDevicePoseData &po
 
 void VR::RepositionOverlays()
 {
+    if (!m_HmdPose.valid)
+        return;
     vr::TrackedDevicePose_t hmdPose = m_Poses[vr::k_unTrackedDeviceIndex_Hmd];
     vr::HmdMatrix34_t hmdMat = hmdPose.mDeviceToAbsoluteTracking;
     Vector hmdPosition = { hmdMat.m[0][3], hmdMat.m[1][3], hmdMat.m[2][3] };
@@ -416,8 +426,14 @@ void VR::GetPoses()
     if (m_LeftHanded)
         std::swap(leftControllerIndex, rightControllerIndex);
 
-    vr::TrackedDevicePose_t leftControllerPose = m_Poses[leftControllerIndex];
-    vr::TrackedDevicePose_t rightControllerPose = m_Poses[rightControllerIndex];
+    vr::TrackedDevicePose_t leftControllerPose{};
+    vr::TrackedDevicePose_t rightControllerPose{};
+    if (IsUsableTrackedDeviceIndex(leftControllerIndex, vr::k_unMaxTrackedDeviceCount,
+                                   vr::k_unTrackedDeviceIndexInvalid))
+        leftControllerPose = m_Poses[leftControllerIndex];
+    if (IsUsableTrackedDeviceIndex(rightControllerIndex, vr::k_unMaxTrackedDeviceCount,
+                                   vr::k_unTrackedDeviceIndexInvalid))
+        rightControllerPose = m_Poses[rightControllerIndex];
 
     GetPoseData(hmdPose, m_HmdPose);
     GetPoseData(leftControllerPose, m_LeftControllerPose);
@@ -782,6 +798,7 @@ vr::HmdMatrix34_t VR::VMatrixToHmdMatrix(const VMatrix &vMat)
 vr::HmdMatrix34_t VR::GetControllerTipMatrix(vr::ETrackedControllerRole controllerRole)
 {
     vr::VRInputValueHandle_t inputValue = vr::k_ulInvalidInputValueHandle;
+    const auto deviceIndex = m_System->GetTrackedDeviceIndexForControllerRole(controllerRole);
 
     if (controllerRole == vr::TrackedControllerRole_RightHand)
     {
@@ -792,11 +809,13 @@ vr::HmdMatrix34_t VR::GetControllerTipMatrix(vr::ETrackedControllerRole controll
         m_Input->GetInputSourceHandle("/user/hand/left", &inputValue);
     }
 
-    if (inputValue != vr::k_ulInvalidInputValueHandle)
+    if (inputValue != vr::k_ulInvalidInputValueHandle &&
+        IsUsableTrackedDeviceIndex(deviceIndex, vr::k_unMaxTrackedDeviceCount,
+                                   vr::k_unTrackedDeviceIndexInvalid) && m_Poses[deviceIndex].bPoseIsValid)
     {
         char buffer[vr::k_unMaxPropertyStringSize];
 
-        m_System->GetStringTrackedDeviceProperty(vr::VRSystem()->GetTrackedDeviceIndexForControllerRole(controllerRole), vr::Prop_RenderModelName_String, 
+        m_System->GetStringTrackedDeviceProperty(deviceIndex, vr::Prop_RenderModelName_String, 
                                                  buffer, vr::k_unMaxPropertyStringSize);
 
         vr::RenderModel_ControllerMode_State_t controllerState = {0};
@@ -823,7 +842,8 @@ bool VR::CheckOverlayIntersectionForController(vr::VROverlayHandle_t overlayHand
 {
     vr::TrackedDeviceIndex_t deviceIndex = m_System->GetTrackedDeviceIndexForControllerRole(controllerRole);
 
-    if (deviceIndex == vr::k_unTrackedDeviceIndexInvalid)
+    if (!IsUsableTrackedDeviceIndex(deviceIndex, vr::k_unMaxTrackedDeviceCount,
+                                    vr::k_unTrackedDeviceIndexInvalid))
         return false;
 
     vr::TrackedDevicePose_t &controllerPose = m_Poses[deviceIndex];
@@ -917,12 +937,16 @@ void VR::UpdateHMDAngles() {
 
 void VR::ResetPosition()
 {
-    m_Center = m_HmdPose.TrackedDevicePos;
+    if (m_HmdPose.valid)
+        m_Center = m_HmdPose.TrackedDevicePos;
 }
 
 void VR::UpdateTracking()
 {
     GetPoses();
+
+    if (!m_HmdPose.valid)
+        return;
 
     int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
     C_BasePlayer* localPlayer = (C_BasePlayer*)m_Game->GetClientEntity(playerIndex);
@@ -959,9 +983,10 @@ void VR::UpdateTracking()
     if ((cameraFollowing < 0 && cameraDistance > 1) || (m_PushingThumbstick))
         m_RoomscaleActive = false;*/
 
-    m_AimPos = Trace((uint32_t*)localPlayer);
+    if (m_RightControllerPose.valid)
+        m_AimPos = Trace((uint32_t*)localPlayer);
 
-    if (m_AimMode == 2) {
+    if (m_AimMode == 2 && m_RightControllerPose.valid) {
         C_Portal_Player* portalPlayer = (C_Portal_Player*)localPlayer;
 
         auto activeWeaponAddr = (*(int(__thiscall**)(void*))(*(uintptr_t*)portalPlayer + 968))(portalPlayer);
@@ -1015,6 +1040,9 @@ void VR::UpdateTracking()
     m_Ipd = m_EyeToHeadTransformPosRight.x * 2;
     m_EyeZ = m_EyeToHeadTransformPosRight.z;
 
+    if (!m_RightControllerPose.valid)
+        return;
+
     // Hand tracking
     Vector leftControllerPosLocal = m_LeftControllerPose.TrackedDevicePos;
     QAngle leftControllerAngLocal = m_LeftControllerPose.TrackedDeviceAng;
@@ -1040,20 +1068,23 @@ void VR::UpdateTracking()
     // Wrap angle from -180 to 180
     //rightControllerAngLocal.Normalize();
 
-    QAngle::AngleVectors(leftControllerAngLocal, &m_LeftControllerForward, &m_LeftControllerRight, &m_LeftControllerUp);
+    if (m_LeftControllerPose.valid)
+        QAngle::AngleVectors(leftControllerAngLocal, &m_LeftControllerForward, &m_LeftControllerRight, &m_LeftControllerUp);
     QAngle::AngleVectors(rightControllerAngLocal, &m_RightControllerForward, &m_RightControllerRight, &m_RightControllerUp);
 
     const float offset = -30;
 
     // Adjust controller angle downward
-    m_LeftControllerForward = VectorRotate(m_LeftControllerForward, m_LeftControllerRight, offset);
-    m_LeftControllerUp = VectorRotate(m_LeftControllerUp, m_LeftControllerRight, offset);
+    if (m_LeftControllerPose.valid) {
+        m_LeftControllerForward = VectorRotate(m_LeftControllerForward, m_LeftControllerRight, offset);
+        m_LeftControllerUp = VectorRotate(m_LeftControllerUp, m_LeftControllerRight, offset);
+        QAngle::VectorAngles(m_LeftControllerForward, m_LeftControllerUp, m_LeftControllerAngAbs);
+    }
 
     m_RightControllerForward = VectorRotate(m_RightControllerForward, m_RightControllerRight, offset);
     m_RightControllerUp = VectorRotate(m_RightControllerUp, m_RightControllerRight, offset);
 
     // controller angles
-    QAngle::VectorAngles(m_LeftControllerForward, m_LeftControllerUp, m_LeftControllerAngAbs);
     QAngle::VectorAngles(m_RightControllerForward, m_RightControllerUp, m_RightControllerAngAbs);
     m_RightControllerAngAbs.Normalize();
 
