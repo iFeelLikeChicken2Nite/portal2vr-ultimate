@@ -8,6 +8,8 @@ The output is a 32-bit `d3d9.dll`, combining the Portal2VR code and a modified D
 
 The build is the `l4d2vr.sln` x86 configuration mapped to the Win32 DLL project. It uses C++17, MinHook, bundled OpenVR 2.5.1 Win32 binaries, the pinned modified DXVK submodule, Vulkan import library and Windows SDK. The Source interfaces and entity structures in `L4D2VR/sdk` are locally declared ABI assumptions, not an official runtime API.
 
+Baseline checkout: `310ac49`, DXVK submodule `75167aa`, MinHook submodule `d94c64d`. With Visual Studio 2022 Build Tools MSBuild `17.14.51` and MSVC `v143`, the original Release x86 source compiled a DLL, but the build failed at its machine-specific `H:\SteamLibrary\...` post-build copy. M1 makes deployment opt-in and uses `v143` as the default toolset. This is host build evidence only; the original game and a headset were not launched for this audit.
+
 ## Hook and symbol resolution
 
 `Offsets` defines known module-relative offsets and byte signatures. `SigScanner::VerifyOffset` first checks the known offset; if it differs, it scans the loaded image and returns a replacement. MinHook creates trampolines at resolved addresses; the detours in `hooks.cpp` redirect rendering, movement, portal gun behavior, user command serialization, and HUD behavior. Static offsets, signature uniqueness, engine vtables, object layouts and calling conventions are all sensitive to Portal 2 updates. M1 adds a required/optional decision and bounds checks; it does not remove these assumptions.
@@ -24,8 +26,9 @@ The build is the `l4d2vr.sln` x86 configuration mapped to the Win32 DLL project.
 | `ReadUsercmd` | server | Decode VR controller pose in user command | Required | Invalid pose data / command stream |
 | `WriteUsercmd` | client | Encode controller pose in user command | Required | Server lacks controller pose |
 | `EyeAngles` | server | Override angle for held object and firing paths | Required | Controller aim desynchronizes |
-| `VGui_Paint`, `PushRenderTargetAndViewport`, `PopRenderTargetAndViewport` | engine / materialsystem | Redirect and draw HUD | Required in current pipeline | Missing or corrupted UI rendering |
-| `DrawSelf`, `ClipTransform`, `CHudCrosshair_ShouldDraw` | client | HUD, crosshair and laser placement | Required in current pipeline | UI placement or crosshair state wrong |
+| `VGui_Paint`, `PushRenderTargetAndViewport`, `PopRenderTargetAndViewport`, `PrePushRenderTarget` | engine / materialsystem / client | Intended HUD target redirection | Inactive (not enabled in baseline or M1) | Cannot provide a reliable dedicated VR HUD; enabling without validation could corrupt rendering |
+| `DrawSelf`, `CHudCrosshair_ShouldDraw` | client | HUD drawing and crosshair/laser behavior | Required in current pipeline | UI placement or crosshair state wrong |
+| `ClipTransform` | client | Experimental HUD projection detour | Inactive | No current behavior changes; unvalidated UI work remains |
 | `CreatePingPointer`, `PrecacheParticleSystem`, `Precache` | client / server | Optional laser pointer beam | Optional | Laser pointer disabled; main stereo view should continue |
 
 Additional hooks alter FOV, shooting position, object handling and splitscreen behavior. Some defined offsets and hook declarations are unused; a definition alone is not evidence that a hook is installed. The complete enabled set is in `Hooks::Hooks` and `Hooks::initSourceHooks`.
@@ -34,13 +37,15 @@ Additional hooks alter FOV, shooting position, object handling and splitscreen b
 
 `Portal 2 / Source -> Direct3D 9 -> modified DXVK -> Vulkan shared textures -> OpenVR compositor`.
 
-`VR` obtains the OpenVR system, compositor, input and overlay interfaces, recommended render size and eye projection. `RenderView` draws left and right `CViewSetup` views into separate Source textures. DXVK exposes shared Vulkan texture data to OpenVR for compositor submission. A third render to the desktop back buffer is controlled by `RenderWindow`. HUD painting is redirected to a separate render target. The main menu uses an OpenVR overlay; menu pointer events are sent to the Windows input queue. `SteamVRActionManifest/action_manifest.json` and the controller binding JSON files define the existing OpenVR action set and bindings. The original code assumed every startup call succeeded and used a detached config watcher.
+`VR` obtains the OpenVR system, compositor, input and overlay interfaces, recommended render size and eye projection. `RenderView` draws left and right `CViewSetup` views into separate Source textures. DXVK exposes shared Vulkan texture data to OpenVR for compositor submission. A third render to the desktop back buffer is controlled by `RenderWindow`. A HUD render target is allocated, but the VGUI/render-target detours that would redirect HUD painting are inactive; a separate working VR HUD is not established by this code. The main menu uses an OpenVR overlay; menu pointer events are sent to the Windows input queue. `SteamVRActionManifest/action_manifest.json` and the controller binding JSON files define the existing OpenVR action set and bindings. The original code assumed every startup call succeeded and used a detached config watcher.
 
 ## Coordinate spaces and debt
 
 OpenVR tracking matrices use meters and the compositor's tracking origin. `GetPoseData` maps position to Source-like axes as `(-z, -x, y)` and similarly remaps velocities and angles. `VRScale` converts tracked meter differences into Source units (default `43.2`). `m_Center` is the tracked HMD position captured by recentering; `m_HmdPosRelativeRaw` is HMD minus that center in tracking units. `m_HmdPosRelative` rotates that delta by `m_RotationOffset.y` then applies `VRScale`. `m_SetupOrigin` is the most recent Source view setup origin, used to anchor controller and eye views. The right controller position is first expressed relative to the HMD, pivoted for artificial turning and scaled; `GetRightControllerAbsPos` adds the setup origin and optionally HMD displacement. `m_RotationOffset` also affects HMD and controller angles and receives a portal traversal yaw correction. Eye separation comes from the OpenVR eye-to-head transform and `IPDScale`.
 
 The names `Abs`, `Rel`, `Raw`, `Center`, and `SetupOrigin` do not fully encode units, origin or handedness. Rendering, aiming and Source command serialization share these mutable coordinates. Tracking origin is implicit. Stale controller poses were previously retained when OpenVR invalidated them. These are constraints for M2 design, not a reason for an M1 coordinate rewrite.
+
+M1 releases MinHook, overlays, OpenVR and allocated `Game`/`VR`/`Hooks`/`Offsets` after an initialization failure; the detached config watcher was removed. A successfully initialized DLL remains process-lifetime infrastructure. There is no tested hot-unload path, and cleanup during Windows loader-lock teardown is deliberately not attempted. Runtime unloading and a full ownership redesign remain separate work.
 
 ## Issue map
 

@@ -6,8 +6,7 @@
 </div>
 
 # ![Portal 2 icon](imgs/icon.jpg "Portal 2 icon") Portal 2 VR
-### ~~Use this mod at your own risk of getting VAC banned. Use the -insecure launch option to help protect yourself.~~
-### Apparently Portal 2 doesn't have VAC, but just to be safe you should still run the game with the `insecure` flag.
+Portal2VR expects Portal 2 to be started with `-insecure`. If it is missing, VR hooks are skipped and the game is not terminated by Portal2VR. This is a compatibility requirement of this mod, not a statement about anti-cheat policy.
 This game contains flashing lights and fast motion sequences.
 
 ## Portal 2 VR Mod First 20 Minutes (Youtube Video)
@@ -52,12 +51,15 @@ If the game is crashing, try:
 * Re-installing the game
 
 ## Build instructions
-1. ``` git clone --recurse-submodules https://github.com/Gistix/portal2vr.git ```
-2. Open l4d2vr.sln
-3. Set to x86 Debug or Release
-4. Build -> Build Solution
+1. In this checkout, initialize dependencies with `git submodule update --init --recursive` (or clone with `--recurse-submodules`).
+2. Install Visual Studio 2022 C++ build tools (MSVC v143 and the Windows 10/11 SDK). Open `l4d2vr.sln` and build the **x86** Release configuration; this is a 32-bit DLL. The solution's `x86` configuration maps to the project's `Win32` platform.
+3. From a VS developer terminal, an equivalent command is `msbuild l4d2vr.sln /m /p:Configuration=Release /p:Platform=x86`.
+4. The build normally leaves `d3d9.dll` under `Release/` and does **not** deploy to a game installation. To opt into deployment, set the MSBuild property `PORTAL2_DIR` to your own Portal 2 root, e.g. `/p:PORTAL2_DIR="D:\Games\Portal 2"`; the build then copies the DLL to its `bin` directory. The `VR` manifests, bindings and config still need to be present alongside the installation as expected by the existing release layout.
+5. Isolated tests: `msbuild tests\stabilization_tests.vcxproj /p:Configuration=Release /p:Platform=Win32`, then run `tests\bin\stabilization_tests.exe`.
 
-Note: After building, it will attempt to copy the new d3d9.dll to your Portal 2/bin directory.
+Portal2VR appends startup and error diagnostics to `portal2vr.log` beside its loaded `d3d9.dll`. The config file `VR/config.txt` is checked once per second while VR is running. Invalid values retain their last valid value and are logged. Accepted ranges are `TurnSpeed` 0.01–2, `SnapTurnAngle` 1–180 degrees, `VRScale` 1–200, `IPDScale` 0.5–1.5, `AimMode` 0–2, and `AntiAliasing` 0/2/4/8. An `AntiAliasing` change requires a game restart. To uninstall the mod, remove only the Portal2VR files that you installed, especially its `bin/d3d9.dll`; preserve any files that predated this mod.
+
+The architecture audit and milestone boundaries are in [docs/architecture.md](docs/architecture.md) and [docs/roadmap.md](docs/roadmap.md). A build and host-side tests do not establish game or headset compatibility; those still require real Portal 2 and SteamVR testing.
 
 ## Based on
 * [l4d2vr](https://github.com/sd805/l4d2vr)

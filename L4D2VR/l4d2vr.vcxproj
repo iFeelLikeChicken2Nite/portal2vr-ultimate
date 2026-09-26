@@ -22,13 +22,13 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v145</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v145</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
@@ -84,9 +84,6 @@
       <AdditionalDependencies>openvr_api.lib;$(SolutionDir)dxvk\lib32\vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>$(SolutionDir)dxvk\src\d3d9\d3d9.def</ModuleDefinitionFile>
     </Link>
-    <PostBuildEvent>
-      <Command>copy /Y "$(OutDir)$(TargetName)$(TargetExt)" "H:\SteamLibrary\steamapps\common\Portal 2\bin\$(TargetName)$(TargetExt)"</Command>
-    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
@@ -112,9 +109,6 @@
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>openvr_api.lib;$(SolutionDir)dxvk\lib32\vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
-    <PostBuildEvent>
-      <Command>copy /Y "$(OutDir)$(TargetName)$(TargetExt)" "H:\SteamLibrary\steamapps\common\Portal 2\bin\$(TargetName)$(TargetExt)"</Command>
-    </PostBuildEvent>
   </ItemDefinitionGroup>
 
   <ItemGroup>
@@ -369,6 +363,10 @@
     <ClInclude Include="..\dxvk\src\vulkan\vulkan_presenter.h" />
     <ClInclude Include="..\dxvk\src\vulkan\vulkan_util.h" />
     <ClInclude Include="..\dxvk\tests\test_utils.h" />
+    <ClInclude Include="config.h" />
+    <ClInclude Include="digital_input.h" />
+    <ClInclude Include="tracked_device.h" />
+    <ClInclude Include="logger.h" />
     <ClInclude Include="game.h" />
     <ClInclude Include="hooks.h" />
     <ClInclude Include="offsets.h" />
@@ -547,6 +545,9 @@
     <Text Include="config.txt" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="DeployToPortal2" AfterTargets="Build" Condition="'$(PORTAL2_DIR)' != ''">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PORTAL2_DIR)\bin" />
+  </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>
