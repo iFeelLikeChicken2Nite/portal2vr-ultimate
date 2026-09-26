@@ -3,6 +3,7 @@
 #include "../L4D2VR/sigscanner.h"
 #include "../L4D2VR/config.h"
 #include "../L4D2VR/tracking_space.h"
+#include "../L4D2VR/roomscale_motion.h"
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -45,6 +46,81 @@ static void expectVectorNear(const Vector &actual, const Vector &expected, const
 
 int main()
 {
+    RoomscaleMotion::StepAccumulator roomscale;
+    roomscale.Observe(true, {0.0f, 0.0f, 1.6f}, 1, 0.0f, 43.2f);
+    expect(roomscale.Consume(100).has_value(), false, "first HMD sample establishes baseline");
+    roomscale.Observe(true, {0.1f, 0.0f, 1.7f}, 2, 0.0f, 43.2f);
+    const auto roomscaleStep = roomscale.Consume(101);
+    expect(roomscaleStep.has_value(), true, "small fresh HMD step becomes one move intent");
+    if (roomscaleStep)
+        expectVectorNear(*roomscaleStep, {4.32f, 0.0f, 0.0f}, "physical step is horizontal Source units");
+    expect(roomscale.Consume(101).has_value(), false, "same command does not repeat physical step");
+    expect(roomscale.Consume(102).has_value(), false, "new command without pose does not repeat step");
+
+    RoomscaleMotion::StepAccumulator recoveredRoomscale;
+    recoveredRoomscale.Observe(true, {0.0f, 0.0f, 1.6f}, 1, 0.0f, 43.2f);
+    recoveredRoomscale.Observe(true, {0.1f, 0.0f, 1.6f}, 2, 0.0f, 43.2f);
+    expect(recoveredRoomscale.Observe(false, {}, 3, 0.0f, 43.2f) ==
+           RoomscaleMotion::Observation::TrackingLost, true, "tracking loss is reported once");
+    expect(recoveredRoomscale.Consume(103).has_value(), false, "tracking loss drops unconsumed step");
+    expect(recoveredRoomscale.Observe(false, {}, 4, 0.0f, 43.2f) ==
+           RoomscaleMotion::Observation::NoStep, true, "repeated invalid pose is quiet");
+    expect(recoveredRoomscale.Observe(true, {2.0f, 0.0f, 1.6f}, 5, 0.0f, 43.2f) ==
+           RoomscaleMotion::Observation::TrackingRecovered, true, "recovery rebases without teleporting");
+    expect(recoveredRoomscale.Consume(104).has_value(), false, "recovery sample has no movement");
+
+    RoomscaleMotion::StepAccumulator discontinuousRoomscale;
+    discontinuousRoomscale.Observe(true, {0.0f, 0.0f, 1.6f}, 1, 0.0f, 43.2f);
+    discontinuousRoomscale.Observe(true, {0.1f, 0.0f, 1.6f}, 2, 0.0f, 43.2f);
+    expect(discontinuousRoomscale.Observe(true, {1.1f, 0.0f, 1.6f}, 3, 0.0f, 43.2f) ==
+           RoomscaleMotion::Observation::Discontinuity, true, "large tracking jump is rejected");
+    expect(discontinuousRoomscale.Consume(1).has_value(), false, "jump clears earlier queued step");
+    discontinuousRoomscale.Observe(true, {1.2f, 0.0f, 1.6f}, 4, 0.0f, 43.2f);
+    const auto postJumpStep = discontinuousRoomscale.Consume(2);
+    expect(postJumpStep.has_value(), true, "fresh step after discontinuity is accepted");
+    if (postJumpStep)
+        expectVectorNear(*postJumpStep, {4.32f, 0.0f, 0.0f}, "post-jump baseline is fresh");
+
+    RoomscaleMotion::StepAccumulator changedMapping;
+    changedMapping.Observe(true, {0.0f, 0.0f, 1.6f}, 1, 0.0f, 43.2f);
+    changedMapping.Observe(true, {0.1f, 0.0f, 1.6f}, 2, 0.0f, 43.2f);
+    expect(changedMapping.Observe(true, {0.1f, 0.0f, 1.6f}, 3, 90.0f, 43.2f) ==
+           RoomscaleMotion::Observation::MappingChanged, true, "artificial turn rebases pending movement");
+    expect(changedMapping.Consume(1).has_value(), false, "turn is not a physical step");
+    changedMapping.Observe(true, {0.1f, 0.1f, 1.6f}, 4, 90.0f, 43.2f);
+    const auto turnedStep = changedMapping.Consume(2);
+    expect(turnedStep.has_value(), true, "physical step after turn remains available");
+    if (turnedStep)
+        expectVectorNear(*turnedStep, {-4.32f, 0.0f, 0.0f}, "post-turn step uses new mapping");
+    changedMapping.Reset();
+    changedMapping.Observe(true, {9.0f, 9.0f, 1.6f}, 5, 90.0f, 43.2f);
+    expect(changedMapping.Consume(3).has_value(), false, "recenter never generates catch-up step");
+
+    RoomscaleMotion::StepAccumulator invalidRoomscale;
+    invalidRoomscale.Observe(true, {0.0f, 0.0f, 1.6f}, 1, 0.0f, 43.2f);
+    expect(invalidRoomscale.Observe(true, {std::numeric_limits<float>::quiet_NaN(), 0.0f, 1.6f},
+                                    2, 0.0f, 43.2f) ==
+           RoomscaleMotion::Observation::InvalidSample, true, "non-finite pose is rejected");
+    expect(invalidRoomscale.Consume(1).has_value(), false, "invalid pose has no movement");
+
+    RoomscaleMotion::StepAccumulator accumulatedRoomscale;
+    accumulatedRoomscale.Observe(true, {0.0f, 0.0f, 1.6f}, 1, 0.0f, 43.2f);
+    accumulatedRoomscale.Observe(true, {0.05f, 0.0f, 1.65f}, 2, 0.0f, 43.2f);
+    accumulatedRoomscale.Observe(true, {0.1f, 0.2f, 1.7f}, 3, 0.0f, 43.2f);
+    accumulatedRoomscale.Observe(true, {0.2f, 0.2f, 1.7f}, 3, 0.0f, 43.2f);
+    expect(accumulatedRoomscale.Consume(0).has_value(), false, "zero command does not consume physical step");
+    const auto accumulatedStep = accumulatedRoomscale.Consume(1);
+    expect(accumulatedStep.has_value(), true, "pose samples accumulate before command");
+    if (accumulatedStep)
+        expectVectorNear(*accumulatedStep, {4.32f, 8.64f, 0.0f},
+                         "stale pose sequence ignored and vertical motion excluded");
+    accumulatedRoomscale.Observe(true, {0.0f, 0.0f, 1.6f}, 4, 0.0f, 43.2f);
+    const auto returnStep = accumulatedRoomscale.Consume(2);
+    expect(returnStep.has_value(), true, "return walk produces opposite physical intent");
+    if (returnStep)
+        expectVectorNear(*returnStep, {-4.32f, -8.64f, 0.0f},
+                         "return walk cancels open-space intent mathematically");
+
     const Vector openVrPosition{1.0f, 2.0f, 3.0f};
     const Vector sourceMeters = TrackingSpace::OpenVrToSourceMeters(openVrPosition);
     expectVectorNear(sourceMeters, {-3.0f, -1.0f, 2.0f}, "OpenVR to Source axes");
