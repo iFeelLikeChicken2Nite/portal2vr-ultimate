@@ -1138,15 +1138,22 @@ void VR::UpdateTracking()
         return;
     }
 
-    int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
-    C_BasePlayer* localPlayer = (C_BasePlayer*)m_Game->GetClientEntity(playerIndex);
-    if (!localPlayer)
+    const int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
+    C_BasePlayer* localPlayer = playerIndex > 0 ?
+        (C_BasePlayer*)m_Game->GetClientEntity(playerIndex) : nullptr;
+    if (!localPlayer) {
+        m_EyeHeightPlayerEntity = nullptr;
+        m_HasEyeHeight = false;
+        m_HasLastHmdOffset = false;
         return;
+    }
 
-    if (playerIndex != m_EyeHeightPlayerIndex) {
+    if (playerIndex != m_EyeHeightPlayerIndex || localPlayer != m_EyeHeightPlayerEntity) {
         m_EyeHeightPlayerIndex = playerIndex;
+        m_EyeHeightPlayerEntity = localPlayer;
         m_HasEyeHeight = false;
         m_EyeHeightWasInvalid = false;
+        m_HasLastHmdOffset = false;
     }
     if (m_Playspace.mode == TrackingSpace::TrackingMode::Standing && m_6DOF) {
         const Vector eyePosition = localPlayer->EyePosition();

@@ -10,6 +10,7 @@
 #define MAX_STR_LEN 256
 
 class Game;
+class C_BasePlayer;
 struct IDirect3DTexture9;
 struct IDirect3DSurface9;
 class ITexture;
@@ -106,6 +107,7 @@ public:
 	bool m_HasEyeHeight = false;
 	bool m_EyeHeightWasInvalid = false;
 	int m_EyeHeightPlayerIndex = -1;
+	C_BasePlayer* m_EyeHeightPlayerEntity = nullptr;
 	float m_LastEyeHeightUnits = 0.0f;
 
 	float m_HeightOffset = 0.0;
