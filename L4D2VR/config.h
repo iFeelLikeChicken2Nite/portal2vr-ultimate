@@ -1,5 +1,7 @@
 #pragma once
 
+#include "tracking_space.h"
+
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -11,6 +13,10 @@
 #include <vector>
 
 struct ConfigSnapshot {
+    TrackingSpace::TrackingMode trackingMode = TrackingSpace::TrackingMode::Seated;
+    TrackingSpace::MovementDirection movementDirection = TrackingSpace::MovementDirection::Hmd;
+    float heightOffsetMeters = 0.0f;
+    float controllerPitchDegrees = -30.0f;
     float turnSpeed = 0.15f;
     bool snapTurning = false;
     float snapTurnAngle = 45.0f;
@@ -85,6 +91,30 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
     };
 
     readFloat("TurnSpeed", result.value.turnSpeed, 0.01f, 2.0f);
+    const auto trackingMode = entries.find("TrackingMode");
+    if (trackingMode != entries.end()) {
+        if (trackingMode->second == "Seated")
+            result.value.trackingMode = TrackingSpace::TrackingMode::Seated;
+        else if (trackingMode->second == "Standing")
+            result.value.trackingMode = TrackingSpace::TrackingMode::Standing;
+        else
+            result.errors.push_back("TrackingMode is invalid; keeping previous value");
+    }
+    const auto movementDirection = entries.find("MovementDirection");
+    if (movementDirection != entries.end()) {
+        if (movementDirection->second == "HMD")
+            result.value.movementDirection = TrackingSpace::MovementDirection::Hmd;
+        else if (movementDirection->second == "LeftController")
+            result.value.movementDirection = TrackingSpace::MovementDirection::LeftController;
+        else if (movementDirection->second == "RightController")
+            result.value.movementDirection = TrackingSpace::MovementDirection::RightController;
+        else
+            result.errors.push_back("MovementDirection is invalid; keeping previous value");
+    }
+    if (entries.find("SeatedMode") != entries.end())
+        result.errors.push_back("SeatedMode is unsupported; use TrackingMode");
+    readFloat("HeightOffsetMeters", result.value.heightOffsetMeters, -0.5f, 0.5f);
+    readFloat("ControllerPitchDegrees", result.value.controllerPitchDegrees, -60.0f, 60.0f);
     readBool("SnapTurning", result.value.snapTurning);
     readFloat("SnapTurnAngle", result.value.snapTurnAngle, 1.0f, 180.0f);
     readBool("LeftHanded", result.value.leftHanded);

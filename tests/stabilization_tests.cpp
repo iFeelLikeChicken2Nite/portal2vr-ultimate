@@ -143,6 +143,42 @@ int main()
     expect(rejected.value.turnSpeed == previous.turnSpeed, true, "trailing numeric garbage rejected");
     expect(rejected.value.renderWindow == previous.renderWindow, true, "invalid render toggle rejected");
 
+    ConfigSnapshot m2Defaults;
+    expect(m2Defaults.trackingMode == TrackingSpace::TrackingMode::Seated, true,
+           "legacy config defaults to seated tracking");
+    expect(m2Defaults.movementDirection == TrackingSpace::MovementDirection::Hmd, true,
+           "legacy config defaults to HMD locomotion");
+    expectNear(m2Defaults.heightOffsetMeters, 0.0f, "default height offset");
+    expectNear(m2Defaults.controllerPitchDegrees, -30.0f, "default controller pitch");
+    std::istringstream m2Options("TrackingMode=Standing\nMovementDirection=LeftController\n"
+                                 "HeightOffsetMeters=0.25\nControllerPitchDegrees=15\n");
+    const auto m2Valid = ParseConfig(m2Options, m2Defaults);
+    expect(m2Valid.errors.empty(), true, "valid M2 config has no errors");
+    expect(m2Valid.value.trackingMode == TrackingSpace::TrackingMode::Standing, true,
+           "standing mode parsed");
+    expect(m2Valid.value.movementDirection == TrackingSpace::MovementDirection::LeftController,
+           true, "left controller movement parsed");
+    expectNear(m2Valid.value.heightOffsetMeters, 0.25f, "height offset parsed");
+    expectNear(m2Valid.value.controllerPitchDegrees, 15.0f, "controller pitch parsed");
+    std::istringstream m2Right("MovementDirection=RightController\nHeightOffsetMeters=-0.5\n"
+                               "ControllerPitchDegrees=-60\n");
+    const auto m2Boundary = ParseConfig(m2Right, m2Defaults);
+    expect(m2Boundary.errors.empty(), true, "M2 lower bounds valid");
+    expect(m2Boundary.value.movementDirection == TrackingSpace::MovementDirection::RightController,
+           true, "right controller movement parsed");
+    std::istringstream m2Bad("TrackingMode=Floor\nMovementDirection=Neither\n"
+                             "HeightOffsetMeters=nan\nControllerPitchDegrees=61\nSeatedMode=true\n");
+    const auto m2Rejected = ParseConfig(m2Bad, m2Valid.value);
+    expect(m2Rejected.value.trackingMode == m2Valid.value.trackingMode, true,
+           "invalid tracking mode retains previous");
+    expect(m2Rejected.value.movementDirection == m2Valid.value.movementDirection, true,
+           "invalid movement direction retains previous");
+    expectNear(m2Rejected.value.heightOffsetMeters, 0.25f,
+               "invalid height offset retains previous");
+    expectNear(m2Rejected.value.controllerPitchDegrees, 15.0f,
+               "invalid controller pitch retains previous");
+    expect(m2Rejected.errors.size() == 5, true, "invalid M2 entries and legacy key reported");
+
     if (failures) return 1;
     std::cout << "stabilization tests passed\n";
     return 0;

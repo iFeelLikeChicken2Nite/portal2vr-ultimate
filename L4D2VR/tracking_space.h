@@ -27,6 +27,7 @@ inline Vector RotateYawDegrees(const Vector &sourceVector, float degrees)
 }
 
 enum class TrackingMode { Seated, Standing };
+enum class MovementDirection { Hmd, LeftController, RightController };
 
 struct PlayspaceState {
     Vector centerMeters{0.0f, 0.0f, 0.0f};
