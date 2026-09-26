@@ -164,6 +164,35 @@ struct FrameResult {
     unsigned applied = 0;
 };
 
+class RigAnchor {
+public:
+    void Reanchor(const Vector &baseHmdOffset, const Vector &worldHmdOffset)
+    {
+        m_BaseHmdOffset = baseHmdOffset;
+        m_WorldHmdOffset = worldHmdOffset;
+        m_HasAnchor = true;
+    }
+
+    Vector MapHmd(const Vector &baseHmdOffset, const Rotation &effective) const
+    {
+        if (!m_HasAnchor)
+            return baseHmdOffset;
+        return m_WorldHmdOffset + effective.Rotate(baseHmdOffset - m_BaseHmdOffset);
+    }
+
+    Vector MapRelative(const Vector &relativeOffset, const Rotation &effective) const
+    {
+        return effective.Rotate(relativeOffset);
+    }
+
+    void Reset() { m_HasAnchor = false; }
+
+private:
+    bool m_HasAnchor = false;
+    Vector m_BaseHmdOffset{0,0,0};
+    Vector m_WorldHmdOffset{0,0,0};
+};
+
 class Coordinator {
 public:
     void SetMode(Mode mode)

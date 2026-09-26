@@ -6,7 +6,28 @@
 #include "vr.h"
 #include "offsets.h"
 #include "logger.h"
+#include <Windows.h>
+#include <cstdint>
 #include <iostream>
+#include <optional>
+
+static std::optional<PortalOrientation::Rotation> ReadPortalRotation(const void* portal)
+{
+    if (!portal)
+        return std::nullopt;
+    // The existing CPortal_Base2D accessor uses this ABI-specific field.
+    constexpr std::uintptr_t kMatrixOffset = 0x4C4;
+    const auto base = reinterpret_cast<std::uintptr_t>(portal);
+    if (base > UINTPTR_MAX - kMatrixOffset - sizeof(VMatrix))
+        return std::nullopt;
+    const auto matrixAddress = base + kMatrixOffset;
+    VMatrix matrix;
+    SIZE_T bytesRead = 0;
+    if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(matrixAddress),
+                           &matrix, sizeof(matrix), &bytesRead) || bytesRead != sizeof(matrix))
+        return std::nullopt;
+    return PortalOrientation::Rotation::FromVMatrix(matrix);
+}
 
 Hooks::Hooks(Game *game)
 {
@@ -215,6 +236,7 @@ ITexture* __fastcall Hooks::dGetRenderTarget(void* ecx, void* edx)
 
 void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CViewSetup &hudViewSetup, int nClearFlags, int whatToDraw)
 {
+    m_VR->ApplyPendingPortalOrientation();
     if (!m_VR->m_TrackingOutputValid)
         return hkRenderView.fOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
 	if (!m_VR->m_CreatedVRTextures) {
@@ -239,7 +261,7 @@ void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CVie
 
 	Vector position = setup.origin;
 
-	if (m_VR->m_ApplyPortalRotationOffset) {
+    if (!m_VR->ExperimentalPortalOrientation() && m_VR->m_ApplyPortalRotationOffset) {
 		Vector vec = position - m_VR->m_SetupOrigin;
 		float distance = sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z);
 
@@ -285,7 +307,10 @@ void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CVie
 	// Left eye CViewSetup
 	QAngle tempAngle = QAngle(setup.angles.x, setup.angles.y, setup.angles.z);
 	leftEyeView.origin = m_VR->TraceEye((uint32_t*)localPlayer, position, m_VR->GetViewOriginLeft(position), tempAngle);
-	leftEyeView.angles.y = tempAngle.y;
+	if (m_VR->ExperimentalPortalOrientation())
+		leftEyeView.angles = Vector(tempAngle.x, tempAngle.y, tempAngle.z);
+	else
+		leftEyeView.angles.y = tempAngle.y;
 
 	//std::cout << "dRenderView - Left Start\n";
 	IMatRenderContext* rndrContext = matSystem->GetRenderContext();
@@ -296,7 +321,10 @@ void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CVie
 	// Right eye CViewSetup
 	tempAngle = QAngle(setup.angles.x, setup.angles.y, setup.angles.z);
 	rightEyeView.origin = m_VR->TraceEye((uint32_t*)localPlayer, position, m_VR->GetViewOriginRight(position), tempAngle);
-	rightEyeView.angles.y = tempAngle.y;
+	if (m_VR->ExperimentalPortalOrientation())
+		rightEyeView.angles = Vector(tempAngle.x, tempAngle.y, tempAngle.z);
+	else
+		rightEyeView.angles.y = tempAngle.y;
 
 	//std::cout << "dRenderView - Right Start\n";
 	rndrContext = matSystem->GetRenderContext();
@@ -670,6 +698,12 @@ bool __fastcall Hooks::dTraceFirePortal(void* ecx, void* edx, const Vector& vTra
 void __fastcall Hooks::dPlayerPortalled(void* ecx, void* edx, void* a2, __int64 a3)
 {
 	CBaseEntity* pBaseEntity = (CBaseEntity*)ecx;
+	const int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
+	const bool localPlayer = playerIndex > 0 &&
+		m_Game->GetClientEntity(playerIndex) == pBaseEntity;
+	const bool experimental = m_VR->ExperimentalPortalOrientation();
+	const auto portalRotation = experimental && localPlayer ?
+		ReadPortalRotation(a2) : std::nullopt;
 
 	QAngle angAbsRotationBefore;
 	m_Game->m_EngineClient->GetViewAngles(angAbsRotationBefore);
@@ -679,7 +713,10 @@ void __fastcall Hooks::dPlayerPortalled(void* ecx, void* edx, void* a2, __int64 
 	QAngle angAbsRotationAfter;
 	m_Game->m_EngineClient->GetViewAngles(angAbsRotationAfter);
 
-	if (angAbsRotationBefore != angAbsRotationAfter) {
+	if (experimental && localPlayer) {
+		m_VR->QueuePortalTraversal(reinterpret_cast<std::uintptr_t>(pBaseEntity),
+			reinterpret_cast<std::uintptr_t>(a2), portalRotation);
+	} else if (!experimental && angAbsRotationBefore != angAbsRotationAfter) {
 		m_VR->m_PortalRotationOffset = angAbsRotationAfter - angAbsRotationBefore;
 		m_VR->m_ApplyPortalRotationOffset = true;
 	}

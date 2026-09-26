@@ -138,6 +138,18 @@ int main()
     portalEvents.CancelPending();
     expect(portalEvents.Drain(2).applied == 0, true,
            "recenter or tracking loss cancels a pending portal event");
+    PortalOrientation::RigAnchor portalRig;
+    portalRig.Reanchor({10,20,30}, {10,20,30});
+    const Vector afterPortalHead = portalRig.MapHmd({11,20,30}, *turn);
+    expectVectorNear(afterPortalHead, {10,21,30},
+                     "head displacement after portal follows linked world heading");
+    expectVectorNear(portalRig.MapRelative({0.2f,0,0}, *turn), {0,0.2f,0},
+                     "hand displacement uses same portal mapping as head");
+    portalRig.Reanchor({0,0,0}, afterPortalHead);
+    expectVectorNear(portalRig.MapHmd({0,0,0}, *turn), afterPortalHead,
+                     "recenter changes tracking anchor without moving the virtual head");
+    expectVectorNear(portalRig.MapHmd({1,0,0}, *turn), {10,22,30},
+                     "post-recenter physical delta retains portal orientation");
 
     RoomscaleMotion::StepAccumulator roomscale;
     roomscale.Observe(true, {0.0f, 0.0f, 1.6f}, 1, 0.0f, 43.2f);

@@ -1111,6 +1111,12 @@ void VR::ResetPosition()
         m_Center = m_HmdPose.TrackedDevicePos;
         m_HmdLostSinceLastValid = false;
         m_RoomscaleObserver.Reset();
+        if (ExperimentalPortalOrientation()) {
+            const Vector baseOffset = m_Playspace.HmdOffsetUnits(
+                m_HmdPose.TrackedDevicePos, m_LastEyeHeightUnits);
+            m_PortalRigAnchor.Reanchor(baseOffset, baseOffset);
+            m_PortalCoordinator.CancelPending();
+        }
     }
 }
 
@@ -1140,6 +1146,7 @@ void VR::UpdateTracking()
     m_RightControllerPosRel = {0.0f, 0.0f, 0.0f};
 
     if (!m_HmdPose.valid) {
+        m_PortalCoordinator.CancelPending();
         if (m_RoomscaleObserver.OnPose(false, {}, m_PoseFetchSequence, 0.0f, 1.0f, true) ==
             RoomscaleMotion::Observation::TrackingLost) {
             const auto now = std::chrono::steady_clock::now();
@@ -1165,6 +1172,9 @@ void VR::UpdateTracking()
         (C_BasePlayer*)m_Game->GetClientEntity(playerIndex) : nullptr;
     if (!localPlayer) {
         m_RoomscaleObserver.Reset();
+        m_PortalCoordinator.Reset();
+        m_PortalRigAnchor.Reset();
+        m_PortalEffectiveRotation = PortalOrientation::Rotation::Identity();
         m_EyeHeightPlayerEntity = nullptr;
         m_HasEyeHeight = false;
         m_HasLastHmdOffset = false;
@@ -1173,6 +1183,9 @@ void VR::UpdateTracking()
 
     if (playerIndex != m_EyeHeightPlayerIndex || localPlayer != m_EyeHeightPlayerEntity) {
         m_RoomscaleObserver.Reset();
+        m_PortalCoordinator.Reset();
+        m_PortalRigAnchor.Reset();
+        m_PortalEffectiveRotation = PortalOrientation::Rotation::Identity();
         m_EyeHeightPlayerIndex = playerIndex;
         m_EyeHeightPlayerEntity = localPlayer;
         m_HasEyeHeight = false;
@@ -1307,8 +1320,10 @@ void VR::UpdateTracking()
     const auto rightOffset = m_Playspace.ControllerRelativeOffsetUnits(
         m_RightControllerPose.valid, m_RightControllerPose.TrackedDevicePos,
         hmdPosLocal, m_LastEyeHeightUnits);
-    if (!rightOffset)
+    if (!rightOffset) {
+        ApplyPortalRigToDerivedPose();
         return;
+    }
 
     QAngle rightControllerAngLocal = m_RightControllerPose.TrackedDeviceAng;
 
@@ -1356,6 +1371,7 @@ void VR::UpdateTracking()
     m_ViewmodelRight = VectorRotate(m_ViewmodelRight, m_ViewmodelForward, m_ViewmodelAngOffset.z);
     m_ViewmodelUp = VectorRotate(m_ViewmodelUp, m_ViewmodelForward, m_ViewmodelAngOffset.z);
 
+    ApplyPortalRigToDerivedPose();
     m_AimPos = Trace((uint32_t*)localPlayer);
     if (m_AimMode == 2 && m_Game->m_Offsets->m_LaserAvailable) {
         C_Portal_Player* portalPlayer = (C_Portal_Player*)localPlayer;
@@ -1385,6 +1401,90 @@ void VR::ObserveRoomscaleCommand(int commandNumber)
         m_Game->m_EngineClient->IsInGame() && !m_Game->m_VguiSurface->IsCursorVisible() &&
         playerIndex > 0 && m_Game->GetClientEntity(playerIndex) != nullptr;
     (void)m_RoomscaleObserver.OnCommand(commandNumber, gameplayEligible);
+}
+
+bool VR::ExperimentalPortalOrientation() const
+{
+    return m_ActivePortalMode != PortalOrientation::Mode::LegacyYaw;
+}
+
+void VR::QueuePortalTraversal(std::uintptr_t playerKey, std::uintptr_t portalKey,
+                              const std::optional<PortalOrientation::Rotation> &rotation)
+{
+    if (!ExperimentalPortalOrientation())
+        return;
+    if (!rotation) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= m_NextPortalEventLog) {
+            Logger::Write("Experimental portal orientation: invalid portal transform; event ignored");
+            m_NextPortalEventLog = now + std::chrono::seconds(5);
+        }
+        return;
+    }
+    const auto queued = m_PortalCoordinator.Queue(playerKey, portalKey, *rotation);
+    if (queued == PortalOrientation::QueueResult::Queued)
+        Logger::Write("Experimental portal orientation: local crossing queued");
+    else if (queued == PortalOrientation::QueueResult::Full)
+        Logger::Write("Experimental portal orientation: event queue full; crossing ignored");
+}
+
+void VR::ApplyPendingPortalOrientation()
+{
+    if (!ExperimentalPortalOrientation())
+        return;
+    const int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
+    C_BasePlayer* player = playerIndex > 0 ?
+        (C_BasePlayer*)m_Game->GetClientEntity(playerIndex) : nullptr;
+    if (!player || !m_HmdPose.valid || !m_TrackingOutputValid ||
+        !m_Game->m_EngineClient->IsInGame() || m_Game->m_VguiSurface->IsCursorVisible()) {
+        m_PortalCoordinator.CancelPending();
+        return;
+    }
+    const auto frame = m_PortalCoordinator.Drain(reinterpret_cast<std::uintptr_t>(player));
+    if (!frame.applied)
+        return;
+    const Vector baseOffset = m_Playspace.HmdOffsetUnits(
+        m_HmdPose.TrackedDevicePos, m_LastEyeHeightUnits);
+    m_PortalRigAnchor.Reanchor(baseOffset, m_HmdPosRelative);
+    m_PortalEffectiveRotation = frame.effective;
+    m_RoomscaleObserver.Reset();
+    UpdateTracking(); // rebuild head and hands from the same pose before either eye is rendered
+    Logger::Write("Experimental portal orientation: applied " +
+        std::to_string(frame.applied) + " crossing(s) before stereo render");
+}
+
+void VR::ApplyPortalRigToDerivedPose()
+{
+    if (!ExperimentalPortalOrientation() || !m_TrackingOutputValid)
+        return;
+    const auto &rotation = m_PortalEffectiveRotation;
+    m_HmdPosRelative = m_PortalRigAnchor.MapHmd(m_HmdPosRelative, rotation);
+    m_HmdForward = rotation.Rotate(m_HmdForward);
+    m_HmdRight = rotation.Rotate(m_HmdRight);
+    m_HmdUp = rotation.Rotate(m_HmdUp);
+    QAngle::VectorAngles(m_HmdForward, m_HmdUp, m_HmdAngAbs);
+    m_HmdAngAbs.Normalize();
+    if (m_LeftControllerOutputValid) {
+        m_LeftControllerPosRel = m_PortalRigAnchor.MapRelative(m_LeftControllerPosRel, rotation);
+        m_LeftControllerForward = rotation.Rotate(m_LeftControllerForward);
+        m_LeftControllerRight = rotation.Rotate(m_LeftControllerRight);
+        m_LeftControllerUp = rotation.Rotate(m_LeftControllerUp);
+        QAngle::VectorAngles(m_LeftControllerForward, m_LeftControllerUp,
+                             m_LeftControllerAngAbs);
+        m_LeftControllerAngAbs.Normalize();
+    }
+    if (m_RightControllerPose.valid) {
+        m_RightControllerPosRel = m_PortalRigAnchor.MapRelative(m_RightControllerPosRel, rotation);
+        m_RightControllerForward = rotation.Rotate(m_RightControllerForward);
+        m_RightControllerRight = rotation.Rotate(m_RightControllerRight);
+        m_RightControllerUp = rotation.Rotate(m_RightControllerUp);
+        QAngle::VectorAngles(m_RightControllerForward, m_RightControllerUp,
+                             m_RightControllerAngAbs);
+        m_RightControllerAngAbs.Normalize();
+        m_ViewmodelForward = rotation.Rotate(m_ViewmodelForward);
+        m_ViewmodelRight = rotation.Rotate(m_ViewmodelRight);
+        m_ViewmodelUp = rotation.Rotate(m_ViewmodelUp);
+    }
 }
 
 Vector VR::GetViewAngle()
@@ -1627,11 +1727,21 @@ void VR::ParseConfigFile()
         Logger::Write("Config: TrackingMode change requires restart; keeping active compositor origin");
         parsed.value.trackingMode = m_Playspace.mode;
     }
+    if (m_IsInitialized && parsed.value.portalOrientationMode != m_ActivePortalMode) {
+        Logger::Write("Config: PortalOrientationMode change requires restart; keeping active mode");
+        parsed.value.portalOrientationMode = m_ActivePortalMode;
+    }
     if (m_IsInitialized && m_VRScale != parsed.value.vrScale)
         Logger::Write("Config: VRScale change staged until recenter");
     if (m_IsInitialized && m_Playspace.heightOffsetMeters != parsed.value.heightOffsetMeters)
         Logger::Write("Config: HeightOffsetMeters change staged until recenter");
     m_Config = parsed.value;
+    if (!m_IsInitialized) {
+        m_ActivePortalMode = m_Config.portalOrientationMode;
+        m_PortalCoordinator.SetMode(m_ActivePortalMode);
+        if (ExperimentalPortalOrientation())
+            Logger::Write("EXPERIMENTAL portal orientation enabled; hardware alignment is unverified");
+    }
     if (m_RoomscaleObserver.SetMode(m_Config.roomscaleMode))
         Logger::Write(m_Config.roomscaleMode == RoomscaleMotion::Mode::Observe ?
             "RoomscaleMode=Observe: diagnostics only; physical movement is disabled" :

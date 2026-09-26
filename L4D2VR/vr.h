@@ -98,6 +98,11 @@ public:
 	Vector m_SetupOrigin = { 0,0,0 };
 	TrackingSpace::PlayspaceState m_Playspace;
 	RoomscaleMotion::Observer m_RoomscaleObserver;
+	PortalOrientation::Coordinator m_PortalCoordinator;
+	PortalOrientation::RigAnchor m_PortalRigAnchor;
+	PortalOrientation::Rotation m_PortalEffectiveRotation;
+	PortalOrientation::Mode m_ActivePortalMode = PortalOrientation::Mode::LegacyYaw;
+	std::chrono::steady_clock::time_point m_NextPortalEventLog{};
 	std::uint64_t m_PoseFetchSequence = 0; // increments only after a successful WaitGetPoses
 	std::chrono::steady_clock::time_point m_NextRoomscaleSummary{};
 	std::chrono::steady_clock::time_point m_NextRoomscaleAnomalyLog{};
@@ -262,6 +267,11 @@ public:
 	QAngle GetRecommendedViewmodelAbsAngle();
 	void UpdateHMDAngles();
 	void UpdateTracking();
+	bool ExperimentalPortalOrientation() const;
+	void QueuePortalTraversal(std::uintptr_t playerKey, std::uintptr_t portalKey,
+	                          const std::optional<PortalOrientation::Rotation> &rotation);
+	void ApplyPendingPortalOrientation();
+	void ApplyPortalRigToDerivedPose();
 	void ObserveRoomscaleCommand(int commandNumber);
 	Vector GetViewAngle();
 	Vector GetViewOrigin(Vector setupOrigin);
