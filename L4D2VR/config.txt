@@ -2,6 +2,7 @@ TurnSpeed=0.15
 TrackingMode=Seated # Standing uses SteamVR floor height; changing this requires a restart
 MovementDirection=HMD # HMD, LeftController, RightController
 RoomscaleMode=Off # Off or Observe; Observe only logs physical-step diagnostics and does not move the player
+PortalOrientationMode=LegacyYaw # FullRotation, YawOnly, PreserveHorizon are experimental; restart required
 HeightOffsetMeters=0.0 # Standing only; applied at recenter
 ControllerPitchDegrees=-30.0 # Controller forward correction, degrees
 SnapTurning=false

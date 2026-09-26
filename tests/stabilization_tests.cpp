@@ -84,6 +84,60 @@ int main()
     const VMatrix scaled{2,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
     expect(PortalOrientation::Rotation::FromVMatrix(scaled).has_value(), false,
            "scaled portal matrix is rejected");
+    PortalOrientation::Coordinator portalEvents;
+    expect(portalEvents.Queue(1, 10, *turn) == PortalOrientation::QueueResult::Disabled,
+           true, "legacy default does not consume experimental portal events");
+    portalEvents.SetMode(PortalOrientation::Mode::FullRotation);
+    expect(portalEvents.Queue(1, 10, *turn) == PortalOrientation::QueueResult::Queued,
+           true, "first local portal event queued");
+    expect(portalEvents.Queue(1, 10, *turn) == PortalOrientation::QueueResult::Duplicate,
+           true, "duplicate callback in one render interval is ignored");
+    const auto firstPortalFrame = portalEvents.Drain(1);
+    expect(firstPortalFrame.applied == 1, true, "one portal event applied at frame boundary");
+    expectVectorNear(firstPortalFrame.effective.Rotate({1,0,0}), {0,1,0},
+                     "full rotation uses linked portal orientation");
+    expect(portalEvents.Queue(1, 10, *turn) == PortalOrientation::QueueResult::Duplicate,
+           true, "same crossing prediction replay in next frame is ignored");
+    portalEvents.Queue(1, 20, turn->Inverse());
+    const auto returnPortalFrame = portalEvents.Drain(1);
+    expect(returnPortalFrame.applied == 1, true, "reverse crossing applies once");
+    expectVectorNear(returnPortalFrame.effective.Rotate({1,0,0}), {1,0,0},
+                     "crossing linked portal back restores heading");
+    portalEvents.Queue(1, 10, *turn);
+    portalEvents.Queue(1, 20, *turn);
+    const auto consecutivePortalFrame = portalEvents.Drain(1);
+    expect(consecutivePortalFrame.applied == 2, true,
+           "two distinct portal crossings before one frame compose in arrival order");
+    expectVectorNear(consecutivePortalFrame.effective.Rotate({1,0,0}), {-1,0,0},
+                     "two queued quarter turns compose to 180 degrees");
+    PortalOrientation::Coordinator rapidReturns;
+    rapidReturns.SetMode(PortalOrientation::Mode::FullRotation);
+    rapidReturns.Queue(1, 10, *turn);
+    rapidReturns.Drain(1);
+    rapidReturns.Queue(1, 20, *turn);
+    rapidReturns.Queue(1, 10, *turn);
+    expect(rapidReturns.Drain(1).applied == 2, true,
+           "distinct intervening crossing permits quick return through prior portal");
+    portalEvents.Queue(1, 30, *turn);
+    const auto otherPlayerFrame = portalEvents.Drain(2);
+    expect(otherPlayerFrame.applied == 0, true,
+           "player replacement discards pending portal event");
+    expectVectorNear(otherPlayerFrame.effective.Rotate({1,0,0}), {1,0,0},
+                     "player replacement resets old world alignment");
+    portalEvents.SetMode(PortalOrientation::Mode::YawOnly);
+    portalEvents.Queue(2, 40, *floorTurn);
+    const auto yawPortalFrame = portalEvents.Drain(2);
+    expectVectorNear(yawPortalFrame.effective.Rotate({1,0,0}), {1,0,0},
+                     "yaw-only floor crossing uses stable left-axis fallback");
+    portalEvents.SetMode(PortalOrientation::Mode::PreserveHorizon);
+    portalEvents.Queue(2, 50, *rollTurn);
+    const auto horizonPortalFrame = portalEvents.Drain(2);
+    expectVectorNear(horizonPortalFrame.effective.Rotate({0,0,1}), {0,0,1},
+                     "horizon mode removes portal roll for entire rig");
+    portalEvents.Queue(2, 60, *turn);
+    portalEvents.CancelPending();
+    expect(portalEvents.Drain(2).applied == 0, true,
+           "recenter or tracking loss cancels a pending portal event");
 
     RoomscaleMotion::StepAccumulator roomscale;
     roomscale.Observe(true, {0.0f, 0.0f, 1.6f}, 1, 0.0f, 43.2f);
@@ -334,6 +388,21 @@ int main()
     expectNear(m2Defaults.controllerPitchDegrees, -30.0f, "default controller pitch");
     expect(m2Defaults.roomscaleMode == RoomscaleMotion::Mode::Off, true,
            "roomscale observation defaults off");
+    expect(m2Defaults.portalOrientationMode == PortalOrientation::Mode::LegacyYaw, true,
+           "portal orientation keeps legacy yaw by default");
+    std::istringstream portalModeFull("PortalOrientationMode=FullRotation\n");
+    const auto fullModeConfig = ParseConfig(portalModeFull, m2Defaults);
+    expect(fullModeConfig.value.portalOrientationMode == PortalOrientation::Mode::FullRotation,
+           true, "full portal rotation requires explicit config");
+    std::istringstream portalModeHorizon("PortalOrientationMode=PreserveHorizon\n");
+    const auto horizonModeConfig = ParseConfig(portalModeHorizon, fullModeConfig.value);
+    expect(horizonModeConfig.value.portalOrientationMode == PortalOrientation::Mode::PreserveHorizon,
+           true, "horizon-preserving mode parses");
+    std::istringstream portalModeBad("PortalOrientationMode=Magic\n");
+    const auto badPortalMode = ParseConfig(portalModeBad, horizonModeConfig.value);
+    expect(badPortalMode.value.portalOrientationMode == PortalOrientation::Mode::PreserveHorizon,
+           true, "invalid portal mode retains prior valid mode");
+    expect(badPortalMode.errors.empty(), false, "invalid portal mode is diagnosed");
     std::istringstream roomscaleObserve("RoomscaleMode=Observe\n");
     const auto observedConfig = ParseConfig(roomscaleObserve, m2Defaults);
     expect(observedConfig.errors.empty(), true, "roomscale observe config is valid");

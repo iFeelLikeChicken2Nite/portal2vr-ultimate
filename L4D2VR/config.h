@@ -2,6 +2,7 @@
 
 #include "tracking_space.h"
 #include "roomscale_motion.h"
+#include "portal_orientation.h"
 
 #include <array>
 #include <cmath>
@@ -17,6 +18,7 @@ struct ConfigSnapshot {
     TrackingSpace::TrackingMode trackingMode = TrackingSpace::TrackingMode::Seated;
     TrackingSpace::MovementDirection movementDirection = TrackingSpace::MovementDirection::Hmd;
     RoomscaleMotion::Mode roomscaleMode = RoomscaleMotion::Mode::Off;
+    PortalOrientation::Mode portalOrientationMode = PortalOrientation::Mode::LegacyYaw;
     float heightOffsetMeters = 0.0f;
     float controllerPitchDegrees = -30.0f;
     float turnSpeed = 0.15f;
@@ -121,6 +123,19 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
             result.value.roomscaleMode = RoomscaleMotion::Mode::Observe;
         else
             result.errors.push_back("RoomscaleMode is invalid; only Off and Observe are supported");
+    }
+    const auto portalMode = entries.find("PortalOrientationMode");
+    if (portalMode != entries.end()) {
+        if (portalMode->second == "LegacyYaw")
+            result.value.portalOrientationMode = PortalOrientation::Mode::LegacyYaw;
+        else if (portalMode->second == "FullRotation")
+            result.value.portalOrientationMode = PortalOrientation::Mode::FullRotation;
+        else if (portalMode->second == "YawOnly")
+            result.value.portalOrientationMode = PortalOrientation::Mode::YawOnly;
+        else if (portalMode->second == "PreserveHorizon")
+            result.value.portalOrientationMode = PortalOrientation::Mode::PreserveHorizon;
+        else
+            result.errors.push_back("PortalOrientationMode is invalid; keeping previous value");
     }
     if (entries.find("SeatedMode") != entries.end())
         result.errors.push_back("SeatedMode is unsupported; use TrackingMode");

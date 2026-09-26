@@ -3,6 +3,9 @@
 #include "sdk/vector.h"
 
 #include <cmath>
+#include <cstdint>
+#include <deque>
+#include <mutex>
 #include <optional>
 
 namespace PortalOrientation {
@@ -114,6 +117,15 @@ public:
         return result;
     }
 
+    bool NearlyEquals(const Rotation &other) const
+    {
+        for (int row = 0; row < 3; ++row)
+            for (int column = 0; column < 3; ++column)
+                if (std::fabs(m_Basis[row][column] - other.m_Basis[row][column]) > 0.0001f)
+                    return false;
+        return true;
+    }
+
 private:
     float m_Basis[3][3]{{1,0,0}, {0,1,0}, {0,0,1}};
 
@@ -132,6 +144,128 @@ private:
         m_Basis[0][1] = left.x; m_Basis[1][1] = left.y; m_Basis[2][1] = left.z;
         m_Basis[0][2] = up.x; m_Basis[1][2] = up.y; m_Basis[2][2] = up.z;
     }
+};
+
+enum class Mode { LegacyYaw, FullRotation, YawOnly, PreserveHorizon };
+enum class QueueResult { Disabled, Queued, Duplicate, Full, InvalidPlayer };
+
+inline Rotation EffectiveRotation(Mode mode, const Rotation &world)
+{
+    if (mode == Mode::YawOnly)
+        return world.YawOnly();
+    if (mode == Mode::PreserveHorizon)
+        return world.PreserveHorizon();
+    return world;
+}
+
+struct FrameResult {
+    Rotation world;
+    Rotation effective;
+    unsigned applied = 0;
+};
+
+class Coordinator {
+public:
+    void SetMode(Mode mode)
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        if (m_Mode == mode)
+            return;
+        m_Mode = mode;
+        ClearAll();
+    }
+
+    Mode GetMode() const
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        return m_Mode;
+    }
+
+    QueueResult Queue(std::uintptr_t playerKey, std::uintptr_t portalKey,
+                      const Rotation &rotation)
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        if (m_Mode == Mode::LegacyYaw)
+            return QueueResult::Disabled;
+        if (!playerKey || !portalKey)
+            return QueueResult::InvalidPlayer;
+        if (m_PlayerKey && m_PlayerKey != playerKey)
+            ClearAll();
+        m_PlayerKey = playerKey;
+        if (!m_Pending.empty()) {
+            const auto &last = m_Pending.back();
+            if (last.portalKey == portalKey && last.rotation.NearlyEquals(rotation))
+                return QueueResult::Duplicate;
+        }
+        if (m_Pending.empty() && m_LastPortalKey == portalKey &&
+            m_LastRotation.NearlyEquals(rotation) &&
+            m_FrameSequence - m_LastAppliedFrame <= 2)
+            return QueueResult::Duplicate;
+        if (m_Pending.size() == 4)
+            return QueueResult::Full;
+        m_Pending.push_back({portalKey, rotation});
+        return QueueResult::Queued;
+    }
+
+    FrameResult Drain(std::uintptr_t playerKey)
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        if (m_PlayerKey && playerKey != m_PlayerKey)
+            ClearAll();
+        m_PlayerKey = playerKey;
+        ++m_FrameSequence;
+        FrameResult result;
+        while (!m_Pending.empty()) {
+            const auto event = m_Pending.front();
+            m_Pending.pop_front();
+            m_World = event.rotation.Compose(m_World);
+            m_LastPortalKey = event.portalKey;
+            m_LastRotation = event.rotation;
+            m_LastAppliedFrame = m_FrameSequence;
+            ++result.applied;
+        }
+        result.world = m_World;
+        result.effective = EffectiveRotation(m_Mode, m_World);
+        return result;
+    }
+
+    void CancelPending()
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        m_Pending.clear();
+    }
+
+    void Reset()
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        ClearAll();
+    }
+
+private:
+    struct Event {
+        std::uintptr_t portalKey;
+        Rotation rotation;
+    };
+    void ClearAll()
+    {
+        m_PlayerKey = 0;
+        m_Pending.clear();
+        m_World = Rotation::Identity();
+        m_LastPortalKey = 0;
+        m_LastRotation = Rotation::Identity();
+        m_LastAppliedFrame = 0;
+        m_FrameSequence = 0;
+    }
+
+    mutable std::mutex m_Mutex;
+    Mode m_Mode = Mode::LegacyYaw;
+    std::uintptr_t m_PlayerKey = 0;
+    std::deque<Event> m_Pending;
+    Rotation m_World;
+    std::uintptr_t m_LastPortalKey = 0;
+    Rotation m_LastRotation;
+    std::uint64_t m_LastAppliedFrame = 0;
+    std::uint64_t m_FrameSequence = 0;
 };
 
 } // namespace PortalOrientation
