@@ -102,6 +102,7 @@ public:
 	bool m_HmdLostSinceLastValid = false;
 	bool m_HasLastHmdOffset = false;
 	Vector m_LastHmdOffsetUnits{0.0f, 0.0f, 0.0f};
+	bool m_MovementFallbackActive = false;
 	bool m_HasEyeHeight = false;
 	bool m_EyeHeightWasInvalid = false;
 	int m_EyeHeightPlayerIndex = -1;
@@ -239,6 +240,7 @@ public:
 	void ProcessMenuInput();
 	void ProcessInput();
 	void ProcessViewActions();
+	Vector GetMovementForward();
 	void ProcessHeldAction(vr::VRActionHandle_t actionHandle, DigitalButtonState &state,
 	                       const char *pressCommand, const char *releaseCommand);
 	void ReleaseHeldActions();

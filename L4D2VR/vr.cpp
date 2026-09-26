@@ -1103,6 +1103,24 @@ void VR::ResetPosition()
     }
 }
 
+Vector VR::GetMovementForward()
+{
+    const TrackingSpace::DeviceDirection hmd{m_TrackingOutputValid, m_HmdForward};
+    const TrackingSpace::DeviceDirection left{m_LeftControllerPose.valid, m_LeftControllerForward};
+    const TrackingSpace::DeviceDirection right{m_RightControllerPose.valid, m_RightControllerForward};
+    bool fallback = false;
+    if (m_Config.movementDirection == TrackingSpace::MovementDirection::LeftController)
+        fallback = !TrackingSpace::HorizontalDirection(left).has_value();
+    else if (m_Config.movementDirection == TrackingSpace::MovementDirection::RightController)
+        fallback = !TrackingSpace::HorizontalDirection(right).has_value();
+    if (fallback != m_MovementFallbackActive) {
+        Logger::Write(fallback ? "Movement direction: controller unavailable; using HMD" :
+                                 "Movement direction: configured controller available");
+        m_MovementFallbackActive = fallback;
+    }
+    return TrackingSpace::SelectMovementForward(m_Config.movementDirection, hmd, left, right);
+}
+
 void VR::UpdateTracking()
 {
     m_TrackingOutputValid = false;
@@ -1231,11 +1249,15 @@ void VR::UpdateTracking()
     // Hand tracking
     if (m_LeftControllerPose.valid) {
         QAngle leftControllerAng = m_LeftControllerPose.TrackedDeviceAng;
+        leftControllerAng.x += m_RotationOffset.x;
         leftControllerAng.y += m_RotationOffset.y;
+        leftControllerAng.z += m_RotationOffset.z;
         QAngle::AngleVectors(leftControllerAng, &m_LeftControllerForward,
                              &m_LeftControllerRight, &m_LeftControllerUp);
-        m_LeftControllerForward = VectorRotate(m_LeftControllerForward, m_LeftControllerRight, -30.0f);
-        m_LeftControllerUp = VectorRotate(m_LeftControllerUp, m_LeftControllerRight, -30.0f);
+        m_LeftControllerForward = VectorRotate(m_LeftControllerForward, m_LeftControllerRight,
+                                                m_Config.controllerPitchDegrees);
+        m_LeftControllerUp = VectorRotate(m_LeftControllerUp, m_LeftControllerRight,
+                                           m_Config.controllerPitchDegrees);
         QAngle::VectorAngles(m_LeftControllerForward, m_LeftControllerUp, m_LeftControllerAngAbs);
     }
 
@@ -1260,7 +1282,7 @@ void VR::UpdateTracking()
 
     QAngle::AngleVectors(rightControllerAngLocal, &m_RightControllerForward, &m_RightControllerRight, &m_RightControllerUp);
 
-    const float offset = -30;
+    const float offset = m_Config.controllerPitchDegrees;
 
     // Adjust controller angle downward
     m_RightControllerForward = VectorRotate(m_RightControllerForward, m_RightControllerRight, offset);

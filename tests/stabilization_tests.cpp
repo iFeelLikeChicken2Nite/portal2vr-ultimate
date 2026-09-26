@@ -109,6 +109,40 @@ int main()
                      {0.0f, 0.0f, 0.0f}, "recenter clears recovery compensation");
     expectNear(standing.centerMeters.z, 0.0f, "standing recenter keeps floor origin");
 
+    const TrackingSpace::DeviceDirection hmdDirection{true, {1.0f, 0.0f, 0.0f}};
+    const TrackingSpace::DeviceDirection leftDirection{true, {0.0f, 1.0f, 0.5f}};
+    const TrackingSpace::DeviceDirection rightDirection{true, {-1.0f, 0.0f, 0.0f}};
+    const TrackingSpace::DeviceDirection lostDirection{false, {0.0f, -1.0f, 0.0f}};
+    expectVectorNear(TrackingSpace::SelectMovementForward(TrackingSpace::MovementDirection::Hmd,
+                     hmdDirection, leftDirection, rightDirection), {1.0f, 0.0f, 0.0f},
+                     "default HMD movement direction");
+    expectVectorNear(TrackingSpace::SelectMovementForward(TrackingSpace::MovementDirection::LeftController,
+                     hmdDirection, leftDirection, rightDirection), {0.0f, 1.0f, 0.0f},
+                     "left movement ignores pitch");
+    expectVectorNear(TrackingSpace::SelectMovementForward(TrackingSpace::MovementDirection::RightController,
+                     hmdDirection, leftDirection, rightDirection), {-1.0f, 0.0f, 0.0f},
+                     "right controller movement direction");
+    expectVectorNear(TrackingSpace::SelectMovementForward(TrackingSpace::MovementDirection::RightController,
+                     hmdDirection, lostDirection, rightDirection), {-1.0f, 0.0f, 0.0f},
+                     "right direction does not require left controller");
+    expectVectorNear(TrackingSpace::SelectMovementForward(TrackingSpace::MovementDirection::LeftController,
+                     hmdDirection, lostDirection, rightDirection), {1.0f, 0.0f, 0.0f},
+                     "lost left controller falls back to HMD");
+    expectVectorNear(TrackingSpace::SelectMovementForward(TrackingSpace::MovementDirection::RightController,
+                     hmdDirection, leftDirection, {true, {0.001f, 0.0f, 1.0f}}),
+                     {1.0f, 0.0f, 0.0f}, "near vertical controller falls back");
+    expectVectorNear(TrackingSpace::SelectMovementForward(TrackingSpace::MovementDirection::LeftController,
+                     hmdDirection, leftDirection, lostDirection), {0.0f, 1.0f, 0.0f},
+                     "left controller reconnect uses fresh pose");
+    const auto defaultAxes = TrackingSpace::RebaseAnalogToView(0.25f, 0.8f,
+                                                               hmdDirection.forward, hmdDirection.forward);
+    expectNear(defaultAxes.forward, 0.8f, "HMD forward magnitude unchanged");
+    expectNear(defaultAxes.side, 0.25f, "HMD side magnitude unchanged");
+    const auto leftAxes = TrackingSpace::RebaseAnalogToView(0.25f, 0.8f,
+                                                             leftDirection.forward, hmdDirection.forward);
+    expectNear(leftAxes.forward, 0.25f, "left facing stick side becomes forward");
+    expectNear(leftAxes.side, -0.8f, "left facing stick forward becomes side");
+
     DigitalButtonState attack;
     expectCommand(attack.HeldCommand(true, false, false, "+attack", "-attack"), nullptr, "released to released");
     expectCommand(attack.HeldCommand(true, true, true, "+attack", "-attack"), "+attack", "released to pressed");

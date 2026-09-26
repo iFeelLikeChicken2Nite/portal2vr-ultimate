@@ -353,8 +353,10 @@ bool __fastcall Hooks::dCreateMove(void *ecx, void *edx, float flInputSampleTime
 			// Run toward other guy
 			cmd->buttons &= ~(IN_FORWARD | IN_BACK | IN_MOVELEFT | IN_MOVERIGHT);
 
-			cmd->forwardmove += analogActionData.y * MAX_LINEAR_SPEED;
-			cmd->sidemove += analogActionData.x * MAX_LINEAR_SPEED;
+			const auto movement = TrackingSpace::RebaseAnalogToView(
+				analogActionData.x, analogActionData.y, m_VR->GetMovementForward(), m_VR->m_HmdForward);
+			cmd->forwardmove += movement.forward * MAX_LINEAR_SPEED;
+			cmd->sidemove += movement.side * MAX_LINEAR_SPEED;
 
 			// We'll only be moving fwd or sideways
 			cmd->upmove = 0.0f;
