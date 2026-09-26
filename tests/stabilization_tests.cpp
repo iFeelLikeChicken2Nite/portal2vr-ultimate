@@ -2,6 +2,8 @@
 #include "../L4D2VR/tracked_device.h"
 #include "../L4D2VR/sigscanner.h"
 #include "../L4D2VR/config.h"
+#include "../L4D2VR/tracking_space.h"
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <sstream>
@@ -25,8 +27,72 @@ static void expect(bool actual, bool expected, const char* caseName)
     }
 }
 
+static void expectNear(float actual, float expected, const char* caseName)
+{
+    if (!std::isfinite(actual) || std::fabs(actual - expected) > 0.0001f) {
+        std::cerr << caseName << " failed: " << actual << " != " << expected << "\n";
+        ++failures;
+    }
+}
+
+static void expectVectorNear(const Vector &actual, const Vector &expected, const char* caseName)
+{
+    expectNear(actual.x, expected.x, caseName);
+    expectNear(actual.y, expected.y, caseName);
+    expectNear(actual.z, expected.z, caseName);
+}
+
 int main()
 {
+    const Vector openVrPosition{1.0f, 2.0f, 3.0f};
+    const Vector sourceMeters = TrackingSpace::OpenVrToSourceMeters(openVrPosition);
+    expectVectorNear(sourceMeters, {-3.0f, -1.0f, 2.0f}, "OpenVR to Source axes");
+    expectVectorNear(TrackingSpace::SourceToOpenVrMeters(sourceMeters), openVrPosition,
+                     "Source to OpenVR inverse axes");
+    expectVectorNear(TrackingSpace::RotateYawDegrees({1.0f, 0.0f, 2.0f}, 90.0f),
+                     {0.0f, 1.0f, 2.0f}, "yaw 90 degrees");
+    expectVectorNear(TrackingSpace::RotateYawDegrees({1.0f, 0.0f, 2.0f}, 180.0f),
+                     {-1.0f, 0.0f, 2.0f}, "yaw 180 degrees");
+
+    TrackingSpace::PlayspaceState seated;
+    seated.scale = 50.0f;
+    seated.yawDegrees = 90.0f;
+    seated.Recenter({2.0f, 3.0f, 1.0f});
+    expectVectorNear(seated.HmdOffsetUnits({2.0f, 3.0f, 1.0f}, 70.0f),
+                     {0.0f, 0.0f, 0.0f}, "seated recenter at nonzero yaw");
+    const Vector seatedHmd{3.0f, 3.0f, 1.2f};
+    expectVectorNear(seated.HmdOffsetUnits(seatedHmd, 70.0f),
+                     {0.0f, 50.0f, 10.0f}, "seated HMD displacement at scale 50");
+    expectVectorNear(seated.ControllerOffsetUnits({3.0f, 4.0f, 1.2f}, seatedHmd, 70.0f),
+                     {-50.0f, 50.0f, 10.0f}, "controller uses HMD playspace transform");
+
+    TrackingSpace::PlayspaceState standing;
+    standing.mode = TrackingSpace::TrackingMode::Standing;
+    standing.scale = 50.0f;
+    standing.heightOffsetMeters = 0.1f;
+    standing.Recenter({2.0f, 3.0f, 1.7f});
+    expectVectorNear(standing.HmdOffsetUnits({2.0f, 3.0f, 1.7f}, 70.0f),
+                     {0.0f, 0.0f, 20.0f}, "standing floor height uses measured eye height");
+    expectVectorNear(standing.HmdOffsetUnits({2.0f, 3.0f, 1.8f}, 70.0f),
+                     {0.0f, 0.0f, 25.0f}, "standing HMD height change");
+
+    TrackingSpace::PlayspaceState turning;
+    turning.scale = 50.0f;
+    const Vector turnHmd{0.4f, 0.2f, 1.2f};
+    expectVectorNear(turning.HmdOffsetUnits(turnHmd, 70.0f),
+                     {20.0f, 10.0f, 60.0f}, "turn baseline head offset");
+    turning.TurnAboutHmd(90.0f, turnHmd, 70.0f);
+    expectVectorNear(turning.HmdOffsetUnits(turnHmd, 70.0f),
+                     {20.0f, 10.0f, 60.0f}, "first turn holds head pivot");
+    expectVectorNear(turning.ControllerOffsetUnits({0.6f, 0.2f, 1.2f}, turnHmd, 70.0f),
+                     {20.0f, 20.0f, 60.0f}, "controller rotates around head");
+    turning.TurnAboutHmd(90.0f, turnHmd, 70.0f);
+    expectVectorNear(turning.HmdOffsetUnits(turnHmd, 70.0f),
+                     {20.0f, 10.0f, 60.0f}, "repeated turns hold head pivot");
+    turning.Recenter(turnHmd);
+    expectVectorNear(turning.HmdOffsetUnits(turnHmd, 70.0f),
+                     {0.0f, 0.0f, 0.0f}, "recenter clears turn translation");
+
     DigitalButtonState attack;
     expectCommand(attack.HeldCommand(true, false, false, "+attack", "-attack"), nullptr, "released to released");
     expectCommand(attack.HeldCommand(true, true, true, "+attack", "-attack"), "+attack", "released to pressed");
