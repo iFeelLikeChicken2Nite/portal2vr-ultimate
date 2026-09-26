@@ -958,7 +958,7 @@ vr::HmdMatrix34_t VR::GetControllerTipMatrix(vr::ETrackedControllerRole controll
     {
         char buffer[vr::k_unMaxPropertyStringSize]{};
 
-        m_System->GetStringTrackedDeviceProperty(deviceIndex, vr::Prop_RenderModelName_String, 
+        m_System->GetStringTrackedDeviceProperty(deviceIndex, vr::Prop_RenderModelName_String,
                                                  buffer, vr::k_unMaxPropertyStringSize);
 
         vr::RenderModel_ControllerMode_State_t controllerState = {0};
