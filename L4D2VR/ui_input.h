@@ -12,7 +12,7 @@ class MenuPointerState {
 public:
     MouseTransition Press()
     {
-        if (m_Down)
+        if (m_Down || m_ReleasePending)
             return MouseTransition::None;
         m_Down = true;
         return MouseTransition::Press;
@@ -20,16 +20,31 @@ public:
 
     MouseTransition Release()
     {
-        if (!m_Down)
-            return MouseTransition::None;
-        m_Down = false;
-        return MouseTransition::Release;
+        if (m_Down) {
+            m_Down = false;
+            m_ReleasePending = true;
+        }
+        return PendingRelease();
     }
 
     MouseTransition LoseFocus() { return Release(); }
 
+    MouseTransition PendingRelease() const
+    {
+        return m_ReleasePending ? MouseTransition::Release : MouseTransition::None;
+    }
+
+    void ConfirmSent(MouseTransition transition, bool succeeded)
+    {
+        if (transition == MouseTransition::Press && !succeeded)
+            m_Down = false;
+        else if (transition == MouseTransition::Release && succeeded)
+            m_ReleasePending = false;
+    }
+
 private:
     bool m_Down = false;
+    bool m_ReleasePending = false;
 };
 
 struct PixelPoint {

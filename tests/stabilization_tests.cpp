@@ -157,16 +157,44 @@ int main()
     UiInput::MenuPointerState menuMouse;
     expect(menuMouse.Press() == UiInput::MouseTransition::Press, true,
            "menu press creates one synthetic down event");
+    menuMouse.ConfirmSent(UiInput::MouseTransition::Press, true);
     expect(menuMouse.Press() == UiInput::MouseTransition::None, true,
            "held menu selection does not repeat mouse down");
     expect(menuMouse.LoseFocus() == UiInput::MouseTransition::Release, true,
            "lost hover or menu focus releases a held synthetic click");
+    menuMouse.ConfirmSent(UiInput::MouseTransition::Release, true);
     expect(menuMouse.Release() == UiInput::MouseTransition::None, true,
            "late mouse up after focus loss is ignored");
     expect(menuMouse.Press() == UiInput::MouseTransition::Press, true,
            "next menu click still works after focus recovery");
+    menuMouse.ConfirmSent(UiInput::MouseTransition::Press, true);
     expect(menuMouse.Release() == UiInput::MouseTransition::Release, true,
            "ordinary release emits one up event");
+    menuMouse.ConfirmSent(UiInput::MouseTransition::Release, true);
+    expect(menuMouse.PendingRelease() == UiInput::MouseTransition::None, true,
+           "successful mouse up leaves no pending release");
+
+    UiInput::MenuPointerState failedMenuMouse;
+    expect(failedMenuMouse.Press() == UiInput::MouseTransition::Press, true,
+           "failed mouse down is attempted once");
+    failedMenuMouse.ConfirmSent(UiInput::MouseTransition::Press, false);
+    expect(failedMenuMouse.Release() == UiInput::MouseTransition::None, true,
+           "failed mouse down does not create a phantom held click");
+    expect(failedMenuMouse.Press() == UiInput::MouseTransition::Press, true,
+           "a later click may retry after failed mouse down");
+    failedMenuMouse.ConfirmSent(UiInput::MouseTransition::Press, true);
+    expect(failedMenuMouse.Release() == UiInput::MouseTransition::Release, true,
+           "mouse up is requested after a delivered down");
+    failedMenuMouse.ConfirmSent(UiInput::MouseTransition::Release, false);
+    expect(failedMenuMouse.PendingRelease() == UiInput::MouseTransition::Release, true,
+           "failed mouse up remains pending for next frame");
+    expect(failedMenuMouse.Press() == UiInput::MouseTransition::None, true,
+           "new down is blocked until pending mouse up succeeds");
+    failedMenuMouse.ConfirmSent(failedMenuMouse.PendingRelease(), true);
+    expect(failedMenuMouse.PendingRelease() == UiInput::MouseTransition::None, true,
+           "successful retry clears pending mouse up");
+    expect(failedMenuMouse.Press() == UiInput::MouseTransition::Press, true,
+           "normal clicks resume after mouse up retry");
     const auto mainTopLeft = UiInput::MapMenuPointer(0, 1080, 1920, 1080, 1280, 720, false);
     expect(mainTopLeft && mainTopLeft->x == 0 && mainTopLeft->y == 0, true,
            "main-menu overlay top-left maps to desktop top-left");

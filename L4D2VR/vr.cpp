@@ -483,7 +483,7 @@ void VR::SubmitExperimentalHUDOverlay()
     if (!m_Overlay || m_HUDHandle == vr::k_ulOverlayHandleInvalid)
         return;
     if (m_RenderedHud && !m_HUDCaptureLogged) {
-        Logger::Write("Experimental HUD: first VGUI capture observed (visual contents unverified)");
+        Logger::Write("Experimental HUD: first VGUI render target redirect observed (painted contents unverified)");
         m_HUDCaptureLogged = true;
     }
     const bool worldAimSeparated = m_AimMode == 2 && m_Game->m_Offsets->m_LaserAvailable;
@@ -758,7 +758,9 @@ void VR::SendMenuMouse(UiInput::MouseTransition transition)
     input.type = INPUT_MOUSE;
     input.mi.dwFlags = transition == UiInput::MouseTransition::Press ?
         MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
-    if (SendInput(1, &input, sizeof(input)) != 1) {
+    const bool sent = SendInput(1, &input, sizeof(input)) == 1;
+    m_MenuPointerState.ConfirmSent(transition, sent);
+    if (!sent) {
         const auto now = std::chrono::steady_clock::now();
         if (now >= m_NextMenuInputErrorLog) {
             Logger::Write("Menu mouse SendInput failed: " + std::to_string(GetLastError()));
@@ -774,6 +776,9 @@ void VR::ReleaseMenuMouse()
 
 void VR::ProcessMenuInput()
 {
+    // An overlay mouse-up event is delivered only once. Retry a failed synthetic
+    // release even if the controller is still hovering and no new event arrives.
+    SendMenuMouse(m_MenuPointerState.PendingRelease());
     const auto overlay = m_MainMenuHandle;
     const bool hovering = m_Overlay->IsOverlayVisible(overlay) &&
         (CheckOverlayIntersectionForController(overlay, vr::TrackedControllerRole_LeftHand) ||
