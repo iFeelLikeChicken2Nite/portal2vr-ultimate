@@ -3,15 +3,14 @@
 #include "sdk.h"
 #include "game.h"
 #include "hooks.h"
+#include "offsets.h"
+#include "logger.h"
 #include "trace.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
-#include <unordered_map>
 #include <string>
 #include <filesystem>
-#include <thread>
-#include <type_traits>
 #include <algorithm>
 #include <d3d9_vr.h>
 
@@ -24,25 +23,43 @@ VR::VR(Game *game)
     vr::HmdError error = vr::VRInitError_None;
     m_System = vr::VR_Init(&error, vr::VRApplication_Scene);
 
-    if (error != vr::VRInitError_None) 
+    if (error != vr::VRInitError_None || !m_System)
     {
         snprintf(errorString, MAX_STR_LEN, "VR_Init failed: %s", vr::VR_GetVRInitErrorAsEnglishDescription(error));
         Game::errorMsg(errorString);
         return;
     }
-
-    vr::EVRInitError peError = vr::VRInitError_None;
+    m_OpenVRStarted = true;
+    Logger::Write("VR_Init OK");
 
     if (!vr::VRCompositor())
     {
         Game::errorMsg("Compositor initialization failed.");
         return;
     }
+    Logger::Write("OpenVR compositor OK");
 
     m_Input = vr::VRInput();
-    m_System = vr::OpenVRInternal_ModuleContext().VRSystem();
+    if (!m_Input) {
+        Game::errorMsg("OpenVR input initialization failed.");
+        return;
+    }
+    Logger::Write("OpenVR input OK");
+    m_RenderModels = vr::VRRenderModels();
+    Logger::Write(m_RenderModels ? "OpenVR render models OK" :
+                  "OpenVR render models unavailable; controller tip offset disabled");
 
     m_System->GetRecommendedRenderTargetSize(&m_RenderWidth, &m_RenderHeight);
+    if (!m_RenderWidth || !m_RenderHeight) {
+        Game::errorMsg("OpenVR returned an invalid render target size.");
+        return;
+    }
+    Logger::Write("Recommended eye render target: " + std::to_string(m_RenderWidth) +
+                  "x" + std::to_string(m_RenderHeight));
+    char hmdName[vr::k_unMaxPropertyStringSize]{};
+    m_System->GetStringTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd,
+        vr::Prop_ModelNumber_String, hmdName, sizeof(hmdName));
+    Logger::Write(std::string("HMD: ") + (hmdName[0] ? hmdName : "unknown"));
     m_AntiAliasing = 0;
 
     float l_left = 0.0f, l_right = 0.0f, l_top = 0.0f, l_bottom = 0.0f;
@@ -69,22 +86,45 @@ VR::VR(Game *game)
     m_Aspect = tanHalfFov[0] / tanHalfFov[1];
     m_Fov = 2.0f * atan(tanHalfFov[0]) * 360 / (3.14159265358979323846 * 2);
 
-    InstallApplicationManifest("manifest.vrmanifest");
-    SetActionManifest("action_manifest.json");
+    if (!InstallApplicationManifest("manifest.vrmanifest") ||
+        !SetActionManifest("action_manifest.json"))
+        return;
 
-    std::thread configParser(&VR::WaitForConfigUpdate, this);
-    configParser.detach();
+    ParseConfigFile();
+    std::error_code configTimeError;
+    m_ConfigLastModified = std::filesystem::last_write_time("VR\\config.txt", configTimeError);
 
-    while (!g_D3DVR9) 
+    const auto d3dStart = GetTickCount64();
+    while (!g_D3DVR9) {
+        if (GetTickCount64() - d3dStart > 30000) {
+            Game::errorMsg("Timed out waiting for the DXVK VR bridge.");
+            return;
+        }
         Sleep(10);
+    }
 
-    g_D3DVR9->GetBackBufferData(&m_VKBackBuffer);
+    if (FAILED(g_D3DVR9->GetBackBufferData(&m_VKBackBuffer))) {
+        Game::errorMsg("DXVK VR back buffer initialization failed.");
+        return;
+    }
     m_Overlay = vr::VROverlay();
-    m_Overlay->CreateOverlay("MenuOverlayKey", "MenuOverlay", &m_MainMenuHandle);
+    if (!m_Overlay) {
+        Game::errorMsg("OpenVR overlay initialization failed.");
+        return;
+    }
+    const auto overlayError = m_Overlay->CreateOverlay("MenuOverlayKey", "MenuOverlay", &m_MainMenuHandle);
+    if (overlayError != vr::VROverlayError_None) {
+        Game::errorMsg((std::string("OpenVR menu overlay creation failed: ") +
+            m_Overlay->GetOverlayErrorNameFromEnum(overlayError)).c_str());
+        return;
+    }
     //m_Overlay->CreateOverlay("HUDOverlayKey", "HUDOverlay", &m_HUDHandle);
-    m_Overlay->SetOverlayInputMethod(m_MainMenuHandle, vr::VROverlayInputMethod_Mouse);
+    if (m_Overlay->SetOverlayInputMethod(m_MainMenuHandle, vr::VROverlayInputMethod_Mouse) != vr::VROverlayError_None ||
+        m_Overlay->SetOverlayFlag(m_MainMenuHandle, vr::VROverlayFlags_SendVRDiscreteScrollEvents, true) != vr::VROverlayError_None) {
+        Game::errorMsg("OpenVR menu overlay configuration failed.");
+        return;
+    }
    // m_Overlay->SetOverlayInputMethod(m_HUDHandle, vr::VROverlayInputMethod_Mouse);
-    m_Overlay->SetOverlayFlag(m_MainMenuHandle, vr::VROverlayFlags_SendVRDiscreteScrollEvents, true);
     //m_Overlay->SetOverlayFlag(m_HUDHandle, vr::VROverlayFlags_SendVRDiscreteScrollEvents, true);
 
     int windowWidth, windowHeight;
@@ -93,67 +133,122 @@ VR::VR(Game *game)
     //const vr::HmdVector2_t mouseScaleHUD = {windowWidth, windowHeight};
     //m_Overlay->SetOverlayMouseScale(m_HUDHandle, &mouseScaleHUD);
 
-    const vr::HmdVector2_t mouseScaleMenu = {m_RenderWidth, m_RenderHeight};
-    m_Overlay->SetOverlayCurvature(m_MainMenuHandle, 0.15f);
-    m_Overlay->SetOverlayMouseScale(m_MainMenuHandle, &mouseScaleMenu);
+    const vr::HmdVector2_t mouseScaleMenu = {
+        static_cast<float>(m_RenderWidth), static_cast<float>(m_RenderHeight)};
+    if (m_Overlay->SetOverlayCurvature(m_MainMenuHandle, 0.15f) != vr::VROverlayError_None ||
+        m_Overlay->SetOverlayMouseScale(m_MainMenuHandle, &mouseScaleMenu) != vr::VROverlayError_None) {
+        Game::errorMsg("OpenVR menu overlay geometry setup failed.");
+        return;
+    }
 
-    UpdatePosesAndActions();
+    if (!UpdatePosesAndActions()) {
+        Game::errorMsg("Initial OpenVR pose/action update failed.");
+        return;
+    }
 
     m_IsInitialized = true;
     m_IsVREnabled = true;
+    m_PrevFrameTime = std::chrono::steady_clock::now();
+    Logger::Write("OpenVR initialization complete.");
 }
 
-int VR::SetActionManifest(const char *fileName) 
+VR::~VR()
 {
-    char currentDir[MAX_STR_LEN];
-    GetCurrentDirectory(MAX_STR_LEN, currentDir);
-    char path[MAX_STR_LEN];
-    sprintf_s(path, MAX_STR_LEN, "%s\\VR\\SteamVRActionManifest\\%s", currentDir, fileName);
-
-    if (m_Input->SetActionManifestPath(path) != vr::VRInputError_None) 
-    {
-        Game::errorMsg("SetActionManifestPath failed");
+    if (m_Overlay && m_MainMenuHandle != vr::k_ulOverlayHandleInvalid) {
+        const auto result = m_Overlay->DestroyOverlay(m_MainMenuHandle);
+        if (result != vr::VROverlayError_None)
+            Logger::Write("OpenVR overlay cleanup failed: " + std::to_string(result));
     }
+    if (m_OpenVRStarted) {
+        vr::VR_Shutdown();
+        Logger::Write("OpenVR shutdown complete");
+    }
+}
 
-    m_Input->GetActionHandle("/actions/main/in/ActivateVR", &m_ActionActivateVR);
-    m_Input->GetActionHandle("/actions/main/in/Jump", &m_ActionJump);
-    m_Input->GetActionHandle("/actions/main/in/PrimaryAttack", &m_ActionPrimaryAttack);
-    m_Input->GetActionHandle("/actions/main/in/Reload", &m_ActionReload);
-    m_Input->GetActionHandle("/actions/main/in/Use", &m_ActionUse);
-    m_Input->GetActionHandle("/actions/main/in/Walk", &m_ActionWalk);
-    m_Input->GetActionHandle("/actions/main/in/Turn", &m_ActionTurn);
-    m_Input->GetActionHandle("/actions/main/in/SecondaryAttack", &m_ActionSecondaryAttack);
-    m_Input->GetActionHandle("/actions/main/in/NextItem", &m_ActionNextItem);
-    m_Input->GetActionHandle("/actions/main/in/PrevItem", &m_ActionPrevItem);
-    m_Input->GetActionHandle("/actions/main/in/ResetPosition", &m_ActionResetPosition);
-    m_Input->GetActionHandle("/actions/main/in/Crouch", &m_ActionCrouch);
-    m_Input->GetActionHandle("/actions/main/in/Flashlight", &m_ActionFlashlight);
-    m_Input->GetActionHandle("/actions/main/in/MenuSelect", &m_MenuSelect);
-    m_Input->GetActionHandle("/actions/main/in/MenuBack", &m_MenuBack);
-    m_Input->GetActionHandle("/actions/main/in/MenuUp", &m_MenuUp);
-    m_Input->GetActionHandle("/actions/main/in/MenuDown", &m_MenuDown);
-    m_Input->GetActionHandle("/actions/main/in/MenuLeft", &m_MenuLeft);
-    m_Input->GetActionHandle("/actions/main/in/MenuRight", &m_MenuRight);
-    m_Input->GetActionHandle("/actions/main/in/Spray", &m_Spray);
-    m_Input->GetActionHandle("/actions/main/in/Scoreboard", &m_Scoreboard);
-    m_Input->GetActionHandle("/actions/main/in/ShowHUD", &m_ShowHUD);
-    m_Input->GetActionHandle("/actions/main/in/Pause", &m_Pause);
+bool VR::SetActionManifest(const char *fileName)
+{
+    std::error_code pathError;
+    const auto path = std::filesystem::absolute(
+        std::filesystem::path("VR") / "SteamVRActionManifest" / fileName, pathError).string();
+    if (pathError) {
+        Game::errorMsg("Unable to resolve the OpenVR action manifest path.");
+        return false;
+    }
+    const auto manifestError = m_Input->SetActionManifestPath(path.c_str());
+    if (manifestError != vr::VRInputError_None) {
+        Game::errorMsg(("SetActionManifestPath failed (OpenVR error " +
+            std::to_string(manifestError) + "): " + path).c_str());
+        return false;
+    }
+    Logger::Write("OpenVR action manifest OK: " + path);
 
-    m_Input->GetActionSetHandle("/actions/main", &m_ActionSet);
+#define GET_ACTION(member, name) do { \
+    const auto result = m_Input->GetActionHandle("/actions/main/in/" name, &member); \
+    if (result != vr::VRInputError_None || member == vr::k_ulInvalidActionHandle) { \
+        Game::errorMsg((std::string("OpenVR action handle failed: " name " (error ") + \
+            std::to_string(result) + ")").c_str()); return false; \
+    } \
+    Logger::Write("OpenVR action handle OK: " name); \
+} while (false)
+    GET_ACTION(m_ActionActivateVR, "ActivateVR");
+    GET_ACTION(m_ActionJump, "Jump");
+    GET_ACTION(m_ActionPrimaryAttack, "PrimaryAttack");
+    GET_ACTION(m_ActionReload, "Reload");
+    GET_ACTION(m_ActionUse, "Use");
+    GET_ACTION(m_ActionWalk, "Walk");
+    GET_ACTION(m_ActionTurn, "Turn");
+    GET_ACTION(m_ActionSecondaryAttack, "SecondaryAttack");
+    GET_ACTION(m_ActionNextItem, "NextItem");
+    GET_ACTION(m_ActionPrevItem, "PrevItem");
+    GET_ACTION(m_ActionResetPosition, "ResetPosition");
+    GET_ACTION(m_ActionCrouch, "Crouch");
+    GET_ACTION(m_ActionFlashlight, "Flashlight");
+    GET_ACTION(m_MenuSelect, "MenuSelect");
+    GET_ACTION(m_MenuBack, "MenuBack");
+    GET_ACTION(m_MenuUp, "MenuUp");
+    GET_ACTION(m_MenuDown, "MenuDown");
+    GET_ACTION(m_MenuLeft, "MenuLeft");
+    GET_ACTION(m_MenuRight, "MenuRight");
+    GET_ACTION(m_Spray, "Spray");
+    GET_ACTION(m_Scoreboard, "Scoreboard");
+    GET_ACTION(m_ShowHUD, "ShowHUD");
+    GET_ACTION(m_Pause, "Pause");
+#undef GET_ACTION
+
+    const auto setError = m_Input->GetActionSetHandle("/actions/main", &m_ActionSet);
+    if (setError != vr::VRInputError_None || m_ActionSet == vr::k_ulInvalidActionSetHandle) {
+        Game::errorMsg(("OpenVR main action set handle failed (error " +
+            std::to_string(setError) + ").").c_str());
+        return false;
+    }
     m_ActiveActionSet = {};
     m_ActiveActionSet.ulActionSet = m_ActionSet;
 
-    return 0;
+    Logger::Write("OpenVR main action set OK");
+    return true;
 }
 
-void VR::InstallApplicationManifest(const char *fileName)
+bool VR::InstallApplicationManifest(const char *fileName)
 {
-    char currentDir[MAX_STR_LEN];
-    GetCurrentDirectory(MAX_STR_LEN, currentDir);
-    char path[MAX_STR_LEN];
-    sprintf_s(path, MAX_STR_LEN, "%s\\VR\\%s", currentDir, fileName);
-
-    vr::VRApplications()->AddApplicationManifest(path);
+    auto applications = vr::VRApplications();
+    if (!applications) {
+        Game::errorMsg("OpenVR applications interface unavailable.");
+        return false;
+    }
+    std::error_code pathError;
+    const auto path = std::filesystem::absolute(std::filesystem::path("VR") / fileName, pathError).string();
+    if (pathError) {
+        Game::errorMsg("Unable to resolve the OpenVR application manifest path.");
+        return false;
+    }
+    const auto result = applications->AddApplicationManifest(path.c_str());
+    if (result != vr::VRApplicationError_None) {
+        Game::errorMsg((std::string("OpenVR application manifest failed: ") +
+            applications->GetApplicationsErrorNameFromEnum(result) + " (" + path + ")").c_str());
+        return false;
+    }
+    Logger::Write("OpenVR application manifest OK: " + path);
+    return true;
 }
 
 void VR::SetScreenSizeOverride(bool bState) {
@@ -183,7 +278,16 @@ void VR::Update()
     if (!m_IsInitialized || !m_Game->m_Initialized)
         return;
 
-    
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= m_NextConfigCheck) {
+        m_NextConfigCheck = now + std::chrono::seconds(1);
+        std::error_code error;
+        const auto modified = std::filesystem::last_write_time("VR\\config.txt", error);
+        if (!error && modified != m_ConfigLastModified) {
+            m_ConfigLastModified = modified;
+            ParseConfigFile();
+        }
+    }
 
     if (m_IsVREnabled && g_D3DVR9)
     {
@@ -204,10 +308,15 @@ void VR::Update()
     }
 
     SubmitVRTextures();
-    UpdatePosesAndActions();
+    if (!UpdatePosesAndActions()) {
+        UpdateTracking();
+        ReleaseHeldActions();
+        return;
+    }
     UpdateTracking();
 
     if (m_Game->m_VguiSurface->IsCursorVisible()) {
+        m_PrevFrameTime = std::chrono::steady_clock::now();
         ReleaseHeldActions();
         ProcessMenuInput();
     } else {
@@ -223,7 +332,8 @@ void VR::CreateVRTextures()
     rndrContext->GetWindowSize(windowWidth, windowHeight);
     rndrContext->Release();
 
-    std::cout << "RenderTexture - Width: " << m_RenderWidth << ", Height: " << m_RenderHeight << "\n";
+    Logger::Write("Creating VR render targets: " + std::to_string(m_RenderWidth) +
+                  "x" + std::to_string(m_RenderHeight));
 
     m_Game->m_MaterialSystem->isGameRunning = false;
     m_Game->m_MaterialSystem->BeginRenderTargetAllocation();
@@ -418,6 +528,9 @@ void VR::RepositionOverlays()
 
 void VR::GetPoses() 
 {
+    const bool hadHmd = m_HmdPose.valid;
+    const bool hadLeft = m_LeftControllerPose.valid;
+    const bool hadRight = m_RightControllerPose.valid;
     vr::TrackedDevicePose_t hmdPose = m_Poses[vr::k_unTrackedDeviceIndex_Hmd];
 
     vr::TrackedDeviceIndex_t leftControllerIndex = m_System->GetTrackedDeviceIndexForControllerRole(vr::TrackedControllerRole_LeftHand);
@@ -438,12 +551,42 @@ void VR::GetPoses()
     GetPoseData(hmdPose, m_HmdPose);
     GetPoseData(leftControllerPose, m_LeftControllerPose);
     GetPoseData(rightControllerPose, m_RightControllerPose);
+    if (!m_HmdPose.valid) {
+        m_LeftControllerPose = {};
+        m_RightControllerPose = {};
+    }
+    if (hadHmd != m_HmdPose.valid)
+        Logger::Write(std::string("HMD tracking ") + (m_HmdPose.valid ? "valid" : "lost"));
+    if (hadLeft != m_LeftControllerPose.valid)
+        Logger::Write(std::string("Left controller tracking ") +
+                      (m_LeftControllerPose.valid ? "valid, index " + std::to_string(leftControllerIndex) : "lost"));
+    if (hadRight != m_RightControllerPose.valid)
+        Logger::Write(std::string("Right controller tracking ") +
+                      (m_RightControllerPose.valid ? "valid, index " + std::to_string(rightControllerIndex) : "lost"));
 }
 
-void VR::UpdatePosesAndActions() 
+bool VR::UpdatePosesAndActions()
 {
-    vr::VRCompositor()->WaitGetPoses(m_Poses, vr::k_unMaxTrackedDeviceCount, NULL, 0);
-    m_Input->UpdateActionState(&m_ActiveActionSet, sizeof(vr::VRActiveActionSet_t), 1);
+    const auto poseError = vr::VRCompositor()->WaitGetPoses(m_Poses, vr::k_unMaxTrackedDeviceCount, NULL, 0);
+    if (poseError != vr::VRCompositorError_None) {
+        if (m_LastPoseError != poseError)
+            Logger::Write("WaitGetPoses failed: " + std::to_string(poseError));
+        m_LastPoseError = poseError;
+        std::fill(std::begin(m_Poses), std::end(m_Poses), vr::TrackedDevicePose_t{});
+        m_HmdPose.valid = m_LeftControllerPose.valid = m_RightControllerPose.valid = false;
+    } else {
+        m_LastPoseError = 0;
+    }
+    const auto inputError = m_Input->UpdateActionState(&m_ActiveActionSet,
+        sizeof(vr::VRActiveActionSet_t), 1);
+    if (inputError != vr::VRInputError_None) {
+        if (m_LastInputError != inputError)
+            Logger::Write("UpdateActionState failed: " + std::to_string(inputError));
+        m_LastInputError = inputError;
+    } else {
+        m_LastInputError = 0;
+    }
+    return poseError == vr::VRCompositorError_None && inputError == vr::VRInputError_None;
 }
 
 void VR::GetViewParameters() 
@@ -809,11 +952,11 @@ vr::HmdMatrix34_t VR::GetControllerTipMatrix(vr::ETrackedControllerRole controll
         m_Input->GetInputSourceHandle("/user/hand/left", &inputValue);
     }
 
-    if (inputValue != vr::k_ulInvalidInputValueHandle &&
+    if (m_RenderModels && inputValue != vr::k_ulInvalidInputValueHandle &&
         IsUsableTrackedDeviceIndex(deviceIndex, vr::k_unMaxTrackedDeviceCount,
                                    vr::k_unTrackedDeviceIndexInvalid) && m_Poses[deviceIndex].bPoseIsValid)
     {
-        char buffer[vr::k_unMaxPropertyStringSize];
+        char buffer[vr::k_unMaxPropertyStringSize]{};
 
         m_System->GetStringTrackedDeviceProperty(deviceIndex, vr::Prop_RenderModelName_String, 
                                                  buffer, vr::k_unMaxPropertyStringSize);
@@ -821,7 +964,7 @@ vr::HmdMatrix34_t VR::GetControllerTipMatrix(vr::ETrackedControllerRole controll
         vr::RenderModel_ControllerMode_State_t controllerState = {0};
         vr::RenderModel_ComponentState_t componentState = {0};
 
-        if (vr::VRRenderModels()->GetComponentStateForDevicePath(buffer, vr::k_pch_Controller_Component_Tip, inputValue, &controllerState, &componentState))
+        if (buffer[0] && m_RenderModels->GetComponentStateForDevicePath(buffer, vr::k_pch_Controller_Component_Tip, inputValue, &controllerState, &componentState))
         {
             return componentState.mTrackingToComponentLocal;
         }
@@ -945,8 +1088,17 @@ void VR::UpdateTracking()
 {
     GetPoses();
 
-    if (!m_HmdPose.valid)
+    if (!m_HmdPose.valid) {
+        if (m_Game->m_Offsets->m_LaserAvailable) {
+            const int index = m_Game->m_EngineClient->GetLocalPlayer();
+            C_Portal_Player* player = (C_Portal_Player*)m_Game->GetClientEntity(index);
+            if (player && player->m_PointLaser) {
+                player->m_PointLaser->StopEmission(false, true, false);
+                player->m_PointLaser = NULL;
+            }
+        }
         return;
+    }
 
     int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
     C_BasePlayer* localPlayer = (C_BasePlayer*)m_Game->GetClientEntity(playerIndex);
@@ -983,28 +1135,10 @@ void VR::UpdateTracking()
     if ((cameraFollowing < 0 && cameraDistance > 1) || (m_PushingThumbstick))
         m_RoomscaleActive = false;*/
 
-    if (m_RightControllerPose.valid)
-        m_AimPos = Trace((uint32_t*)localPlayer);
-
-    if (m_AimMode == 2 && m_RightControllerPose.valid) {
+    if ((!m_RightControllerPose.valid || m_AimMode != 2) &&
+        m_Game->m_Offsets->m_LaserAvailable) {
         C_Portal_Player* portalPlayer = (C_Portal_Player*)localPlayer;
-
-        auto activeWeaponAddr = (*(int(__thiscall**)(void*))(*(uintptr_t*)portalPlayer + 968))(portalPlayer);
-        //auto activeWeaponAddr = (*(int(__thiscall**)(void*))(*(uintptr_t*)m_Game->m_Offsets->GetActivePortalWeapon.address))(portalPlayer);
-
-        if (activeWeaponAddr && m_DrawCrosshair) {
-            CWeaponPortalBase* activeWeapon = (CWeaponPortalBase*)activeWeaponAddr;
-
-            if (portalPlayer->m_PointLaser) {
-                portalPlayer->m_PointLaser->SetControlPoint(1, m_AimPos);
-                portalPlayer->m_PointLaser->SetControlPoint(2, m_Game->m_singlePlayerPortalColors[activeWeapon->m_iLastFiredPortal] * 0.5f);
-            }
-            else {
-                std::cout << "Creating Point Laser Beam Sight Thingy" << "\n";
-                m_Game->m_Hooks->CreatePingPointer(localPlayer, m_AimPos);
-            }
-        }
-        else if (portalPlayer->m_PointLaser){
+        if (portalPlayer->m_PointLaser) {
             portalPlayer->m_PointLaser->StopEmission(false, true, false);
             portalPlayer->m_PointLaser = NULL;
         }
@@ -1109,6 +1243,25 @@ void VR::UpdateTracking()
     // Viewmodel roll offset
     m_ViewmodelRight = VectorRotate(m_ViewmodelRight, m_ViewmodelForward, m_ViewmodelAngOffset.z);
     m_ViewmodelUp = VectorRotate(m_ViewmodelUp, m_ViewmodelForward, m_ViewmodelAngOffset.z);
+
+    m_AimPos = Trace((uint32_t*)localPlayer);
+    if (m_AimMode == 2 && m_Game->m_Offsets->m_LaserAvailable) {
+        C_Portal_Player* portalPlayer = (C_Portal_Player*)localPlayer;
+        auto activeWeaponAddr = (*(int(__thiscall**)(void*))(*(uintptr_t*)portalPlayer + 968))(portalPlayer);
+        if (activeWeaponAddr && m_DrawCrosshair) {
+            CWeaponPortalBase* activeWeapon = (CWeaponPortalBase*)activeWeaponAddr;
+            if (portalPlayer->m_PointLaser) {
+                const int portalColor = std::clamp(activeWeapon->m_iLastFiredPortal, 0, 2);
+                portalPlayer->m_PointLaser->SetControlPoint(1, m_AimPos);
+                portalPlayer->m_PointLaser->SetControlPoint(2, m_Game->m_singlePlayerPortalColors[portalColor] * 0.5f);
+            } else {
+                m_Game->m_Hooks->CreatePingPointer(localPlayer, m_AimPos);
+            }
+        } else if (portalPlayer->m_PointLaser) {
+            portalPlayer->m_PointLaser->StopEmission(false, true, false);
+            portalPlayer->m_PointLaser = NULL;
+        }
+    }
 }
 
 Vector VR::GetViewAngle()
@@ -1334,164 +1487,36 @@ Vector VR::TraceEye(uint32_t* localPlayer, Vector cameraPos, Vector eyePos, QAng
     return eyePos;
 }
 
-// [CONFIG PARSING UTILITY FUNCTION]
-// Generates an error message by stringifying and concatenating 'args...'.
-template <typename... Ts>
-static void concatErrorMsg(Game& game, const Ts&... args)
-{
-    std::ostringstream oss;
-    (oss << ... << args);
-    game.errorMsg(oss.str().c_str());
-}
-
-// [CONFIG PARSING UTILITY FUNCTION]
-// Attempts to parse an entry with key 'key' from the provided 'userConfig'. If the key is
-// missing or if the parsing fails, 'defaultValue' is returned and an error message is
-// generated.
-template <typename T>
-static T parseConfigEntry(
-    const std::unordered_map<std::string, std::string>& userConfig, Game& game,
-    const char* key, const T& defaultValue)
-try
-{
-    const auto itr = userConfig.find(key);
-
-    if (itr == userConfig.end())
-    {
-        concatErrorMsg(game, "Config entry with key '", key,
-            "' missing -- reverting to default value of '", defaultValue, "'");
-
-        return defaultValue;
-    }
-
-    const std::string& configValue = itr->second;
-
-    if constexpr (std::is_same_v<T, bool>)
-    {
-        return configValue == "true";
-    }
-    else if constexpr(std::is_floating_point_v<T>)
-    {
-        return std::stof(configValue);
-    }
-    else if constexpr(std::is_integral_v<T>)
-    {
-        return std::stol(configValue);
-    }
-    else
-    {
-        // Just a way of generating a compilation failure in case this branch is taken.
-        struct invalid_type;
-        return invalid_type{};
-    }
-}
-catch (const std::logic_error& e)
-{
-    concatErrorMsg(game, "Error parsing config entry with key '", key,
-        "' -- reverting to default value of '", defaultValue, "' -- error: (", e.what(), ")");
-
-    throw;
-}
-
 void VR::ParseConfigFile()
 {
     std::ifstream configStream("VR\\config.txt");
-    std::unordered_map<std::string, std::string> userConfig;
-
-    std::string line;
-    while (std::getline(configStream, line))
-    {
-        std::istringstream sLine(line);
-        std::string key;
-        if (std::getline(sLine, key, '='))
-        {
-            std::string value;
-            if (std::getline(sLine, value, '#'))
-                userConfig[key] = value;
-            else if (std::getline(sLine, value))
-                userConfig[key] = value;
-        }
-    }
-
-    if (userConfig.empty())
+    if (!configStream) {
+        Logger::Write("VR/config.txt unavailable; keeping previous/default configuration");
         return;
-
-    // Parse a single entry with key 'key' from the config into 'target'.
-    // If the entry does not exist, or if the parsing fails, sets 'target' to
-    // 'defaultValue'.
-    const auto parseOrDefault = [&](const char* key, auto& target,
-                                    const auto& defaultValue) 
-    { 
-        target = parseConfigEntry(userConfig, *m_Game, key, defaultValue);
-        std::cout << "Setting '" << key << "' to '" << target << "'\n";
-    };
-
-    // Parses a vector or angle from the config into 'target'. The XYZ coordinates
-    // are read from three separate config entries with key 'keyPrefix' + 'X'/'Y'/'Z'.
-    // If any entry does not exist, or if the parsing fails, sets the corresponding
-    // coordinate in 'target' to zero.
-    const auto parseXYZOrDefaultZero = [&](std::string keyPrefix, auto& target)
-    {
-        parseOrDefault((keyPrefix + "X").c_str(), target.x, 0.f);
-        parseOrDefault((keyPrefix + "Y").c_str(), target.y, 0.f);
-        parseOrDefault((keyPrefix + "Z").c_str(), target.z, 0.f);
-    };
-
-    parseOrDefault("SnapTurning", m_SnapTurning, false);
-    parseOrDefault("SnapTurnAngle", m_SnapTurnAngle, 45.0f);
-    parseOrDefault("TurnSpeed", m_TurnSpeed, 0.15f);
-    parseOrDefault("LeftHanded", m_LeftHanded, false);
-    parseOrDefault("VRScale", m_VRScale, 43.2f);
-    parseOrDefault("IPDScale", m_IpdScale, 1.0f);
-    parseOrDefault("6DOF", m_6DOF, true);
-    /*parseOrDefault("HudDistance", m_HudDistance, 1.3f);
-    parseOrDefault("HudSize", m_HudSize, 4.0f);
-    parseOrDefault("HudAlwaysVisible", m_HudAlwaysVisible, false);*/
-    parseOrDefault("AimMode", m_AimMode, 2);
-    parseOrDefault("AntiAliasing", m_AntiAliasing, 0);
-    parseOrDefault("RenderWindow", m_RenderWindow, 0);
-    parseXYZOrDefaultZero("ViewmodelPosCustomOffset", m_ViewmodelPosCustomOffset);
-    parseXYZOrDefaultZero("ViewmodelAngCustomOffset", m_ViewmodelAngCustomOffset);
-}
-
-void VR::WaitForConfigUpdate()
-{
-    char currentDir[MAX_STR_LEN];
-    GetCurrentDirectory(MAX_STR_LEN, currentDir);
-    char configDir[MAX_STR_LEN];
-    sprintf_s(configDir, MAX_STR_LEN, "%s\\VR\\", currentDir);
-    HANDLE fileChangeHandle = FindFirstChangeNotificationA(configDir, false, FILE_NOTIFY_CHANGE_LAST_WRITE);
-
-    std::filesystem::file_time_type configLastModified;
-    while (1)
-    {
-        try 
-        {
-            // Windows only notifies of change within a directory, so extra check here for just config.txt
-            auto configModifiedTime = std::filesystem::last_write_time("VR\\config.txt");
-            if (configModifiedTime != configLastModified)
-            {
-                configLastModified = configModifiedTime;
-                ParseConfigFile();
-                
-                std::cout << "Successfully reloaded 'config.txt'\n";
-            }
-        }
-        catch (const std::invalid_argument &e)
-        {
-            concatErrorMsg(
-                *m_Game, "Failed to parse 'config.txt' (", e.what(), ")");
-        }
-        catch (const std::filesystem::filesystem_error &e)
-        {
-            concatErrorMsg(
-                *m_Game, "'config.txt' not found. (", e.what(), ")");
-            
-            return;
-        }
-        
-        FindNextChangeNotification(fileChangeHandle);
-        WaitForSingleObject(fileChangeHandle, INFINITE);
-        Sleep(100); // Sometimes the thread tries to read config.txt before it's finished writing
     }
+    auto parsed = ParseConfig(configStream, m_Config);
+    for (const auto &error : parsed.errors) Logger::Write("Config: " + error);
+    if (m_IsInitialized && parsed.value.antiAliasing != m_AntiAliasing) {
+        Logger::Write("Config: AntiAliasing change requires a restart; keeping current value");
+        parsed.value.antiAliasing = m_AntiAliasing;
+    }
+    m_Config = parsed.value;
+    m_SnapTurning = m_Config.snapTurning;
+    m_SnapTurnAngle = m_Config.snapTurnAngle;
+    m_TurnSpeed = m_Config.turnSpeed;
+    m_LeftHanded = m_Config.leftHanded;
+    m_VRScale = m_Config.vrScale;
+    m_IpdScale = m_Config.ipdScale;
+    m_6DOF = m_Config.sixDof;
+    m_AimMode = m_Config.aimMode;
+    m_AntiAliasing = m_Config.antiAliasing;
+    m_RenderWindow = m_Config.renderWindow;
+    m_ViewmodelPosCustomOffset = {m_Config.viewmodelPosOffset[0], m_Config.viewmodelPosOffset[1], m_Config.viewmodelPosOffset[2]};
+    m_ViewmodelAngCustomOffset = {m_Config.viewmodelAngOffset[0], m_Config.viewmodelAngOffset[1], m_Config.viewmodelAngOffset[2]};
+    Logger::Write("Config applied: TurnSpeed=" + std::to_string(m_TurnSpeed) +
+        " SnapTurnAngle=" + std::to_string(m_SnapTurnAngle) +
+        " VRScale=" + std::to_string(m_VRScale) +
+        " IPDScale=" + std::to_string(m_IpdScale) +
+        " AimMode=" + std::to_string(m_AimMode) +
+        " AntiAliasing=" + std::to_string(m_AntiAliasing));
 }

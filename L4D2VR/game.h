@@ -59,11 +59,11 @@ public:
     ISurface* m_VguiSurface = nullptr;
     IClientMode* m_ClientMode = nullptr;
 
-    uintptr_t m_BaseEngine;
-    uintptr_t m_BaseClient;
-    uintptr_t m_BaseServer;
-    uintptr_t m_BaseMaterialSystem;
-    uintptr_t m_BaseVgui2;
+    uintptr_t m_BaseEngine = 0;
+    uintptr_t m_BaseClient = 0;
+    uintptr_t m_BaseServer = 0;
+    uintptr_t m_BaseMaterialSystem = 0;
+    uintptr_t m_BaseVgui2 = 0;
 
     Vector m_singlePlayerPortalColors[3] = { Vector(255.0f, 255.0f, 255.0f), Vector(64.0f, 160.0f, 255.0f), Vector(255.0f, 160.0f, 32.0f) };
 
@@ -81,6 +81,8 @@ public:
     bool m_CachedArmsModel = false;
 
     Game();
+    ~Game();
+    bool Initialize();
 
     void *GetInterface(const char *dllname, const char *interfacename);
 

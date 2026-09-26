@@ -2,6 +2,7 @@
 #include <iostream>
 #include "MinHook.h"
 #include "bitbuf.h"
+#include "logger.h"
 
 class Game;
 class VR;
@@ -10,13 +11,13 @@ class CViewSetup;
 class CUserCmd;
 class QAngle;
 class Vector;
-class edict_t;
-class ModelRenderInfo_t;
+struct edict_t;
+struct ModelRenderInfo_t;
 struct trace_tx;
 class IMatRenderContext;
 struct vrect_t;
 struct Ray_t;
-struct VMatrix;
+class VMatrix;
 struct Rect_t;
 class bf_write;
 class bf_read;
@@ -24,46 +25,49 @@ class bf_read;
 
 template <typename T>
 struct Hook {
-	T fOriginal;
-	LPVOID pTarget;
-	bool isEnabled;
+	T fOriginal{};
+	LPVOID pTarget = nullptr;
+	bool isEnabled = false;
 
 	int createHook(LPVOID targetFunc, LPVOID detourFunc)
 	{
-		if (MH_CreateHook(targetFunc, detourFunc, reinterpret_cast<LPVOID *>(&fOriginal)) != MH_OK)
+		if (!targetFunc)
+			return 1;
+		const MH_STATUS status = MH_CreateHook(targetFunc, detourFunc, reinterpret_cast<LPVOID *>(&fOriginal));
+		if (status != MH_OK)
 		{
-			char errorString[512];
-			sprintf_s(errorString, 512, "Failed to create hook with this signature: %s", typeid(T).name());
-			Game::errorMsg(errorString);
+			Logger::Write(std::string("MinHook creation failed: ") + typeid(T).name() +
+			              " status=" + std::to_string(status));
 			return 1;
 		}
 		pTarget = targetFunc;
+		return 0;
 	}
 
 	int enableHook()
 	{
 		if (!pTarget)
-			throw std::invalid_argument("pTarget is empty, did you miss a call to createHook?");
+			return 1;
 
 		MH_STATUS status = MH_EnableHook(pTarget);
 		if (status != MH_OK)
 		{
-			char errorString[256];
-			sprintf_s(errorString, 256, "Failed to enable hook: %i", status);
-			Game::errorMsg(errorString);
+			Logger::Write("MinHook enable failed: " + std::to_string(status));
 			return 1;
 		}
 		isEnabled = true;
+		return 0;
 	}
 
 	int disableHook()
 	{
-		if (MH_DisableHook(pTarget) != MH_OK)
+		if (!pTarget || MH_DisableHook(pTarget) != MH_OK)
 		{
-			Game::errorMsg("Failed to disable hook");
+			Logger::Write("Failed to disable hook");
 			return 1;
 		}
 		isEnabled = false;
+		return 0;
 	}
 };
 
@@ -145,6 +149,8 @@ typedef void* (__thiscall* tCWeaponPortalgun_FirePortal)(void* thisptr, bool bPo
 class Hooks
 {
 public:
+	bool m_Ready = false;
+	bool m_MinHookInitialized = false;
 	static inline Game *m_Game;
 	static inline VR *m_VR;
 

@@ -1,0 +1,108 @@
+#pragma once
+
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <istream>
+#include <limits>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+struct ConfigSnapshot {
+    float turnSpeed = 0.15f;
+    bool snapTurning = false;
+    float snapTurnAngle = 45.0f;
+    bool leftHanded = false;
+    float vrScale = 43.2f;
+    float ipdScale = 1.0f;
+    bool sixDof = true;
+    int aimMode = 2;
+    uint32_t antiAliasing = 0;
+    uint32_t renderWindow = 0;
+    std::array<float, 3> viewmodelPosOffset{};
+    std::array<float, 3> viewmodelAngOffset{};
+};
+
+struct ConfigParseResult {
+    ConfigSnapshot value;
+    std::vector<std::string> errors;
+};
+
+inline std::string TrimConfigValue(const std::string &text)
+{
+    const auto first = text.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const auto last = text.find_last_not_of(" \t\r\n");
+    return text.substr(first, last - first + 1);
+}
+
+inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot &previous)
+{
+    ConfigParseResult result{previous, {}};
+    std::unordered_map<std::string, std::string> entries;
+    std::string line;
+    while (std::getline(stream, line)) {
+        const auto comment = line.find('#');
+        if (comment != std::string::npos) line.erase(comment);
+        const auto separator = line.find('=');
+        if (separator == std::string::npos) continue;
+        entries[TrimConfigValue(line.substr(0, separator))] =
+            TrimConfigValue(line.substr(separator + 1));
+    }
+
+    const auto readFloat = [&](const std::string &key, float &target, float min, float max) {
+        const auto it = entries.find(key);
+        if (it == entries.end()) return;
+        std::istringstream input(it->second);
+        float value = 0;
+        const bool parsed = static_cast<bool>(input >> value);
+        char extra = 0;
+        const bool trailing = static_cast<bool>(input >> extra);
+        if (!parsed || trailing || !std::isfinite(value) || value < min || value > max)
+            result.errors.push_back(key + " is invalid; keeping previous value");
+        else target = value;
+    };
+    const auto readInt = [&](const std::string &key, int &target, int min, int max) {
+        const auto it = entries.find(key);
+        if (it == entries.end()) return;
+        std::istringstream input(it->second);
+        int value = 0;
+        const bool parsed = static_cast<bool>(input >> value);
+        char extra = 0;
+        const bool trailing = static_cast<bool>(input >> extra);
+        if (!parsed || trailing || value < min || value > max)
+            result.errors.push_back(key + " is invalid; keeping previous value");
+        else target = value;
+    };
+    const auto readBool = [&](const std::string &key, bool &target) {
+        const auto it = entries.find(key);
+        if (it == entries.end()) return;
+        if (it->second == "true") target = true;
+        else if (it->second == "false") target = false;
+        else result.errors.push_back(key + " is invalid; keeping previous value");
+    };
+
+    readFloat("TurnSpeed", result.value.turnSpeed, 0.01f, 2.0f);
+    readBool("SnapTurning", result.value.snapTurning);
+    readFloat("SnapTurnAngle", result.value.snapTurnAngle, 1.0f, 180.0f);
+    readBool("LeftHanded", result.value.leftHanded);
+    readFloat("VRScale", result.value.vrScale, 1.0f, 200.0f);
+    readFloat("IPDScale", result.value.ipdScale, 0.5f, 1.5f);
+    readBool("6DOF", result.value.sixDof);
+    readInt("AimMode", result.value.aimMode, 0, 2);
+    int aa = static_cast<int>(result.value.antiAliasing);
+    readInt("AntiAliasing", aa, 0, 8);
+    if (aa == 0 || aa == 2 || aa == 4 || aa == 8) result.value.antiAliasing = aa;
+    else result.errors.push_back("AntiAliasing is invalid; keeping previous value");
+    int window = static_cast<int>(result.value.renderWindow);
+    readInt("RenderWindow", window, 0, 1);
+    result.value.renderWindow = window;
+    constexpr char axes[] = "XYZ";
+    for (int i = 0; i < 3; ++i) {
+        readFloat(std::string("ViewmodelPosCustomOffset") + axes[i], result.value.viewmodelPosOffset[i], -100.f, 100.f);
+        readFloat(std::string("ViewmodelAngCustomOffset") + axes[i], result.value.viewmodelAngOffset[i], -180.f, 180.f);
+    }
+    return result;
+}

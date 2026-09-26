@@ -1,13 +1,14 @@
 #pragma once
 #include "sigscanner.h"
 #include "game.h"
+#include "logger.h"
 
 
 struct Offset
 {
     std::string moduleName;
     int offset;
-    int address;
+    uintptr_t address = 0;
     std::string signature;
     int sigOffset;
 
@@ -25,18 +26,16 @@ struct Offset
         }
             
         if (newOffset == -1)
-        {
-            Game::errorMsg(("Signature not found: " + signature).c_str());
             return;
-        }
 
-        this->address = (uintptr_t)GetModuleHandle(moduleName.c_str()) + this->offset;
+        this->address = (uintptr_t)GetModuleHandleA(moduleName.c_str()) + this->offset;
     }
 };
 
 class Offsets
 {
 public:
+    bool m_LaserAvailable = false;
     Offset GetFullScreenTexture =        { "client.dll", 0x1A83F0, "A1 ? ? ? ? 85 C0 75 53 8B 0D ? ? ? ? 8B 01 8B 90 ? ? ? ? 6A 00 6A 01 68 ? ? ? ? 68 ? ? ? ? FF D2 50 B9 ? ? ? ? E8 ? ? ? ? 80 3D ? ? ? ? ? 75 1C 8B 0D ? ? ? ? 8B 01 8B 90 ? ? ? ? 68 ? ? ? ? C6 05 ? ? ? ? ? FF D2 A1 ? ? ? ? C3" };
     Offset RenderView =                  { "client.dll", 0x1F2120, "55 8B EC 83 EC 2C 53 56 8B F1 6A 00 8D 8E ? ? ? ? E8 ? ? ? ?" };
     Offset g_pClientMode =               { "client.dll", 0x28A600, "8B 0D ? ? ? ? 8B", 2 };
@@ -139,4 +138,49 @@ public:
     // Multiplayer
     Offset GetOwner = { "server.dll", 0xD7550, "8B 81 ? ? ? ? 83 F8 FF 74 23 8B 15 ? ? ? ?" };
     //Offset GetActiveWeapon = { "server.dll", 0xD3FD0, "8B 89 ? ? ? ? 83 F9 FF 74 1F 8B 15 ? ? ? ?" };
+
+    bool Validate()
+    {
+        const struct Symbol { const char *name; const Offset *offset; bool required; } symbols[] = {
+            { "RenderView", &RenderView, true }, { "CreateMove", &CreateMove, true },
+            { "PlayerPortalled", &PlayerPortalled, true },
+            { "TraceFirePortalServer", &TraceFirePortalServer, true },
+            { "CWeaponPortalgun_FirePortal", &CWeaponPortalgun_FirePortal, true },
+            { "CalcViewModelView", &CalcViewModelView, true },
+            { "ProcessUsercmds", &ProcessUsercmds, true },
+            { "ReadUsercmd", &ReadUserCmd, true }, { "WriteUsercmd", &WriteUsercmd, true },
+            { "EyeAngles", &EyeAngles, true }, { "EyePosition", &EyePosition, true },
+            { "Weapon_ShootPosition", &Weapon_ShootPosition, true },
+            { "DrawSelf", &DrawSelf, true },
+            { "UpdateObject", &UpdateObject, true }, { "UpdateObjectVM", &UpdateObjectVM, true },
+            { "GetDefaultFOV", &GetDefaultFOV, true }, { "GetFOV", &GetFOV, true },
+            { "GetViewModelFOV", &GetViewModelFOV, true },
+            { "SetDrawOnlyForSplitScreenUser", &SetDrawOnlyForSplitScreenUser, true },
+            { "CHudCrosshair_ShouldDraw", &CHudCrosshair_ShouldDraw, true },
+            { "CBaseEntity_entindex", &CBaseEntity_entindex, true },
+            { "GetOwner", &GetOwner, true },
+            { "UTIL_Portal_FirstAlongRay", &UTIL_Portal_FirstAlongRay, true },
+            { "UTIL_IntersectRayWithPortal", &UTIL_IntersectRayWithPortal, true },
+            { "CreatePingPointer", &CreatePingPointer, false },
+            { "Precache", &Precache, false },
+            { "PrecacheParticleSystem", &PrecacheParticleSystem, false },
+            { "SetControlPoint", &SetControlPoint, false },
+            { "StopEmission", &StopEmission, false }
+        };
+
+        bool requiredAvailable = true;
+        m_LaserAvailable = true;
+        for (const auto &symbol : symbols) {
+            Logger::Write(std::string(symbol.name) + " ........ " +
+                          (symbol.offset->address ? "OK" : "MISSING") +
+                          (symbol.required ? " [required]" : " [optional]"));
+            if (!symbol.offset->address) {
+                if (symbol.required) requiredAvailable = false;
+                else m_LaserAvailable = false;
+            }
+        }
+        if (!m_LaserAvailable)
+            Logger::Write("Laser pointer disabled: optional symbol unavailable.");
+        return requiredAvailable;
+    }
 };

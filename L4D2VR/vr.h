@@ -4,12 +4,14 @@
 #include <chrono>
 #include "digital_input.h"
 #include "tracked_device.h"
+#include "config.h"
+#include <filesystem>
 
 #define MAX_STR_LEN 256
 
 class Game;
-class IDirect3DTexture9;
-class IDirect3DSurface9;
+struct IDirect3DTexture9;
+struct IDirect3DSurface9;
 class ITexture;
 
 
@@ -23,8 +25,9 @@ struct TrackedDevicePoseData
 	QAngle TrackedDeviceAngVel;
 };
 
-struct SharedTextureHolder 
+class SharedTextureHolder
 {
+public:
 	vr::VRVulkanTextureData_t m_VulkanData;
 	vr::Texture_t m_VRTexture;
 };
@@ -37,8 +40,12 @@ public:
 	vr::IVRSystem *m_System = nullptr;
 	vr::IVRInput *m_Input = nullptr;
 	vr::IVROverlay *m_Overlay = nullptr;
+	vr::IVRRenderModels *m_RenderModels = nullptr;
 
-	vr::VROverlayHandle_t m_MainMenuHandle;
+	vr::VROverlayHandle_t m_MainMenuHandle = vr::k_ulOverlayHandleInvalid;
+	bool m_OpenVRStarted = false;
+	int m_LastPoseError = 0;
+	int m_LastInputError = 0;
 	//vr::VROverlayHandle_t m_HUDHandle;
 
 	float m_HorizontalOffsetLeft;
@@ -192,29 +199,33 @@ public:
 	bool m_OverrideEyeAngles = false;
 	std::chrono::steady_clock::time_point m_PrevFrameTime;
 
-	float m_TurnSpeed = 0.15;
+	float m_TurnSpeed = 0.15f;
 	bool m_SnapTurning = false;
-	float m_SnapTurnAngle = 45.0;
+	float m_SnapTurnAngle = 45.0f;
 	bool m_LeftHanded = false;
-	float m_VRScale = 43.2;
-	float m_IpdScale = 1.0;
+	float m_VRScale = 43.2f;
+	float m_IpdScale = 1.0f;
 	bool m_6DOF = true;
-	float m_HudDistance = 1.3;
-	float m_HudSize = 4.0;
+	float m_HudDistance = 1.3f;
+	float m_HudSize = 4.0f;
 	bool m_HudAlwaysVisible = false;
 	int m_AimMode = 2;
+	ConfigSnapshot m_Config;
+	std::filesystem::file_time_type m_ConfigLastModified{};
+	std::chrono::steady_clock::time_point m_NextConfigCheck{};
 
 	VR() {};
 	VR(Game *game);
-	int SetActionManifest(const char *fileName);
-	void InstallApplicationManifest(const char *fileName);
+	~VR();
+	bool SetActionManifest(const char *fileName);
+	bool InstallApplicationManifest(const char *fileName);
 	void Update();
 	void SetScreenSizeOverride(bool bState);
 	void CreateVRTextures();
 	void SubmitVRTextures();
 	void RepositionOverlays();
 	void GetPoses();
-	void UpdatePosesAndActions();
+	bool UpdatePosesAndActions();
 	void GetViewParameters();
 	void ProcessMenuInput();
 	void ProcessInput();
@@ -241,7 +252,6 @@ public:
 	void ResetPosition();
 	void GetPoseData(vr::TrackedDevicePose_t &poseRaw, TrackedDevicePoseData &poseOut);
 	void ParseConfigFile();
-	void WaitForConfigUpdate();
 	Vector Trace(uint32_t* localPlayer);
 	Vector TraceEye(uint32_t* localPlayer, Vector cameraPos, Vector eyePos, QAngle& eyeAngle);
 };

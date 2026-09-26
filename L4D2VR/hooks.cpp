@@ -5,6 +5,7 @@
 #include "sdk_server.h"
 #include "vr.h"
 #include "offsets.h"
+#include "logger.h"
 #include <iostream>
 
 Hooks::Hooks(Game *game)
@@ -12,7 +13,9 @@ Hooks::Hooks(Game *game)
 	if (MH_Initialize() != MH_OK)
 	{
 		Game::errorMsg("Failed to init MinHook");
+		return;
 	}
+	m_MinHookInitialized = true;
 
 	m_Game = game;
 	m_VR = m_Game->m_VR;
@@ -20,50 +23,59 @@ Hooks::Hooks(Game *game)
 	m_PushHUDStep = -999;
 	m_PushedHud = true;
 
-	initSourceHooks();
+	if (initSourceHooks() != 0)
+		return;
+
+#define ENABLE_REQUIRED(hook) do { if (hook.enableHook()) { Logger::Write("Failed to enable " #hook); return; } } while (false)
 
 	//hkGetRenderTarget.enableHook();
-	hkCalcViewModelView.enableHook();
+	ENABLE_REQUIRED(hkCalcViewModelView);
 
-	hkProcessUsercmds.enableHook();
-	hkReadUsercmd.enableHook();
+	ENABLE_REQUIRED(hkProcessUsercmds);
+	ENABLE_REQUIRED(hkReadUsercmd);
 
 	//hkWriteUsercmdDeltaToBuffer.enableHook();
-	hkWriteUsercmd.enableHook();
+	ENABLE_REQUIRED(hkWriteUsercmd);
 
-	hkCreateMove.enableHook();
-	hkEyePosition.enableHook();
-	hkRenderView.enableHook();
+	ENABLE_REQUIRED(hkCreateMove);
+	ENABLE_REQUIRED(hkEyePosition);
+	ENABLE_REQUIRED(hkRenderView);
 
 
-	hkWeapon_ShootPosition.enableHook();
-	hkTraceFirePortal.enableHook();
-	hkCWeaponPortalgun_FirePortal.enableHook();
+	ENABLE_REQUIRED(hkWeapon_ShootPosition);
+	ENABLE_REQUIRED(hkTraceFirePortal);
+	ENABLE_REQUIRED(hkCWeaponPortalgun_FirePortal);
 
-	hkDrawSelf.enableHook();
-	hkPlayerPortalled.enableHook();
+	ENABLE_REQUIRED(hkDrawSelf);
+	ENABLE_REQUIRED(hkPlayerPortalled);
 
 	//hkComputeError.enableHook();
-	hkUpdateObject.enableHook();
-	hkUpdateObjectVM.enableHook();
+	ENABLE_REQUIRED(hkUpdateObject);
+	ENABLE_REQUIRED(hkUpdateObjectVM);
 	//hkRotateObject.enableHook();
-	hkEyeAngles.enableHook();
+	ENABLE_REQUIRED(hkEyeAngles);
 
-	hkGetDefaultFOV.enableHook();
-	hkGetFOV.enableHook();
-	hkGetViewModelFOV.enableHook();
+	ENABLE_REQUIRED(hkGetDefaultFOV);
+	ENABLE_REQUIRED(hkGetFOV);
+	ENABLE_REQUIRED(hkGetViewModelFOV);
 
-	hkSetDrawOnlyForSplitScreenUser.enableHook();
+	ENABLE_REQUIRED(hkSetDrawOnlyForSplitScreenUser);
 	//kClientThink.enableHook();
-	hkPrecache.enableHook();
-	hkCHudCrosshair_ShouldDraw.enableHook();
+	if (m_Game->m_Offsets->m_LaserAvailable && hkPrecache.enableHook()) {
+		m_Game->m_Offsets->m_LaserAvailable = false;
+		Logger::Write("Laser pointer disabled: Precache hook enable failed.");
+	}
+	ENABLE_REQUIRED(hkCHudCrosshair_ShouldDraw);
+#undef ENABLE_REQUIRED
+	m_Ready = true;
 }
 
 Hooks::~Hooks()
 {
-	if (MH_Uninitialize() != MH_OK)
-	{
-		Game::errorMsg("Failed to uninitialize MinHook");
+	if (m_MinHookInitialized) {
+		MH_DisableHook(MH_ALL_HOOKS);
+		if (MH_Uninitialize() != MH_OK)
+			Logger::Write("Failed to uninitialize MinHook");
 	}
 }
 
@@ -106,20 +118,10 @@ int Hooks::initSourceHooks()
 	/*LPVOID DrawModelExecuteAddr = (LPVOID)(m_Game->m_Offsets->DrawModelExecute.address);
 	hkDrawModelExecute.createHook(DrawModelExecuteAddr, &dDrawModelExecute);*/
 
-	LPVOID PushRenderTargetAddr = (LPVOID)(m_Game->m_Offsets->PushRenderTargetAndViewport.address);
-	hkPushRenderTargetAndViewport.createHook(PushRenderTargetAddr, &dPushRenderTargetAndViewport);
-
-	LPVOID PopRenderTargetAddr = (LPVOID)(m_Game->m_Offsets->PopRenderTargetAndViewport.address);
-	hkPopRenderTargetAndViewport.createHook(PopRenderTargetAddr, &dPopRenderTargetAndViewport);
-
-	LPVOID VGui_PaintAddr = (LPVOID)(m_Game->m_Offsets->VGui_Paint.address);
-	hkVgui_Paint.createHook(VGui_PaintAddr, &dVGui_Paint);
 
 	/*LPVOID IsSplitScreenAddr = (LPVOID)(m_Game->m_Offsets->IsSplitScreen.address);
 	hkIsSplitScreen.createHook(IsSplitScreenAddr, &dIsSplitScreen);*/
 
-	LPVOID PrePushRenderTargetAddr = (LPVOID)(m_Game->m_Offsets->PrePushRenderTarget.address);
-	hkPrePushRenderTarget.createHook(PrePushRenderTargetAddr, &dPrePushRenderTarget);
 
 	/*LPVOID GetFullScreenTextureAddr = (LPVOID)(m_Game->m_Offsets->GetFullScreenTexture.address);
 	hkGetFullScreenTexture.createHook(GetFullScreenTextureAddr, &dGetFullScreenTexture);*/
@@ -135,8 +137,6 @@ int Hooks::initSourceHooks()
 	LPVOID DrawSelfAddr = (LPVOID)(m_Game->m_Offsets->DrawSelf.address);
 	hkDrawSelf.createHook(DrawSelfAddr, &dDrawSelf);
 	
-	LPVOID ClipTransformAddr = (LPVOID)(m_Game->m_Offsets->ClipTransform.address);
-	hkClipTransform.createHook(ClipTransformAddr, &dClipTransform);
 
 	// Portalling
 	LPVOID PlayerPortalledAddr = (LPVOID)(m_Game->m_Offsets->PlayerPortalled.address);
@@ -150,10 +150,8 @@ int Hooks::initSourceHooks()
 	hkCreateMove.createHook(CreateMoveAddr, &dCreateMove);
 
 	// Grababbles
-	hkComputeError.createHook((LPVOID)(m_Game->m_Offsets->ComputeError.address), &dComputeError);
 	hkUpdateObject.createHook((LPVOID)(m_Game->m_Offsets->UpdateObject.address), &dUpdateObject);
 	hkUpdateObjectVM.createHook((LPVOID)(m_Game->m_Offsets->UpdateObjectVM.address), &dUpdateObjectVM);
-	hkRotateObject.createHook((LPVOID)(m_Game->m_Offsets->RotateObject.address), &dRotateObject);
 	hkEyeAngles.createHook((LPVOID)(m_Game->m_Offsets->EyeAngles.address), &dEyeAngles);
 
 	// Portal Gun VFX
@@ -165,7 +163,11 @@ int Hooks::initSourceHooks()
 	GetPortalPlayer = (tGetPortalPlayer)m_Game->m_Offsets->GetPortalPlayer.address;
 	CreatePingPointer = (tCreatePingPointer)m_Game->m_Offsets->CreatePingPointer.address;
 	PrecacheParticleSystem = (tPrecacheParticleSystem)m_Game->m_Offsets->PrecacheParticleSystem.address;
-	hkPrecache.createHook((LPVOID)(m_Game->m_Offsets->Precache.address), &dPrecache);
+	if (m_Game->m_Offsets->m_LaserAvailable &&
+		hkPrecache.createHook((LPVOID)(m_Game->m_Offsets->Precache.address), &dPrecache)) {
+		m_Game->m_Offsets->m_LaserAvailable = false;
+		Logger::Write("Laser pointer disabled: Precache hook creation failed.");
+	}
 	hkSetDrawOnlyForSplitScreenUser.createHook((LPVOID)m_Game->m_Offsets->SetDrawOnlyForSplitScreenUser.address, &dSetDrawOnlyForSplitScreenUser);
 	hkCHudCrosshair_ShouldDraw.createHook((LPVOID)m_Game->m_Offsets->CHudCrosshair_ShouldDraw.address, &dCHudCrosshair_ShouldDraw);
 
@@ -173,7 +175,7 @@ int Hooks::initSourceHooks()
 	EntityIndex = (tEntindex)m_Game->m_Offsets->CBaseEntity_entindex.address;
 	GetOwner = (tGetOwner)m_Game->m_Offsets->GetOwner.address;
 	GetFullScreenTexture = (tGetFullScreenTexture)m_Game->m_Offsets->GetFullScreenTexture.address;
-	return 1;
+	return 0;
 } 
 
 bool __fastcall Hooks::dCHudCrosshair_ShouldDraw(void* ecx, void* edx) {
@@ -181,6 +183,8 @@ bool __fastcall Hooks::dCHudCrosshair_ShouldDraw(void* ecx, void* edx) {
 
 	m_VR->m_DrawCrosshair = shouldDraw;
 
+	if (!m_Game->m_Offsets->m_LaserAvailable)
+		return shouldDraw;
 	return ((m_VR->m_AimMode == 1) ? shouldDraw : false);
 }
 
