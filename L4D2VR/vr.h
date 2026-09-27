@@ -6,6 +6,7 @@
 #include "tracked_device.h"
 #include "config.h"
 #include "ui_input.h"
+#include "haptics.h"
 #include <filesystem>
 
 #define MAX_STR_LEN 256
@@ -50,6 +51,9 @@ public:
 	bool m_HUDCaptureLogged = false;
 	UiInput::MenuPointerState m_MenuPointerState;
 	std::chrono::steady_clock::time_point m_NextMenuInputErrorLog{};
+	std::chrono::steady_clock::time_point m_NextHapticErrorLog{};
+	Haptics::ShotGate m_PortalShotHapticGate;
+	bool m_HapticOutputsAvailable = false;
 	bool m_OpenVRStarted = false;
 	int m_LastPoseError = 0;
 	int m_LastInputError = 0;
@@ -190,6 +194,10 @@ public:
 	// action set
 	vr::VRActionSetHandle_t m_ActionSet;
 	vr::VRActiveActionSet_t m_ActiveActionSet;
+	vr::VRActionSetHandle_t m_HapticActionSet = vr::k_ulInvalidActionSetHandle;
+	vr::VRActiveActionSet_t m_ActiveHapticActionSet{};
+	vr::VRActionHandle_t m_HapticLeft = vr::k_ulInvalidActionHandle;
+	vr::VRActionHandle_t m_HapticRight = vr::k_ulInvalidActionHandle;
 
 	// actions
 	vr::VRActionHandle_t m_ActionJump;
@@ -260,6 +268,8 @@ public:
 	void SendMenuMouse(UiInput::MouseTransition transition);
 	void ReleaseMenuMouse();
 	void ProcessInput();
+	void QueuePortalShotHaptic();
+	void DispatchPortalShotHaptic(bool actionsReady);
 	void ProcessViewActions();
 	Vector GetMovementForward();
 	void ProcessHeldAction(vr::VRActionHandle_t actionHandle, DigitalButtonState &state,

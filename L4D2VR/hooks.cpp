@@ -656,6 +656,14 @@ void* Hooks::dCWeaponPortalgun_FirePortal(void* ecx, void* edx, bool bPortal2, V
 	m_VR->m_OverrideEyeAngles = true;
 
 	auto result = hkCWeaponPortalgun_FirePortal.fOriginal(ecx, bPortal2, pVector);
+	// This is a candidate fire event, not proof of successful portal placement.
+	// Queue on the local weapon owner only; VR API calls stay on the update thread.
+	if (m_VR && m_Game->m_EngineClient) {
+		const int localIndex = m_Game->m_EngineClient->GetLocalPlayer();
+		void *owner = GetOwner(ecx);
+		if (localIndex > 0 && owner && EntityIndex(owner) == localIndex)
+			m_VR->QueuePortalShotHaptic();
+	}
 
 	if (!wasTrue)
 		m_VR->m_OverrideEyeAngles = false;

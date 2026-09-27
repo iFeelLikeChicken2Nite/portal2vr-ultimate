@@ -274,6 +274,22 @@ bool VR::SetActionManifest(const char *fileName)
     m_ActiveActionSet.ulActionSet = m_ActionSet;
 
     Logger::Write("OpenVR main action set OK");
+    const auto baseError = m_Input->GetActionSetHandle("/actions/base", &m_HapticActionSet);
+    const auto leftError = m_Input->GetActionHandle("/actions/base/out/vibration_left", &m_HapticLeft);
+    const auto rightError = m_Input->GetActionHandle("/actions/base/out/vibration_right", &m_HapticRight);
+    m_HapticOutputsAvailable = baseError == vr::VRInputError_None &&
+        leftError == vr::VRInputError_None && rightError == vr::VRInputError_None &&
+        m_HapticActionSet != vr::k_ulInvalidActionSetHandle &&
+        m_HapticLeft != vr::k_ulInvalidActionHandle &&
+        m_HapticRight != vr::k_ulInvalidActionHandle;
+    if (m_HapticOutputsAvailable) {
+        m_ActiveHapticActionSet.ulActionSet = m_HapticActionSet;
+        Logger::Write("Optional OpenVR haptic output actions available");
+    } else {
+        Logger::Write("Optional OpenVR haptic actions unavailable (set/left/right errors " +
+            std::to_string(baseError) + "/" + std::to_string(leftError) + "/" +
+            std::to_string(rightError) + "); haptics disabled");
+    }
     return true;
 }
 
@@ -373,11 +389,13 @@ void VR::Update()
         UpdateTracking();
         ReleaseHeldActions();
         ReleaseMenuMouse();
+        m_PortalShotHapticGate.Clear();
         return;
     }
     if (!m_Game->m_VguiSurface->IsCursorVisible())
         ProcessViewActions();
     UpdateTracking();
+    DispatchPortalShotHaptic(actionsReady);
 
     if (m_Game->m_VguiSurface->IsCursorVisible()) {
         m_PrevFrameTime = std::chrono::steady_clock::now();
@@ -672,8 +690,17 @@ bool VR::UpdatePosesAndActions()
         m_LastPoseError = 0;
         ++m_PoseFetchSequence;
     }
-    const auto inputError = m_Input->UpdateActionState(&m_ActiveActionSet,
-        sizeof(vr::VRActiveActionSet_t), 1);
+    const bool useHaptics = m_Config.experimentalPortalShotHaptics && m_HapticOutputsAvailable;
+    vr::VRActiveActionSet_t activeSets[] = { m_ActiveActionSet, m_ActiveHapticActionSet };
+    auto inputError = m_Input->UpdateActionState(activeSets,
+        sizeof(vr::VRActiveActionSet_t), useHaptics ? 2 : 1);
+    if (inputError != vr::VRInputError_None && useHaptics) {
+        Logger::Write("OpenVR haptic action set update failed (error " +
+            std::to_string(inputError) + "); disabling optional haptics");
+        m_HapticOutputsAvailable = false;
+        inputError = m_Input->UpdateActionState(&m_ActiveActionSet,
+            sizeof(vr::VRActiveActionSet_t), 1);
+    }
     if (inputError != vr::VRInputError_None) {
         if (m_LastInputError != inputError)
             Logger::Write("UpdateActionState failed: " + std::to_string(inputError));
@@ -682,6 +709,35 @@ bool VR::UpdatePosesAndActions()
         m_LastInputError = 0;
     }
     return poseError == vr::VRCompositorError_None && inputError == vr::VRInputError_None;
+}
+
+void VR::QueuePortalShotHaptic()
+{
+    m_PortalShotHapticGate.Queue(std::chrono::steady_clock::now());
+}
+
+void VR::DispatchPortalShotHaptic(bool actionsReady)
+{
+    if (!m_PortalShotHapticGate.Consume())
+        return;
+    const bool gameplay = m_IsVREnabled && m_Game->m_EngineClient->IsInGame() &&
+        !m_Game->m_VguiSurface->IsCursorVisible();
+    if (!Haptics::CanDeliverShot(m_Config.experimentalPortalShotHaptics, actionsReady,
+            gameplay, m_TrackingOutputValid, m_RightControllerPose.valid,
+            m_HapticOutputsAvailable))
+        return;
+    const auto hand = Haptics::OutputHand(m_LeftHanded);
+    const auto action = hand == Haptics::Hand::Left ? m_HapticLeft : m_HapticRight;
+    const auto result = m_Input->TriggerHapticVibrationAction(action, 0.0f,
+        m_Config.portalShotHapticDurationSeconds, 150.0f,
+        m_Config.portalShotHapticAmplitude, vr::k_ulInvalidInputValueHandle);
+    if (result != vr::VRInputError_None) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= m_NextHapticErrorLog) {
+            Logger::Write("OpenVR portal-shot haptic failed (error " + std::to_string(result) + ")");
+            m_NextHapticErrorLog = now + std::chrono::seconds(5);
+        }
+    }
 }
 
 void VR::GetViewParameters() 
@@ -1817,6 +1873,8 @@ void VR::ParseConfigFile()
     if (m_IsInitialized && m_Playspace.heightOffsetMeters != parsed.value.heightOffsetMeters)
         Logger::Write("Config: HeightOffsetMeters change staged until recenter");
     m_Config = parsed.value;
+    if (!m_Config.experimentalPortalShotHaptics)
+        m_PortalShotHapticGate.Clear();
     if (!m_IsInitialized) {
         m_ActivePortalMode = m_Config.portalOrientationMode;
         m_PortalCoordinator.SetMode(m_ActivePortalMode);
@@ -1859,5 +1917,7 @@ void VR::ParseConfigFile()
         " IPDScale=" + std::to_string(m_IpdScale) +
         " AimMode=" + std::to_string(m_AimMode) +
         " AntiAliasing=" + std::to_string(m_AntiAliasing) +
-        " ExperimentalHUDOverlay=" + std::to_string(m_Config.experimentalHudOverlay));
+        " ExperimentalHUDOverlay=" + std::to_string(m_Config.experimentalHudOverlay) +
+        " ExperimentalPortalShotHaptics=" +
+        std::to_string(m_Config.experimentalPortalShotHaptics));
 }

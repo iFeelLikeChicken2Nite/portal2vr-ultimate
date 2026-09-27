@@ -523,6 +523,20 @@ int main()
            "right-handed aiming vibrates physical right hand");
     expect(Haptics::OutputHand(true) == Haptics::Hand::Left, true,
            "left-handed aiming vibrates physical left hand");
+    expect(Haptics::CanDeliverShot(true, true, true, true, true, true), true,
+           "ready local gameplay delivers a queued haptic shot");
+    expect(Haptics::CanDeliverShot(false, true, true, true, true, true), false,
+           "disabled haptics never reach OpenVR");
+    expect(Haptics::CanDeliverShot(true, false, true, true, true, true), false,
+           "failed action update drops pending haptics");
+    expect(Haptics::CanDeliverShot(true, true, false, true, true, true), false,
+           "menu focus drops pending haptics");
+    expect(Haptics::CanDeliverShot(true, true, true, false, true, true), false,
+           "invalid tracking drops pending haptics");
+    expect(Haptics::CanDeliverShot(true, true, true, true, false, true), false,
+           "disconnected firing controller drops pending haptics");
+    expect(Haptics::CanDeliverShot(true, true, true, true, true, false), false,
+           "missing output action drops pending haptics");
 
     std::istringstream portalModeFull("PortalOrientationMode=FullRotation\n");
     const auto fullModeConfig = ParseConfig(portalModeFull, m2Defaults);

@@ -12,6 +12,13 @@ inline Hand OutputHand(bool leftHanded)
     return leftHanded ? Hand::Left : Hand::Right;
 }
 
+inline bool CanDeliverShot(bool enabled, bool actionsReady, bool gameplay,
+                           bool trackingValid, bool controllerValid, bool outputAvailable)
+{
+    return enabled && actionsReady && gameplay && trackingValid &&
+        controllerValid && outputAvailable;
+}
+
 // The server-side fire hook can run independently of the render/update thread.
 // Keep only one notification, and never call the VR runtime from that hook.
 class ShotGate {
