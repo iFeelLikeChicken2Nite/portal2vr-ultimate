@@ -39,18 +39,26 @@ public:
         return true;
     }
 
-    bool Consume()
+    bool Consume(std::chrono::steady_clock::time_point now)
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
         const bool pending = m_Pending;
         m_Pending = false;
-        return pending;
+        if (!pending || (m_HasAttempted &&
+            now - m_LastAttempted < std::chrono::milliseconds(100)))
+            return false;
+        m_LastAttempted = now;
+        m_HasAttempted = true;
+        return true;
     }
+
+    bool Consume() { return Consume(std::chrono::steady_clock::now()); }
 
     void Clear()
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
         m_Pending = false;
+        m_HasLast = false;
     }
 
 private:
@@ -58,6 +66,8 @@ private:
     bool m_Pending = false;
     bool m_HasLast = false;
     std::chrono::steady_clock::time_point m_LastQueued{};
+    bool m_HasAttempted = false;
+    std::chrono::steady_clock::time_point m_LastAttempted{};
 };
 
 } // namespace Haptics

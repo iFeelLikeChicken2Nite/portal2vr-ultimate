@@ -180,7 +180,7 @@ public:
 
 	static inline Hook<tGetModeHeight> hkGetModeHeight;
 	static inline Hook<tDrawSelf> hkDrawSelf;
-	static inline Hook<tClipTransform> hkClipTransform;
+	static inline tClipTransform ClipTransform = nullptr;
 	static inline Hook<tPlayerPortalled> hkPlayerPortalled;
 	static inline Hook<tVGui_GetHudBounds> hkVGui_GetHudBounds;
 	static inline Hook<tVGui_GetPanelBounds> hkVGui_GetPanelBounds;
@@ -262,7 +262,6 @@ public:
 	// Crosshair
 	static int __fastcall dGetModeHeight(void* ecx, void* edx);
 	static int __fastcall dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h, const void* clr, float flApparentZ);
-	static bool dClipTransform(const Vector& point, Vector* pScreen);
 	static void __fastcall dSetBounds(void* ecx, void* edx, int x, int y, int w, int h);
 	static void __fastcall dSetSize(void* ecx, void* edx, int wide, int tall);
 	static void __fastcall dGetScreenSize(void* ecx, void* edx, int& wide, int& tall);

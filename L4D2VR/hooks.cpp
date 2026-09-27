@@ -157,6 +157,8 @@ int Hooks::initSourceHooks()
 
 	LPVOID DrawSelfAddr = (LPVOID)(m_Game->m_Offsets->DrawSelf.address);
 	hkDrawSelf.createHook(DrawSelfAddr, &dDrawSelf);
+	// Projection is called by our HUD hook, but does not need its own detour.
+	ClipTransform = reinterpret_cast<tClipTransform>(m_Game->m_Offsets->ClipTransform.address);
 	
 
 	// Portalling
@@ -737,14 +739,9 @@ int Hooks::dGetModeHeight(void* ecx, void* edx) {
 	return m_VR->m_RenderHeight;
 }
 
-bool Hooks::dClipTransform(const Vector& point, Vector* pScreen)
-{
-	return hkClipTransform.fOriginal(point, pScreen);
-}
-
 bool Hooks::ScreenTransform(const Vector& point, Vector* pScreen, int width, int height)
 {
-	bool retval = hkClipTransform.fOriginal(point, pScreen);
+	bool retval = ClipTransform(point, pScreen);
 
 	pScreen->x = 0.5f * (pScreen->x + 1.0f) * width;
 	pScreen->y = 0.5f * (-pScreen->y + 1.0f) * height;
@@ -762,7 +759,8 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 	int newX = x;
 	int	newY = y;
 
-	if (m_VR->m_IsVREnabled)
+	if (m_VR->m_IsVREnabled && m_VR->m_TrackingOutputValid &&
+		m_VR->m_RightControllerPose.valid)
 	{
 		int windowWidth, windowHeight;
 		m_Game->m_MaterialSystem->GetRenderContext()->GetWindowSize(windowWidth, windowHeight);

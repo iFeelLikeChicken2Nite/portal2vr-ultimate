@@ -529,7 +529,9 @@ void VR::SubmitExperimentalHUDOverlay()
 
 void VR::GetPoseData(vr::TrackedDevicePose_t &poseRaw, TrackedDevicePoseData &poseOut)
 {
-    poseOut.valid = poseRaw.bPoseIsValid;
+    poseOut.valid = poseRaw.bPoseIsValid &&
+        IsUsableTrackedPose(poseRaw.mDeviceToAbsoluteTracking.m,
+                            poseRaw.vVelocity.v, poseRaw.vAngularVelocity.v);
     if (!poseOut.valid) {
         poseOut.TrackedDevicePos = { 0, 0, 0 };
         poseOut.TrackedDeviceVel = { 0, 0, 0 };
@@ -545,7 +547,7 @@ void VR::GetPoseData(vr::TrackedDevicePose_t &poseRaw, TrackedDevicePoseData &po
         QAngle ang;
         QAngle angvel;
         pos = TrackingSpace::OpenVrToSourceMeters({mat.m[0][3], mat.m[1][3], mat.m[2][3]});
-        ang.x = asin(mat.m[1][2]) * (180.0 / 3.141592654);
+        ang.x = asin(std::clamp(mat.m[1][2], -1.0f, 1.0f)) * (180.0 / 3.141592654);
         ang.y = atan2f(mat.m[0][2], mat.m[2][2]) * (180.0 / 3.141592654);
         ang.z = atan2f(-mat.m[1][0], mat.m[1][1]) * (180.0 / 3.141592654);
         vel = TrackingSpace::OpenVrToSourceMeters({poseRaw.vVelocity.v[0],
@@ -718,13 +720,16 @@ void VR::QueuePortalShotHaptic()
 
 void VR::DispatchPortalShotHaptic(bool actionsReady)
 {
-    if (!m_PortalShotHapticGate.Consume())
-        return;
     const bool gameplay = m_IsVREnabled && m_Game->m_EngineClient->IsInGame() &&
         !m_Game->m_VguiSurface->IsCursorVisible();
     if (!Haptics::CanDeliverShot(m_Config.experimentalPortalShotHaptics, actionsReady,
             gameplay, m_TrackingOutputValid, m_RightControllerPose.valid,
-            m_HapticOutputsAvailable))
+            m_HapticOutputsAvailable)) {
+        m_PortalShotHapticGate.Clear();
+        return;
+    }
+    // Only an eligible attempt starts the pulse-spacing window.
+    if (!m_PortalShotHapticGate.Consume())
         return;
     const auto hand = Haptics::OutputHand(m_LeftHanded);
     const auto action = hand == Haptics::Hand::Left ? m_HapticLeft : m_HapticRight;

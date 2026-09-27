@@ -152,6 +152,7 @@ public:
             { "EyeAngles", &EyeAngles, true }, { "EyePosition", &EyePosition, true },
             { "Weapon_ShootPosition", &Weapon_ShootPosition, true },
             { "DrawSelf", &DrawSelf, true },
+            { "ClipTransform", &ClipTransform, true },
             { "UpdateObject", &UpdateObject, true }, { "UpdateObjectVM", &UpdateObjectVM, true },
             { "GetDefaultFOV", &GetDefaultFOV, true }, { "GetFOV", &GetFOV, true },
             { "GetViewModelFOV", &GetViewModelFOV, true },

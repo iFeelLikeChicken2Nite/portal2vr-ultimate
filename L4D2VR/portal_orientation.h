@@ -265,6 +265,8 @@ public:
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
         m_Pending.clear();
+        // Focus/tracking loss also ends the duplicate window of the last render frame.
+        m_LastPortalKey = 0;
     }
 
     void Reset()

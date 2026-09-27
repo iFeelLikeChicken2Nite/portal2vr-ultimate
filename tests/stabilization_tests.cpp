@@ -142,6 +142,13 @@ int main()
     portalEvents.CancelPending();
     expect(portalEvents.Drain(2).applied == 0, true,
            "recenter or tracking loss cancels a pending portal event");
+    PortalOrientation::Coordinator resumedEvents;
+    resumedEvents.SetMode(PortalOrientation::Mode::FullRotation);
+    resumedEvents.Queue(1, 30, *turn);
+    resumedEvents.Drain(1);
+    resumedEvents.CancelPending();
+    expect(resumedEvents.Queue(1, 30, *turn) == PortalOrientation::QueueResult::Queued,
+           true, "focus loss clears old portal duplicate window");
     PortalOrientation::RigAnchor portalRig;
     portalRig.Reanchor({10,20,30}, {10,20,30});
     const Vector afterPortalHead = portalRig.MapHmd({11,20,30}, *turn);
@@ -149,10 +156,10 @@ int main()
                      "head displacement after portal follows linked world heading");
     expectVectorNear(portalRig.MapRelative({0.2f,0,0}, *turn), {0,0.2f,0},
                      "hand displacement uses same portal mapping as head");
-    portalRig.Reanchor({0,0,0}, afterPortalHead);
-    expectVectorNear(portalRig.MapHmd({0,0,0}, *turn), afterPortalHead,
-                     "recenter changes tracking anchor without moving the virtual head");
-    expectVectorNear(portalRig.MapHmd({1,0,0}, *turn), {10,22,30},
+    portalRig.Reanchor({0,0,0}, {0,0,0});
+    expectVectorNear(portalRig.MapHmd({0,0,0}, *turn), {0,0,0},
+                     "explicit recenter resets the virtual head offset");
+    expectVectorNear(portalRig.MapHmd({1,0,0}, *turn), {0,1,0},
                      "post-recenter physical delta retains portal orientation");
 
     UiInput::MenuPointerState menuMouse;
@@ -517,8 +524,18 @@ int main()
            "shot at cooldown boundary is accepted");
     shotGate.Clear();
     expect(shotGate.Consume(), false, "menu or tracking loss discards pending shot");
+    expect(shotGate.Queue(shotStart + std::chrono::milliseconds(101)), true,
+           "discarded shot cannot suppress the first valid shot after recovery");
+    shotGate.Clear();
     expect(shotGate.Queue(shotStart + std::chrono::milliseconds(200)), true,
            "new shot after discarded event and cooldown is accepted");
+    Haptics::ShotGate delayedShots;
+    delayedShots.Queue(shotStart);
+    expect(delayedShots.Consume(shotStart + std::chrono::milliseconds(500)), true,
+           "delayed first shot may deliver after a stalled frame");
+    delayedShots.Queue(shotStart + std::chrono::milliseconds(501));
+    expect(delayedShots.Consume(shotStart + std::chrono::milliseconds(501)), false,
+           "a second pulse cannot follow immediately after a delayed pulse");
     expect(Haptics::OutputHand(false) == Haptics::Hand::Right, true,
            "right-handed aiming vibrates physical right hand");
     expect(Haptics::OutputHand(true) == Haptics::Hand::Left, true,
@@ -545,6 +562,26 @@ int main()
            "missing local player cannot qualify as shot source");
     expect(Haptics::IsLocalShot(1, -1), false,
            "weapon without a resolved owner cannot qualify as shot source");
+
+    float poseMatrix[3][4] = {{1,0,0,0}, {0,1,0,0}, {0,0,1,0}};
+    float poseVelocity[3] = {0,0,0};
+    float poseAngularVelocity[3] = {0,0,0};
+    expect(IsUsableTrackedPose(poseMatrix, poseVelocity, poseAngularVelocity), true,
+           "finite tracked pose is usable");
+    poseMatrix[0][3] = std::numeric_limits<float>::quiet_NaN();
+    expect(IsUsableTrackedPose(poseMatrix, poseVelocity, poseAngularVelocity), false,
+           "nonfinite tracking position is rejected");
+    poseMatrix[0][3] = 0;
+    poseMatrix[1][2] = 1.01f;
+    expect(IsUsableTrackedPose(poseMatrix, poseVelocity, poseAngularVelocity), false,
+           "out-of-domain tracking rotation is rejected");
+    poseMatrix[1][2] = 1.00001f;
+    expect(IsUsableTrackedPose(poseMatrix, poseVelocity, poseAngularVelocity), true,
+           "small matrix rounding error is accepted for clamped asin");
+    poseMatrix[1][2] = 0;
+    poseAngularVelocity[2] = std::numeric_limits<float>::infinity();
+    expect(IsUsableTrackedPose(poseMatrix, poseVelocity, poseAngularVelocity), false,
+           "nonfinite angular velocity is rejected");
 
     std::istringstream portalModeFull("PortalOrientationMode=FullRotation\n");
     const auto fullModeConfig = ParseConfig(portalModeFull, m2Defaults);
