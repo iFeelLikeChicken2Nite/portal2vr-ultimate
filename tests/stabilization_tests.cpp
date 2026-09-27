@@ -537,6 +537,14 @@ int main()
            "disconnected firing controller drops pending haptics");
     expect(Haptics::CanDeliverShot(true, true, true, true, true, false), false,
            "missing output action drops pending haptics");
+    expect(Haptics::IsLocalShot(1, 1), true,
+           "local portal-gun owner qualifies as shot source");
+    expect(Haptics::IsLocalShot(1, 2), false,
+           "another player's portal gun cannot vibrate the local hand");
+    expect(Haptics::IsLocalShot(0, 0), false,
+           "missing local player cannot qualify as shot source");
+    expect(Haptics::IsLocalShot(1, -1), false,
+           "weapon without a resolved owner cannot qualify as shot source");
 
     std::istringstream portalModeFull("PortalOrientationMode=FullRotation\n");
     const auto fullModeConfig = ParseConfig(portalModeFull, m2Defaults);

@@ -19,6 +19,11 @@ inline bool CanDeliverShot(bool enabled, bool actionsReady, bool gameplay,
         controllerValid && outputAvailable;
 }
 
+inline bool IsLocalShot(int localIndex, int ownerIndex)
+{
+    return localIndex > 0 && ownerIndex == localIndex;
+}
+
 // The server-side fire hook can run independently of the render/update thread.
 // Keep only one notification, and never call the VR runtime from that hook.
 class ShotGate {
