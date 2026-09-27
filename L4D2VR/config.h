@@ -20,6 +20,9 @@ struct ConfigSnapshot {
     RoomscaleMotion::Mode roomscaleMode = RoomscaleMotion::Mode::Off;
     PortalOrientation::Mode portalOrientationMode = PortalOrientation::Mode::LegacyYaw;
     bool experimentalHudOverlay = false;
+    bool experimentalPortalShotHaptics = false;
+    float portalShotHapticAmplitude = 0.35f;
+    float portalShotHapticDurationSeconds = 0.05f;
     float hudDistanceMeters = 1.3f;
     float hudWidthMeters = 1.4f;
     float hudVerticalOffsetMeters = -0.15f;
@@ -142,6 +145,10 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
             result.errors.push_back("PortalOrientationMode is invalid; keeping previous value");
     }
     readBool("ExperimentalHUDOverlay", result.value.experimentalHudOverlay);
+    readBool("ExperimentalPortalShotHaptics", result.value.experimentalPortalShotHaptics);
+    readFloat("PortalShotHapticAmplitude", result.value.portalShotHapticAmplitude, 0.0f, 1.0f);
+    readFloat("PortalShotHapticDurationSeconds", result.value.portalShotHapticDurationSeconds,
+              0.01f, 0.15f);
     readFloat("HUDDistanceMeters", result.value.hudDistanceMeters, 0.6f, 3.0f);
     readFloat("HUDWidthMeters", result.value.hudWidthMeters, 0.5f, 2.5f);
     readFloat("HUDVerticalOffsetMeters", result.value.hudVerticalOffsetMeters, -0.6f, 0.6f);

@@ -6,6 +6,7 @@
 #include "../L4D2VR/roomscale_motion.h"
 #include "../L4D2VR/portal_orientation.h"
 #include "../L4D2VR/ui_input.h"
+#include "../L4D2VR/haptics.h"
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -479,6 +480,50 @@ int main()
     expectNear(hudFallback.value.hudWidthMeters, 1.4f, "invalid HUD width retains prior");
     expectNear(hudFallback.value.hudVerticalOffsetMeters, -0.25f,
                "invalid HUD vertical offset retains prior");
+    expect(m2Defaults.experimentalPortalShotHaptics, false,
+           "unverified portal-shot haptics default off");
+    std::istringstream hapticOptions("ExperimentalPortalShotHaptics=true\n"
+                                    "PortalShotHapticAmplitude=0.6\n"
+                                    "PortalShotHapticDurationSeconds=0.08\n");
+    const auto hapticConfig = ParseConfig(hapticOptions, m2Defaults);
+    expect(hapticConfig.errors.empty(), true, "bounded portal-shot haptic settings parse");
+    expect(hapticConfig.value.experimentalPortalShotHaptics, true,
+           "haptic output requires explicit opt-in");
+    expectNear(hapticConfig.value.portalShotHapticAmplitude, 0.6f, "haptic amplitude parsed");
+    expectNear(hapticConfig.value.portalShotHapticDurationSeconds, 0.08f,
+               "haptic duration parsed");
+    std::istringstream hapticBad("ExperimentalPortalShotHaptics=maybe\n"
+                                "PortalShotHapticAmplitude=1.2\n"
+                                "PortalShotHapticDurationSeconds=nan\n");
+    const auto hapticFallback = ParseConfig(hapticBad, hapticConfig.value);
+    expect(hapticFallback.errors.size() == 3, true, "invalid haptic fields are diagnosed");
+    expect(hapticFallback.value.experimentalPortalShotHaptics, true,
+           "invalid haptic toggle retains prior value");
+    expectNear(hapticFallback.value.portalShotHapticAmplitude, 0.6f,
+               "out-of-range amplitude retains prior value");
+    expectNear(hapticFallback.value.portalShotHapticDurationSeconds, 0.08f,
+               "nonfinite duration retains prior value");
+
+    Haptics::ShotGate shotGate;
+    const auto shotStart = std::chrono::steady_clock::time_point{} + std::chrono::seconds(1);
+    expect(shotGate.Queue(shotStart), true, "first shot queues one pulse");
+    expect(shotGate.Queue(shotStart + std::chrono::milliseconds(20)), false,
+           "duplicate callback cannot queue a second pending pulse");
+    expect(shotGate.Consume(), true, "queued shot is delivered once");
+    expect(shotGate.Consume(), false, "consumed shot cannot be delivered twice");
+    expect(shotGate.Queue(shotStart + std::chrono::milliseconds(50)), false,
+           "repeat shot inside 100 ms cooldown is suppressed");
+    expect(shotGate.Queue(shotStart + std::chrono::milliseconds(100)), true,
+           "shot at cooldown boundary is accepted");
+    shotGate.Clear();
+    expect(shotGate.Consume(), false, "menu or tracking loss discards pending shot");
+    expect(shotGate.Queue(shotStart + std::chrono::milliseconds(200)), true,
+           "new shot after discarded event and cooldown is accepted");
+    expect(Haptics::OutputHand(false) == Haptics::Hand::Right, true,
+           "right-handed aiming vibrates physical right hand");
+    expect(Haptics::OutputHand(true) == Haptics::Hand::Left, true,
+           "left-handed aiming vibrates physical left hand");
+
     std::istringstream portalModeFull("PortalOrientationMode=FullRotation\n");
     const auto fullModeConfig = ParseConfig(portalModeFull, m2Defaults);
     expect(fullModeConfig.value.portalOrientationMode == PortalOrientation::Mode::FullRotation,
