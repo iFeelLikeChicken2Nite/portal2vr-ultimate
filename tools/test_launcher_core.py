@@ -1,9 +1,11 @@
 """Pure configuration and file operations for the local test launcher."""
 
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 from pathlib import Path
+import tempfile
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,22 @@ CHECKLIST = (
     Check("M6", "m6_perf", "Zapisano medianę i wysokie percentyle CPU/GPU", "mirror"),
 )
 
+SOURCE_TO_TARGET = (
+    ("Release/d3d9.dll", "bin/d3d9.dll"),
+    ("thirdparty/openvr/bin/win32/openvr_api.dll", "bin/openvr_api.dll"),
+    ("L4D2VR/config.txt", "VR/config.txt"),
+    ("L4D2VR/manifest.vrmanifest", "VR/manifest.vrmanifest"),
+    ("L4D2VR/portal2vr_capsule_main.png", "VR/portal2vr_capsule_main.png"),
+    ("L4D2VR/SteamVRActionManifest/action_manifest.json",
+     "VR/SteamVRActionManifest/action_manifest.json"),
+    ("L4D2VR/SteamVRActionManifest/bindings_knuckles.json",
+     "VR/SteamVRActionManifest/bindings_knuckles.json"),
+    ("L4D2VR/SteamVRActionManifest/bindings_oculus_touch.json",
+     "VR/SteamVRActionManifest/bindings_oculus_touch.json"),
+    ("L4D2VR/SteamVRActionManifest/bindings_vive_cosmos_controller.json",
+     "VR/SteamVRActionManifest/bindings_vive_cosmos_controller.json"),
+)
+
 
 def render_config(template: str, profile: str) -> str:
     """Apply one known test profile to the versioned config template."""
@@ -108,6 +126,7 @@ def load_state(path: Path) -> dict:
         "game_dir": r"D:\SteamLibrary\steamapps\common\Portal 2",
         "steam_exe": r"C:\Program Files (x86)\Steam\steam.exe",
         "managed_files": {},
+        "installed_game_dir": "",
     }
     if not path.exists():
         return state
@@ -118,7 +137,8 @@ def load_state(path: Path) -> dict:
     if not isinstance(loaded, dict):
         raise ValueError("Launcher state must be a JSON object")
     for key, expected in (("checks", list), ("notes", str), ("profile", str),
-                          ("game_dir", str), ("steam_exe", str), ("managed_files", dict)):
+                          ("game_dir", str), ("steam_exe", str), ("managed_files", dict),
+                          ("installed_game_dir", str)):
         if key in loaded:
             if not isinstance(loaded[key], expected):
                 raise ValueError(f"Invalid launcher state field: {key}")
@@ -138,3 +158,146 @@ def save_state(path: Path, state: dict) -> None:
     temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n",
                          encoding="utf-8")
     os.replace(temporary, path)
+
+
+def _digest(contents: bytes) -> str:
+    return hashlib.sha256(contents).hexdigest()
+
+
+def _safe_target(game: Path, relative: str) -> Path:
+    target = game / relative
+    if target.is_symlink() or not target.resolve().is_relative_to(game.resolve()):
+        raise ValueError(f"Unsafe game target: {target}")
+    return target
+
+
+def plan_install(repo: Path, game: Path, profile: str) -> dict[Path, bytes]:
+    """Read exact source payloads without writing to the game."""
+    if not (game / "portal2.exe").is_file() or not (game / "bin").is_dir():
+        raise FileNotFoundError(f"Not a Portal 2 installation: {game}")
+    planned: dict[Path, bytes] = {}
+    for source_relative, target_relative in SOURCE_TO_TARGET:
+        source = repo / source_relative
+        if not source.is_file():
+            raise FileNotFoundError(f"Missing launcher source: {source}")
+        payload = source.read_bytes()
+        if target_relative == "VR/config.txt":
+            payload = render_config(payload.decode("utf-8"), profile).encode("utf-8")
+        planned[_safe_target(game, target_relative)] = payload
+    return planned
+
+
+def validate_launch_paths(repo: Path, game: Path, steam: Path) -> None:
+    if not steam.is_file() or steam.name.lower() != "steam.exe":
+        raise FileNotFoundError(f"Steam executable not found: {steam}")
+    plan_install(repo, game, "baseline")
+
+
+def build_steam_command(steam: Path) -> list[str]:
+    return [str(steam), "-applaunch", "620", "-insecure"]
+
+
+def _write_payload(target: Path, payload: bytes) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(prefix=target.name + ".portal2vr-", suffix=".tmp",
+                                     dir=target.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+    try:
+        temporary.write_bytes(payload)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _remove_empty_vr_directories(game: Path) -> None:
+    for directory in (game / "VR/SteamVRActionManifest", game / "VR"):
+        try:
+            directory.rmdir()
+        except (FileNotFoundError, OSError):
+            pass
+
+
+def _validate_managed(state: dict, game: Path) -> dict[str, str]:
+    managed = state["managed_files"]
+    allowed = {target for _, target in SOURCE_TO_TARGET}
+    if any(relative not in allowed for relative in managed):
+        raise ValueError("Launcher state contains an unexpected managed path")
+    if managed and state["installed_game_dir"] != str(game.resolve()):
+        raise RuntimeError("Test files belong to another game directory; restore there first")
+    return managed
+
+
+def stage_install(repo: Path, game: Path, state_path: Path, profile: str) -> list[Path]:
+    """Stage exact mod files, refusing unknown/modified targets and rolling back failures."""
+    planned = plan_install(repo, game, profile)
+    state = load_state(state_path)
+    managed = _validate_managed(state, game)
+    if managed.keys() - {target.relative_to(game).as_posix() for target in planned}:
+        raise RuntimeError("Launcher version changed its file set; restore first")
+    previous: dict[Path, bytes | None] = {}
+    for target in planned:
+        relative = target.relative_to(game).as_posix()
+        if target.is_symlink():
+            raise ValueError(f"Refusing symlink: {target}")
+        if target.exists():
+            contents = target.read_bytes()
+            if relative not in managed:
+                raise FileExistsError(f"Refusing to overwrite unmanaged file: {target}")
+            if _digest(contents) != managed[relative]:
+                raise RuntimeError(f"Managed file changed outside launcher: {target}")
+            previous[target] = contents
+        else:
+            previous[target] = None
+    written: list[Path] = []
+    try:
+        for target, payload in planned.items():
+            if previous[target] == payload:
+                continue
+            written.append(target)
+            _write_payload(target, payload)
+        state["managed_files"] = {
+            target.relative_to(game).as_posix(): _digest(payload)
+            for target, payload in planned.items()
+        }
+        state["installed_game_dir"] = str(game.resolve())
+        state["game_dir"] = str(game)
+        state["profile"] = profile
+        save_state(state_path, state)
+    except Exception as error:
+        rollback_errors = []
+        for target in reversed(written):
+            try:
+                if previous[target] is None:
+                    target.unlink(missing_ok=True)
+                else:
+                    _write_payload(target, previous[target])
+            except OSError as rollback_error:
+                rollback_errors.append(f"{target}: {rollback_error}")
+        _remove_empty_vr_directories(game)
+        if rollback_errors:
+            raise RuntimeError("Staging failed and rollback is incomplete: " +
+                               "; ".join(rollback_errors)) from error
+        raise
+    return list(planned)
+
+
+def restore_install(game: Path, state_path: Path) -> list[Path]:
+    """Remove only unchanged files previously staged by this launcher."""
+    state = load_state(state_path)
+    managed = _validate_managed(state, game)
+    targets: list[Path] = []
+    for relative, digest in managed.items():
+        target = _safe_target(game, relative)
+        if target.exists() and _digest(target.read_bytes()) != digest:
+            raise RuntimeError(f"Managed file changed outside launcher: {target}")
+        targets.append(target)
+    removed: list[Path] = []
+    for target in targets:
+        if target.exists():
+            target.unlink()
+            removed.append(target)
+    _remove_empty_vr_directories(game)
+    state["managed_files"] = {}
+    state["installed_game_dir"] = ""
+    save_state(state_path, state)
+    return removed

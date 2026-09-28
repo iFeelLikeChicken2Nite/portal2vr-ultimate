@@ -3,6 +3,7 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from tools import test_launcher_core as core
 
@@ -57,6 +58,136 @@ class StateTests(unittest.TestCase):
             self.assertEqual(loaded["checks"], ["m1_start"])
             self.assertEqual(loaded["notes"], "laser drifts after recenter")
             self.assertEqual(loaded["profile"], "standing")
+
+
+def fixture_install(root: Path) -> tuple[Path, Path, Path]:
+    repo = root / "repo"
+    game = root / "Portal 2"
+    steam = root / "Steam" / "steam.exe"
+    sources = {
+        "Release/d3d9.dll": b"test-d3d9",
+        "thirdparty/openvr/bin/win32/openvr_api.dll": b"test-openvr",
+        "L4D2VR/config.txt": TEMPLATE.encode("utf-8"),
+        "L4D2VR/manifest.vrmanifest": b"{}",
+        "L4D2VR/portal2vr_capsule_main.png": b"test-image",
+        "L4D2VR/SteamVRActionManifest/action_manifest.json": b"{}",
+        "L4D2VR/SteamVRActionManifest/bindings_knuckles.json": b"{}",
+        "L4D2VR/SteamVRActionManifest/bindings_oculus_touch.json": b"{}",
+        "L4D2VR/SteamVRActionManifest/bindings_vive_cosmos_controller.json": b"{}",
+    }
+    for relative, contents in sources.items():
+        target = repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(contents)
+    (game / "bin").mkdir(parents=True)
+    (game / "portal2.exe").write_bytes(b"test-game")
+    steam.parent.mkdir(parents=True)
+    steam.write_bytes(b"test-steam")
+    return repo, game, steam
+
+
+class InstallTests(unittest.TestCase):
+    def test_stage_and_restore_only_launcher_files(self):
+        with TemporaryDirectory() as temporary:
+            repo, game, steam = fixture_install(Path(temporary))
+            state_path = Path(temporary) / "state.json"
+            core.validate_launch_paths(repo, game, steam)
+            installed = core.stage_install(repo, game, state_path, "full_rotation")
+            self.assertEqual((game / "bin/d3d9.dll").read_bytes(), b"test-d3d9")
+            self.assertEqual((game / "bin/openvr_api.dll").read_bytes(), b"test-openvr")
+            self.assertIn("PortalOrientationMode=FullRotation",
+                          (game / "VR/config.txt").read_text(encoding="utf-8"))
+            self.assertEqual(len(installed), 9)
+            removed = core.restore_install(game, state_path)
+            self.assertEqual(len(removed), 9)
+            self.assertFalse((game / "bin/d3d9.dll").exists())
+            self.assertFalse((game / "VR/config.txt").exists())
+            self.assertTrue((game / "portal2.exe").exists())
+
+    def test_unmanaged_dll_is_never_overwritten(self):
+        with TemporaryDirectory() as temporary:
+            repo, game, _ = fixture_install(Path(temporary))
+            state_path = Path(temporary) / "state.json"
+            (game / "bin/d3d9.dll").write_bytes(b"user-dll")
+            with self.assertRaises(FileExistsError):
+                core.stage_install(repo, game, state_path, "baseline")
+            self.assertEqual((game / "bin/d3d9.dll").read_bytes(), b"user-dll")
+            self.assertFalse((game / "VR/config.txt").exists())
+
+    def test_user_edited_managed_config_is_preserved(self):
+        with TemporaryDirectory() as temporary:
+            repo, game, _ = fixture_install(Path(temporary))
+            state_path = Path(temporary) / "state.json"
+            core.stage_install(repo, game, state_path, "baseline")
+            config = game / "VR/config.txt"
+            config.write_text("user-edited\n", encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                core.stage_install(repo, game, state_path, "hud")
+            with self.assertRaises(RuntimeError):
+                core.restore_install(game, state_path)
+            self.assertEqual(config.read_text(encoding="utf-8"), "user-edited\n")
+
+    def test_missing_source_or_steam_blocks_before_staging(self):
+        with TemporaryDirectory() as temporary:
+            repo, game, steam = fixture_install(Path(temporary))
+            steam.unlink()
+            with self.assertRaises(FileNotFoundError):
+                core.validate_launch_paths(repo, game, steam)
+            steam.write_bytes(b"test-steam")
+            (repo / "thirdparty/openvr/bin/win32/openvr_api.dll").unlink()
+            with self.assertRaises(FileNotFoundError):
+                core.validate_launch_paths(repo, game, steam)
+            self.assertFalse((game / "VR").exists())
+
+    def test_steam_launch_command_includes_insecure(self):
+        steam = Path(r"C:\Program Files (x86)\Steam\steam.exe")
+        self.assertEqual(core.build_steam_command(steam),
+                         [str(steam), "-applaunch", "620", "-insecure"])
+
+    def test_failed_stage_rolls_back_new_files(self):
+        with TemporaryDirectory() as temporary:
+            repo, game, _ = fixture_install(Path(temporary))
+            state_path = Path(temporary) / "state.json"
+            real_write = core._write_payload
+            calls = 0
+
+            def fail_after_second_write(target, payload):
+                nonlocal calls
+                calls += 1
+                real_write(target, payload)
+                if calls == 2:
+                    raise OSError("simulated copy failure")
+
+            with patch.object(core, "_write_payload", side_effect=fail_after_second_write):
+                with self.assertRaisesRegex(OSError, "simulated copy failure"):
+                    core.stage_install(repo, game, state_path, "baseline")
+            self.assertFalse((game / "bin/d3d9.dll").exists())
+            self.assertFalse((game / "bin/openvr_api.dll").exists())
+            self.assertFalse((game / "VR").exists())
+            self.assertFalse(state_path.exists())
+
+    def test_staging_does_not_overwrite_unrelated_temp_named_file(self):
+        with TemporaryDirectory() as temporary:
+            repo, game, _ = fixture_install(Path(temporary))
+            unrelated = game / "bin/d3d9.dll.portal2vr-tmp"
+            unrelated.write_bytes(b"user-temporary-file")
+            core.stage_install(repo, game, Path(temporary) / "state.json", "baseline")
+            self.assertEqual(unrelated.read_bytes(), b"user-temporary-file")
+
+    def test_corrupted_manifest_cannot_delete_outside_game(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, game, _ = fixture_install(root)
+            state_path = root / "state.json"
+            outside = root / "outside.txt"
+            outside.write_bytes(b"keep")
+            core.stage_install(repo, game, state_path, "baseline")
+            state = core.load_state(state_path)
+            state["managed_files"]["../../outside.txt"] = core._digest(b"keep")
+            core.save_state(state_path, state)
+            with self.assertRaises(ValueError):
+                core.restore_install(game, state_path)
+            self.assertEqual(outside.read_bytes(), b"keep")
 
 
 if __name__ == "__main__":
