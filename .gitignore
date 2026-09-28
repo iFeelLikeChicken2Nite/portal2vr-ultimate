@@ -402,6 +402,8 @@ FodyWeavers.xsd
 /portal2vr.log
 /tools/.launcher-state.json
 /tools/.launcher-state.json.tmp
+/tools/.launcher-state.json.lock
+/tools/.launcher-backups/
 
 # Project notes are maintained locally, not published to origin.
 /docs/**/*.md

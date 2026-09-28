@@ -1,6 +1,7 @@
 """Host-only tests for the temporary Portal2VR test launcher."""
 
 import unittest
+import importlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -21,6 +22,13 @@ TEMPLATE = (
 
 
 class ProfileTests(unittest.TestCase):
+    def test_gui_import_has_no_window_side_effect_and_checklist_ids_are_unique(self):
+        gui = importlib.import_module("tools.test_launcher")
+        self.assertTrue(callable(gui.main))
+        ids = [item.id for item in core.CHECKLIST]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertTrue(all(item.profile in core.PROFILES for item in core.CHECKLIST))
+
     def test_baseline_resets_experiments_without_changing_other_settings(self):
         template = TEMPLATE.replace("RoomscaleMode=Off", "RoomscaleMode=Observe")
         template = template.replace("ExperimentalHUDOverlay=false", "ExperimentalHUDOverlay=true")
@@ -58,6 +66,20 @@ class StateTests(unittest.TestCase):
             self.assertEqual(loaded["checks"], ["m1_start"])
             self.assertEqual(loaded["notes"], "laser drifts after recenter")
             self.assertEqual(loaded["profile"], "standing")
+
+    def test_saving_stale_ui_state_preserves_install_ownership(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, game, _ = fixture_install(root)
+            state_path = root / "state.json"
+            stale = core.load_state(state_path)
+            core.stage_install(repo, game, state_path, "baseline")
+            stale["notes"] = "manual observation"
+            core.save_preferences(state_path, stale)
+            current = core.load_state(state_path)
+            self.assertEqual(current["notes"], "manual observation")
+            self.assertEqual(len(current["managed_files"]), 9)
+            self.assertTrue(current["backup_id"])
 
 
 def fixture_install(root: Path) -> tuple[Path, Path, Path]:
@@ -104,15 +126,133 @@ class InstallTests(unittest.TestCase):
             self.assertFalse((game / "VR/config.txt").exists())
             self.assertTrue((game / "portal2.exe").exists())
 
-    def test_unmanaged_dll_is_never_overwritten(self):
+    def test_original_files_are_backed_up_and_restored(self):
         with TemporaryDirectory() as temporary:
             repo, game, _ = fixture_install(Path(temporary))
             state_path = Path(temporary) / "state.json"
             (game / "bin/d3d9.dll").write_bytes(b"user-dll")
-            with self.assertRaises(FileExistsError):
-                core.stage_install(repo, game, state_path, "baseline")
+            (game / "VR").mkdir()
+            (game / "VR/config.txt").write_bytes(b"user-config")
+            core.stage_install(repo, game, state_path, "baseline")
+            state = core.load_state(state_path)
+            backup = state_path.parent / ".launcher-backups" / state["backup_id"]
+            self.assertEqual((backup / "bin/d3d9.dll").read_bytes(), b"user-dll")
+            self.assertEqual((backup / "VR/config.txt").read_bytes(), b"user-config")
+            self.assertEqual((game / "bin/d3d9.dll").read_bytes(), b"test-d3d9")
+            core.restore_install(game, state_path)
             self.assertEqual((game / "bin/d3d9.dll").read_bytes(), b"user-dll")
-            self.assertFalse((game / "VR/config.txt").exists())
+            self.assertEqual((game / "VR/config.txt").read_bytes(), b"user-config")
+            self.assertFalse((game / "bin/openvr_api.dll").exists())
+            self.assertTrue((backup / "bin/d3d9.dll").exists())
+
+    def test_corrupt_backup_blocks_restore_without_changing_game(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, game, _ = fixture_install(root)
+            state_path = root / "state.json"
+            (game / "bin/d3d9.dll").write_bytes(b"user-dll")
+            core.stage_install(repo, game, state_path, "baseline")
+            state = core.load_state(state_path)
+            backup = root / ".launcher-backups" / state["backup_id"]
+            (backup / "bin/d3d9.dll").write_bytes(b"corrupt")
+            with self.assertRaisesRegex(RuntimeError, "Backup.*changed"):
+                core.restore_install(game, state_path)
+            self.assertEqual((game / "bin/d3d9.dll").read_bytes(), b"test-d3d9")
+
+    def test_profile_change_preserves_first_original_backup(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, game, _ = fixture_install(root)
+            state_path = root / "state.json"
+            (game / "VR").mkdir()
+            (game / "VR/config.txt").write_bytes(b"user-config")
+            core.stage_install(repo, game, state_path, "baseline")
+            first_id = core.load_state(state_path)["backup_id"]
+            core.stage_install(repo, game, state_path, "hud")
+            self.assertEqual(core.load_state(state_path)["backup_id"], first_id)
+            core.restore_install(game, state_path)
+            self.assertEqual((game / "VR/config.txt").read_bytes(), b"user-config")
+
+    def test_invalid_backup_identifier_cannot_escape_backup_root(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, game, _ = fixture_install(root)
+            state_path = root / "state.json"
+            core.stage_install(repo, game, state_path, "baseline")
+            state = core.load_state(state_path)
+            state["backup_id"] = "../../outside"
+            core.save_state(state_path, state)
+            with self.assertRaises(ValueError):
+                core.restore_install(game, state_path)
+
+    def test_incomplete_managed_file_state_refuses_restore(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, game, _ = fixture_install(root)
+            state_path = root / "state.json"
+            core.stage_install(repo, game, state_path, "baseline")
+            state = core.load_state(state_path)
+            state["managed_files"].pop("bin/d3d9.dll")
+            core.save_state(state_path, state)
+            with self.assertRaisesRegex(ValueError, "incomplete"):
+                core.restore_install(game, state_path)
+            self.assertTrue((game / "bin/d3d9.dll").exists())
+
+    def test_stage_refuses_a_concurrent_transaction(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, game, _ = fixture_install(root)
+            state_path = root / "state.json"
+            with core._transaction_lock(state_path):
+                with self.assertRaisesRegex(RuntimeError, "in progress"):
+                    core.stage_install(repo, game, state_path, "baseline")
+            self.assertFalse((game / "bin/d3d9.dll").exists())
+
+    def test_failed_restore_rolls_back_to_staged_files(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, game, _ = fixture_install(root)
+            state_path = root / "state.json"
+            (game / "bin/d3d9.dll").write_bytes(b"user-dll")
+            core.stage_install(repo, game, state_path, "baseline")
+            real_copy = core._copy_backup
+
+            def fail_after_copy(source, target):
+                real_copy(source, target)
+                raise OSError("simulated restore failure")
+
+            with patch.object(core, "_copy_backup", side_effect=fail_after_copy):
+                with self.assertRaisesRegex(OSError, "simulated restore failure"):
+                    core.restore_install(game, state_path)
+            self.assertEqual((game / "bin/d3d9.dll").read_bytes(), b"test-d3d9")
+            self.assertEqual((game / "bin/openvr_api.dll").read_bytes(), b"test-openvr")
+            self.assertTrue(core.load_state(state_path)["managed_files"])
+
+    def test_failed_stage_restores_original_files_and_retains_backup(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, game, _ = fixture_install(root)
+            state_path = root / "state.json"
+            (game / "bin/d3d9.dll").write_bytes(b"user-dll")
+            real_write = core._write_payload
+            calls = 0
+
+            def fail_after_second_write(target, payload):
+                nonlocal calls
+                calls += 1
+                real_write(target, payload)
+                if calls == 2:
+                    raise OSError("simulated copy failure")
+
+            with patch.object(core, "_write_payload", side_effect=fail_after_second_write):
+                with self.assertRaisesRegex(OSError, "simulated copy failure"):
+                    core.stage_install(repo, game, state_path, "baseline")
+            self.assertEqual((game / "bin/d3d9.dll").read_bytes(), b"user-dll")
+            self.assertFalse((game / "bin/openvr_api.dll").exists())
+            self.assertFalse(state_path.exists())
+            backups = list((root / ".launcher-backups").glob("*/bin/d3d9.dll"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_bytes(), b"user-dll")
 
     def test_user_edited_managed_config_is_preserved(self):
         with TemporaryDirectory() as temporary:
