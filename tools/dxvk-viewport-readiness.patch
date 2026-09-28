@@ -1,0 +1,13 @@
+diff --git a/src/d3d9/d3d9_device.cpp b/src/d3d9/d3d9_device.cpp
+index b4bbd4ae..2d93fab1 100644
+--- a/src/d3d9/d3d9_device.cpp
++++ b/src/d3d9/d3d9_device.cpp
+@@ -27,3 +27,4 @@
+ #include "L4D2VR/game.h"
+ #include "L4D2VR/vr.h"
++#include "L4D2VR/viewport_readiness.h"
+ #include "L4D2VR/sdk/sdk.h"
+@@ -1687,2 +1688,2 @@
+-    if (g_Game && !g_Game->m_EngineClient->IsInGame())
++    if (Portal2VRViewport::CanOverrideMenuViewport(g_Game))
+     {

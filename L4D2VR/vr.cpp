@@ -456,11 +456,14 @@ void VR::SubmitVRTextures()
         if (!m_BlankTexture)
             CreateVRTextures();
 
-        if (!vr::VROverlay()->IsOverlayVisible(m_MainMenuHandle))
+        if (m_MenuOverlayPlacement.ShouldAttempt(
+                vr::VROverlay()->IsOverlayVisible(m_MainMenuHandle), m_HmdPose.valid))
             RepositionOverlays();
 
         vr::VRTextureBounds_t bounds{ 0, 0, 1, 1 };
-        if (m_Game->m_EngineClient->IsInGame())
+        const bool inGame = m_Game->m_EngineClient->IsInGame();
+        vr::EVROverlayError aspectError = vr::VROverlayError_None;
+        if (inGame)
         {
             // menu only renders to the window portion of the texture. Until we figure out a proper fix,
             // as a workaround only show that portion of the texture
@@ -471,27 +474,38 @@ void VR::SubmitVRTextures()
 
             bounds.uMax = (float)windowWidth / m_RenderWidth;
             bounds.vMax = (float)windowHeight / m_RenderHeight;
-            vr::VROverlay()->SetOverlayTexelAspect(m_MainMenuHandle, bounds.vMax / bounds.uMax);
+            aspectError = vr::VROverlay()->SetOverlayTexelAspect(m_MainMenuHandle, bounds.vMax / bounds.uMax);
         }
         else
-            vr::VROverlay()->SetOverlayTexelAspect(m_MainMenuHandle, 1.0f);
+            aspectError = vr::VROverlay()->SetOverlayTexelAspect(m_MainMenuHandle, 1.0f);
 
-        vr::VROverlay()->SetOverlayTextureBounds(m_MainMenuHandle, &bounds);
-        vr::VROverlay()->SetOverlayTexture(m_MainMenuHandle, &m_VKBackBuffer.m_VRTexture);
-        vr::VROverlay()->ShowOverlay(m_MainMenuHandle);
+        const auto boundsError = vr::VROverlay()->SetOverlayTextureBounds(m_MainMenuHandle, &bounds);
+        const auto textureError = vr::VROverlay()->SetOverlayTexture(m_MainMenuHandle, &m_VKBackBuffer.m_VRTexture);
+        const auto showError = vr::VROverlay()->ShowOverlay(m_MainMenuHandle);
 
         //if (!m_Game->m_EngineClient->IsInGame())
         {
-            vr::VRCompositor()->Submit(vr::Eye_Left, &m_VKBlankTexture.m_VRTexture, NULL, vr::Submit_Default);
-            vr::VRCompositor()->Submit(vr::Eye_Right, &m_VKBlankTexture.m_VRTexture, NULL, vr::Submit_Default);
+            const auto leftError = vr::VRCompositor()->Submit(vr::Eye_Left, &m_VKBlankTexture.m_VRTexture, NULL, vr::Submit_Default);
+            const auto rightError = vr::VRCompositor()->Submit(vr::Eye_Right, &m_VKBlankTexture.m_VRTexture, NULL, vr::Submit_Default);
+            if (m_RenderDiagnostics.First(RenderDiagnosticEvent::MenuSubmission))
+                Logger::Write("VR menu submit: inGame=" + std::to_string(inGame) +
+                    " backBuffer=" + std::to_string(m_VKBackBuffer.m_VRTexture.handle != nullptr) +
+                    " blank=" + std::to_string(m_VKBlankTexture.m_VRTexture.handle != nullptr) +
+                    " overlay=" + std::to_string(aspectError) + "," + std::to_string(boundsError) +
+                    "," + std::to_string(textureError) + "," + std::to_string(showError) +
+                    " compositor=" + std::to_string(leftError) + "," + std::to_string(rightError));
         }
 
         return;
     }
     vr::VROverlay()->HideOverlay(m_MainMenuHandle);
 
-    vr::VRCompositor()->Submit(vr::Eye_Left, &m_VKLeftEye.m_VRTexture, &(m_TextureBounds)[0], vr::Submit_Default);
-    vr::VRCompositor()->Submit(vr::Eye_Right, &m_VKRightEye.m_VRTexture, &(m_TextureBounds)[1], vr::Submit_Default);
+    const auto leftError = vr::VRCompositor()->Submit(vr::Eye_Left, &m_VKLeftEye.m_VRTexture, &(m_TextureBounds)[0], vr::Submit_Default);
+    const auto rightError = vr::VRCompositor()->Submit(vr::Eye_Right, &m_VKRightEye.m_VRTexture, &(m_TextureBounds)[1], vr::Submit_Default);
+    if (m_RenderDiagnostics.First(RenderDiagnosticEvent::StereoSubmission))
+        Logger::Write("VR stereo submit: left=" + std::to_string(m_VKLeftEye.m_VRTexture.handle != nullptr) +
+            " right=" + std::to_string(m_VKRightEye.m_VRTexture.handle != nullptr) +
+            " compositor=" + std::to_string(leftError) + "," + std::to_string(rightError));
 
     m_RenderedNewFrame = false;
 }
@@ -613,8 +627,17 @@ void VR::RepositionOverlays()
     menuTransform.m[2][0] = -sin(hmdRotationDegrees) * xScale;
     menuTransform.m[2][2] *= cos(hmdRotationDegrees);
 
-    vr::VROverlay()->SetOverlayTransformAbsolute(m_MainMenuHandle, trackingOrigin, &menuTransform);
-    vr::VROverlay()->SetOverlayWidthInMeters(m_MainMenuHandle, 1.5 * (1.0 / heightRatio));
+    const auto transformError = vr::VROverlay()->SetOverlayTransformAbsolute(
+        m_MainMenuHandle, trackingOrigin, &menuTransform);
+    const auto widthError = vr::VROverlay()->SetOverlayWidthInMeters(
+        m_MainMenuHandle, 1.5 * (1.0 / heightRatio));
+    const bool positioned = transformError == vr::VROverlayError_None &&
+        widthError == vr::VROverlayError_None;
+    m_MenuOverlayPlacement.RecordResult(positioned);
+    if (m_RenderDiagnostics.First(positioned ? RenderDiagnosticEvent::OverlayPlacementSucceeded :
+                                      RenderDiagnosticEvent::OverlayPlacementFailed))
+        Logger::Write("VR menu placement: transform=" + std::to_string(transformError) +
+            " width=" + std::to_string(widthError));
 
     // Reposition HUD overlay
     /*vr::HmdMatrix34_t hudTransform =

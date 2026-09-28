@@ -7,6 +7,8 @@
 #include "config.h"
 #include "ui_input.h"
 #include "haptics.h"
+#include "render_diagnostics.h"
+#include "menu_overlay_placement.h"
 #include <filesystem>
 
 #define MAX_STR_LEN 256
@@ -174,6 +176,8 @@ public:
 	SharedTextureHolder m_VKBlankTexture;
 
 	bool m_IsVREnabled = false;
+	RenderDiagnosticGate m_RenderDiagnostics;
+	MenuOverlayPlacement m_MenuOverlayPlacement;
 	bool m_IsInitialized = false;
 	bool m_RenderedNewFrame = false;
 	bool m_RenderedHud = false;

@@ -239,14 +239,20 @@ ITexture* __fastcall Hooks::dGetRenderTarget(void* ecx, void* edx)
 void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CViewSetup &hudViewSetup, int nClearFlags, int whatToDraw)
 {
 	m_VR->ApplyPendingPortalOrientation(setup.origin);
-    if (!m_VR->m_TrackingOutputValid)
+    if (!m_VR->m_TrackingOutputValid) {
+        if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::TrackingBypass))
+            Logger::Write("RenderView: stereo bypassed because tracking output is invalid");
         return hkRenderView.fOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
+	}
 	if (!m_VR->m_CreatedVRTextures) {
 		m_VR->CreateVRTextures();
 	}
 
-	if (m_Game->m_VguiSurface->IsCursorVisible())
+	if (m_Game->m_VguiSurface->IsCursorVisible()) {
+        if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::CursorBypass))
+            Logger::Write("RenderView: stereo bypassed while VGUI cursor is visible");
 		return hkRenderView.fOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
+	}
 
 	//VPanel* g_pFullscreenRootPanel = *(VPanel**)(m_Game->m_Offsets->g_pFullscreenRootPanel.address);
 
@@ -367,6 +373,8 @@ void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CVie
 
 
 	m_VR->m_RenderedNewFrame = true;
+    if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::StereoRendered))
+        Logger::Write("RenderView: first stereo pair rendered");
 }
 
 bool __fastcall Hooks::dCreateMove(void *ecx, void *edx, float flInputSampleTime, CUserCmd *cmd)

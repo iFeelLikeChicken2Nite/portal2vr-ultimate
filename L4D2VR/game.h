@@ -51,7 +51,6 @@ public:
     IEngineClient* m_EngineClient = nullptr;
     IMaterialSystem* m_MaterialSystem = nullptr;
     IBaseClientDLL* m_BaseClientDll = nullptr;
-    IViewRender* m_ClientViewRender = nullptr;
     IViewRender* m_EngineViewRender = nullptr;
     IModelInfo* m_ModelInfo = nullptr;
     IModelRender* m_ModelRender = nullptr;

@@ -7,6 +7,9 @@
 #include "../L4D2VR/portal_orientation.h"
 #include "../L4D2VR/ui_input.h"
 #include "../L4D2VR/haptics.h"
+#include "../L4D2VR/viewport_readiness.h"
+#include "../L4D2VR/render_diagnostics.h"
+#include "../L4D2VR/menu_overlay_placement.h"
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -14,6 +17,19 @@
 #include <sstream>
 
 static int failures = 0;
+
+struct TestViewportEngine
+{
+    bool inGame = false;
+    int calls = 0;
+    bool IsInGame() { ++calls; return inGame; }
+};
+
+struct TestViewportGame
+{
+    TestViewportEngine *m_EngineClient = nullptr;
+    int *m_VR = nullptr;
+};
 
 static void expectCommand(const char* actual, const char* expected, const char* caseName)
 {
@@ -49,6 +65,49 @@ static void expectVectorNear(const Vector &actual, const Vector &expected, const
 
 int main()
 {
+    RenderDiagnosticGate renderDiagnostics;
+    expect(renderDiagnostics.First(RenderDiagnosticEvent::MenuSubmission), true,
+           "first menu submission is logged");
+    expect(renderDiagnostics.First(RenderDiagnosticEvent::MenuSubmission), false,
+           "repeated menu submissions are not logged");
+    expect(renderDiagnostics.First(RenderDiagnosticEvent::StereoSubmission), true,
+           "first stereo submission is logged independently");
+    expect(renderDiagnostics.First(RenderDiagnosticEvent::StereoSubmission), false,
+           "repeated stereo submissions are not logged");
+
+    MenuOverlayPlacement menuPlacement;
+    expect(menuPlacement.ShouldAttempt(false, false), false,
+           "menu cannot be positioned before the first valid HMD pose");
+    expect(menuPlacement.ShouldAttempt(true, true), true,
+           "visible menu retries placement after HMD pose becomes valid");
+    menuPlacement.RecordResult(false);
+    expect(menuPlacement.ShouldAttempt(true, true), true,
+           "failed menu placement is retried while visible");
+    menuPlacement.RecordResult(true);
+    expect(menuPlacement.ShouldAttempt(true, true), false,
+           "positioned visible menu does not move on every frame");
+    expect(menuPlacement.ShouldAttempt(false, true), true,
+           "hidden menu is positioned again before returning");
+
+    TestViewportEngine viewportEngine;
+    TestViewportGame viewportGame;
+    int viewportVr = 1;
+    expect(Portal2VRViewport::CanOverrideMenuViewport<TestViewportGame>(nullptr), false,
+           "viewport override skips absent game");
+    expect(Portal2VRViewport::CanOverrideMenuViewport(&viewportGame), false,
+           "viewport override skips game before engine interface resolves");
+    viewportGame.m_EngineClient = &viewportEngine;
+    expect(Portal2VRViewport::CanOverrideMenuViewport(&viewportGame), false,
+           "viewport override skips game before VR is initialized");
+    expect(viewportEngine.calls == 0, true,
+           "viewport override never queries engine during partial initialization");
+    viewportGame.m_VR = &viewportVr;
+    expect(Portal2VRViewport::CanOverrideMenuViewport(&viewportGame), true,
+           "viewport override remains active in menu once dependencies are ready");
+    viewportEngine.inGame = true;
+    expect(Portal2VRViewport::CanOverrideMenuViewport(&viewportGame), false,
+           "viewport override stays off during gameplay");
+
     const VMatrix quarterTurn{0,-1,0,12, 1,0,0,-5, 0,0,1,3, 0,0,0,1};
     const auto turn = PortalOrientation::Rotation::FromVMatrix(quarterTurn);
     expect(turn.has_value(), true, "rigid translated portal matrix accepted");
