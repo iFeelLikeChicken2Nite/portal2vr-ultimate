@@ -246,7 +246,10 @@ def validate_launch_paths(repo: Path, game: Path, steam: Path) -> None:
 
 
 def build_steam_command(steam: Path) -> list[str]:
-    return [str(steam), "-applaunch", "620", "-insecure"]
+    return [str(steam), "-applaunch", "620", "-insecure", "-window", "-novid",
+            "+mat_motion_blur_percent_of_screen_max", "0", "+mat_queue_mode", "0",
+            "+mat_vsync", "0", "+mat_antialias", "0",
+            "+mat_grain_scale_override", "0", "-width", "1280", "-height", "720"]
 
 
 def _write_payload(target: Path, payload: bytes) -> None:

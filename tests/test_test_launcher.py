@@ -279,10 +279,13 @@ class InstallTests(unittest.TestCase):
                 core.validate_launch_paths(repo, game, steam)
             self.assertFalse((game / "VR").exists())
 
-    def test_steam_launch_command_includes_insecure(self):
+    def test_steam_launch_command_preserves_original_vr_video_options(self):
         steam = Path(r"C:\Program Files (x86)\Steam\steam.exe")
         self.assertEqual(core.build_steam_command(steam),
-                         [str(steam), "-applaunch", "620", "-insecure"])
+                         [str(steam), "-applaunch", "620", "-insecure", "-window", "-novid",
+                          "+mat_motion_blur_percent_of_screen_max", "0", "+mat_queue_mode", "0",
+                          "+mat_vsync", "0", "+mat_antialias", "0",
+                          "+mat_grain_scale_override", "0", "-width", "1280", "-height", "720"])
 
     def test_failed_stage_rolls_back_new_files(self):
         with TemporaryDirectory() as temporary:
