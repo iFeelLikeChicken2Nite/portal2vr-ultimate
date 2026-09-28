@@ -7,6 +7,7 @@ namespace Portal2VRViewport
     bool CanOverrideMenuViewport(GameType *game)
     {
         return game && game->m_EngineClient && game->m_VR &&
+               game->m_VR->m_IsInitialized &&
                !game->m_EngineClient->IsInGame();
     }
 }

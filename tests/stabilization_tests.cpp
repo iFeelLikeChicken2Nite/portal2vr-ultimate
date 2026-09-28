@@ -28,7 +28,12 @@ struct TestViewportEngine
 struct TestViewportGame
 {
     TestViewportEngine *m_EngineClient = nullptr;
-    int *m_VR = nullptr;
+    struct TestViewportVr *m_VR = nullptr;
+};
+
+struct TestViewportVr
+{
+    bool m_IsInitialized = false;
 };
 
 static void expectCommand(const char* actual, const char* expected, const char* caseName)
@@ -91,7 +96,7 @@ int main()
 
     TestViewportEngine viewportEngine;
     TestViewportGame viewportGame;
-    int viewportVr = 1;
+    TestViewportVr viewportVr;
     expect(Portal2VRViewport::CanOverrideMenuViewport<TestViewportGame>(nullptr), false,
            "viewport override skips absent game");
     expect(Portal2VRViewport::CanOverrideMenuViewport(&viewportGame), false,
@@ -102,6 +107,9 @@ int main()
     expect(viewportEngine.calls == 0, true,
            "viewport override never queries engine during partial initialization");
     viewportGame.m_VR = &viewportVr;
+    expect(Portal2VRViewport::CanOverrideMenuViewport(&viewportGame), false,
+           "viewport override skips VR object before initialization completes");
+    viewportVr.m_IsInitialized = true;
     expect(Portal2VRViewport::CanOverrideMenuViewport(&viewportGame), true,
            "viewport override remains active in menu once dependencies are ready");
     viewportEngine.inGame = true;
