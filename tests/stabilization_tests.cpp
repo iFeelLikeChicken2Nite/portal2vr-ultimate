@@ -107,9 +107,13 @@ int main()
     expect(viewportEngine.calls == 0, true,
            "viewport override never queries engine during partial initialization");
     viewportGame.m_VR = &viewportVr;
+    expect(Portal2VRViewport::HasInitializedVR(&viewportGame), false,
+           "DXVK reset skips an incomplete VR object");
     expect(Portal2VRViewport::CanOverrideMenuViewport(&viewportGame), false,
            "viewport override skips VR object before initialization completes");
     viewportVr.m_IsInitialized = true;
+    expect(Portal2VRViewport::HasInitializedVR(&viewportGame), true,
+           "DXVK reset may use dimensions after VR initialization completes");
     expect(Portal2VRViewport::CanOverrideMenuViewport(&viewportGame), true,
            "viewport override remains active in menu once dependencies are ready");
     viewportEngine.inGame = true;
