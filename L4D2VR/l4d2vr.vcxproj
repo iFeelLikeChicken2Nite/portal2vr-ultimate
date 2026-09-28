@@ -545,6 +545,9 @@
     <Text Include="config.txt" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="PrepareDxvkViewportGuard" BeforeTargets="ClCompile">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\tools\prepare_dxvk.ps1&quot;" />
+  </Target>
   <Target Name="DeployToPortal2" AfterTargets="Build" Condition="'$(PORTAL2_DIR)' != ''">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PORTAL2_DIR)\bin" />
   </Target>
