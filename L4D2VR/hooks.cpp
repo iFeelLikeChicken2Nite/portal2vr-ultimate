@@ -89,6 +89,37 @@ Hooks::Hooks(Game *game)
 	}
 	ENABLE_REQUIRED(hkCHudCrosshair_ShouldDraw);
 #undef ENABLE_REQUIRED
+	if (m_VR->m_Config.experimentalHudOverlay &&
+		m_VR->m_HUDHandle != vr::k_ulOverlayHandleInvalid) {
+		const auto *offsets = m_Game->m_Offsets;
+		Logger::Write("Experimental HUD symbols: PushRenderTarget=" +
+			std::string(offsets->PushRenderTargetAndViewport.address ? "OK" : "MISSING") +
+			" PopRenderTarget=" +
+			std::string(offsets->PopRenderTargetAndViewport.address ? "OK" : "MISSING") +
+			" VGui_Paint=" + std::string(offsets->VGui_Paint.address ? "OK" : "MISSING"));
+		if (offsets->PushRenderTargetAndViewport.address &&
+			offsets->PopRenderTargetAndViewport.address && offsets->VGui_Paint.address) {
+			const bool created =
+				!hkPushRenderTargetAndViewport.createHook(
+					(LPVOID)offsets->PushRenderTargetAndViewport.address, &dPushRenderTargetAndViewport) &&
+				!hkPopRenderTargetAndViewport.createHook(
+					(LPVOID)offsets->PopRenderTargetAndViewport.address, &dPopRenderTargetAndViewport) &&
+				!hkVgui_Paint.createHook((LPVOID)offsets->VGui_Paint.address, &dVGui_Paint);
+			if (created) {
+				const bool pushEnabled = !hkPushRenderTargetAndViewport.enableHook();
+				const bool popEnabled = pushEnabled && !hkPopRenderTargetAndViewport.enableHook();
+				const bool paintEnabled = popEnabled && !hkVgui_Paint.enableHook();
+				m_HudCaptureHooksReady = pushEnabled && popEnabled && paintEnabled;
+				if (!m_HudCaptureHooksReady) {
+					if (popEnabled) hkPopRenderTargetAndViewport.disableHook();
+					if (pushEnabled) hkPushRenderTargetAndViewport.disableHook();
+				}
+			}
+		}
+		Logger::Write(m_HudCaptureHooksReady ?
+			"Experimental HUD VGUI capture hooks enabled" :
+			"Experimental HUD capture unavailable; stereo rendering remains enabled");
+	}
 	m_Ready = true;
 }
 
@@ -205,11 +236,9 @@ int Hooks::initSourceHooks()
 bool __fastcall Hooks::dCHudCrosshair_ShouldDraw(void* ecx, void* edx) {
 	bool shouldDraw = hkCHudCrosshair_ShouldDraw.fOriginal(ecx);
 
-	m_VR->m_DrawCrosshair = shouldDraw;
-
-	if (!m_Game->m_Offsets->m_LaserAvailable)
-		return shouldDraw;
-	return ((m_VR->m_AimMode == 1) ? shouldDraw : false);
+	// Keep the Source crosshair as a fallback until the optional laser is
+	// confirmed visible by a real VR test. Symbol resolution alone is not proof.
+	return shouldDraw;
 }
 
 void __fastcall Hooks::dPrecache(void* ecx, void* edx) {
@@ -448,7 +477,7 @@ void __fastcall Hooks::dCalcViewModelView(void *ecx, void *edx, const Vector &ey
 
 	if (m_VR->m_IsVREnabled && m_VR->m_TrackingOutputValid && m_VR->m_RightControllerPose.valid)
 	{
-		vecNewOrigin = m_VR->GetRecommendedViewmodelAbsPos(eyePosition);
+		vecNewOrigin = m_VR->GetRecommendedViewmodelAbsPos();
 		vecNewAngles = m_VR->GetRecommendedViewmodelAbsAngle();
 	}
 
@@ -565,19 +594,19 @@ void Hooks::dDrawModelExecute(void *ecx, void *edx, void *state, const ModelRend
 
 void Hooks::dPushRenderTargetAndViewport(void *ecx, void *edx, ITexture *pTexture, ITexture *pDepthTexture, int nViewX, int nViewY, int nViewW, int nViewH)
 {
-	if (m_VR->m_CreatedVRTextures && !m_PushedHud)
+	const bool inPaint = m_VguiPaintActive;
+	const bool redirect = Portal2VRRuntime::IsPublished(g_Game, m_Game) &&
+		HudCapture::ShouldRedirectTarget(m_VR->m_Config.experimentalHudOverlay,
+			m_Game->m_Hooks->m_HudCaptureHooksReady, m_VR->m_CreatedVRTextures,
+			inPaint, m_Game->m_VguiSurface->IsCursorVisible(), m_PushedHud) &&
+		m_VR->m_HUDTexture && m_VR->m_VKHUD.m_VRTexture.handle;
+	if (inPaint)
+		++m_HudPushDepth;
+	if (redirect)
 	{
 		pTexture = m_VR->m_HUDTexture;
-
-		//pTexture = m_VR->m_RightEyeTexture;
-
-		IMatRenderContext *renderContext = m_Game->m_MaterialSystem->GetRenderContext();
-		renderContext->ClearBuffers(false, true, true);
-		renderContext->Release();
-
 		hkPushRenderTargetAndViewport.fOriginal(ecx, pTexture, pDepthTexture, nViewX, nViewY, nViewW, nViewH);
-
-		renderContext = m_Game->m_MaterialSystem->GetRenderContext();
+		IMatRenderContext *renderContext = m_Game->m_MaterialSystem->GetRenderContext();
 		renderContext->OverrideAlphaWriteEnable(true, true);
 		renderContext->ClearColor4ub(0, 0, 0, 0);
 		renderContext->ClearBuffers(true, false);
@@ -585,6 +614,7 @@ void Hooks::dPushRenderTargetAndViewport(void *ecx, void *edx, ITexture *pTextur
 
 		m_VR->m_RenderedHud = true;
 		m_PushedHud = true;
+		m_HudTargetActive = true;
 	}
 	else
 	{
@@ -594,19 +624,15 @@ void Hooks::dPushRenderTargetAndViewport(void *ecx, void *edx, ITexture *pTextur
 
 void Hooks::dPopRenderTargetAndViewport(void *ecx, void *edx)
 {
-	if (!m_VR->m_CreatedVRTextures)
-		return hkPopRenderTargetAndViewport.fOriginal(ecx);
-
-	//std::cout << "dPopRenderTargetAndViewport: " << m_PushHUDStep << "\n";
-
-	m_PushHUDStep = 0;
-
-	if (m_PushedHud)
+	if (m_VguiPaintActive && m_HudPushDepth > 0)
+		--m_HudPushDepth;
+	if (m_HudTargetActive && m_HudPushDepth == 0)
 	{
 		IMatRenderContext* renderContext = m_Game->m_MaterialSystem->GetRenderContext();
-		renderContext->OverrideAlphaWriteEnable(false, true);
+		renderContext->OverrideAlphaWriteEnable(false, false);
 		renderContext->ClearColor4ub(0, 0, 0, 255);
 		renderContext->Release();
+		m_HudTargetActive = false;
 	}
 
 	hkPopRenderTargetAndViewport.fOriginal(ecx);
@@ -614,15 +640,33 @@ void Hooks::dPopRenderTargetAndViewport(void *ecx, void *edx)
 
 void Hooks::dVGui_Paint(void *ecx, void *edx, int mode)
 {
-	if (!m_VR->m_CreatedVRTextures || m_VR->m_Game->m_VguiSurface->IsCursorVisible())
+	if (!Portal2VRRuntime::IsPublished(g_Game, m_Game) ||
+		!m_Game->m_Hooks->m_HudCaptureHooksReady ||
+		!m_VR->m_Config.experimentalHudOverlay ||
+		!m_VR->m_CreatedVRTextures || !m_VR->m_HUDTexture ||
+		!m_VR->m_VKHUD.m_VRTexture.handle ||
+		!m_VR->m_RenderedNewFrame || !m_Game->m_EngineClient->IsInGame() ||
+		m_VR->m_Game->m_VguiSurface->IsCursorVisible())
 		return hkVgui_Paint.fOriginal(ecx, mode);
 
-	//std::cout << "dVGui_Paint\n";
-
-	if (m_PushedHud)
-		mode = PAINT_UIPANELS | PAINT_INGAMEPANELS;
-
+	m_VguiPaintActive = true;
+	mode |= PAINT_UIPANELS | PAINT_INGAMEPANELS;
 	hkVgui_Paint.fOriginal(ecx, mode);
+	m_VguiPaintActive = false;
+	if (m_HudPushDepth || m_HudTargetActive) {
+		if (m_HudTargetActive) {
+			IMatRenderContext* context = m_Game->m_MaterialSystem->GetRenderContext();
+			context->OverrideAlphaWriteEnable(false, false);
+			context->ClearColor4ub(0, 0, 0, 255);
+			context->Release();
+		}
+		Logger::Write("Experimental HUD: VGUI render target stack was unbalanced; capture disabled until restart");
+		m_Game->m_Hooks->m_HudCaptureHooksReady = false;
+		m_HudPushDepth = 0;
+		m_HudTargetActive = false;
+		m_PushedHud = false;
+		m_VR->m_RenderedHud = false;
+	}
 }
 
 int Hooks::dIsSplitScreen()
@@ -780,7 +824,9 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 		m_VR->m_RightControllerPose.valid)
 	{
 		int windowWidth, windowHeight;
-		m_Game->m_MaterialSystem->GetRenderContext()->GetWindowSize(windowWidth, windowHeight);
+		IMatRenderContext* context = m_Game->m_MaterialSystem->GetRenderContext();
+		context->GetWindowSize(windowWidth, windowHeight);
+		context->Release();
 
 		Vector screen = { 0, 0, 0 };
 

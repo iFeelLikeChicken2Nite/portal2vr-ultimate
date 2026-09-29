@@ -3,6 +3,7 @@
 #include "MinHook.h"
 #include "bitbuf.h"
 #include "logger.h"
+#include "hud_capture.h"
 
 class Game;
 class VR;
@@ -151,6 +152,7 @@ class Hooks
 public:
 	bool m_Ready = false;
 	bool m_MinHookInitialized = false;
+	bool m_HudCaptureHooksReady = false;
 	static inline Game *m_Game;
 	static inline VR *m_VR;
 
@@ -172,6 +174,9 @@ public:
 	static inline Hook<tPushRenderTargetAndViewport> hkPushRenderTargetAndViewport;
 	static inline Hook<tPopRenderTargetAndViewport> hkPopRenderTargetAndViewport;
 	static inline Hook<tVgui_Paint> hkVgui_Paint;
+	static inline bool m_VguiPaintActive = false;
+	static inline bool m_HudTargetActive = false;
+	static inline unsigned m_HudPushDepth = 0;
 	static inline Hook<tIsSplitScreen> hkIsSplitScreen;
 	static inline Hook<tPrePushRenderTarget> hkPrePushRenderTarget;
 	static inline Hook<tGetFullScreenTexture> hkGetFullScreenTexture;

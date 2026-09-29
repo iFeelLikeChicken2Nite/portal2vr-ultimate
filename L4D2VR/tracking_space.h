@@ -91,6 +91,24 @@ inline std::optional<float> EyeHeightUnits(float eyeZ, float originZ)
     return height;
 }
 
+// Temporary Standing anchor: track vertical motion relative to the HMD height at
+// player entry/recenter. This does not claim to measure the Source avatar's eye
+// offset; the client-player vtable slots for that measurement are unverified.
+inline std::optional<float> StandingEyeAnchorUnits(float hmdHeightMeters, float scale)
+{
+    if (!std::isfinite(hmdHeightMeters) || hmdHeightMeters < 0.2f ||
+        hmdHeightMeters > 3.0f || !std::isfinite(scale) || scale <= 0.0f)
+        return std::nullopt;
+    const float height = hmdHeightMeters * scale;
+    return std::isfinite(height) ? std::optional<float>(height) : std::nullopt;
+}
+
+inline Vector ControllerWorldOrigin(const Vector &setupOrigin, const Vector &controllerRelative,
+                                    const Vector &hmdOffset, bool sixDof)
+{
+    return setupOrigin + controllerRelative + (sixDof ? hmdOffset : Vector{0.0f, 0.0f, 0.0f});
+}
+
 struct PlayspaceState {
     Vector centerMeters{0.0f, 0.0f, 0.0f};
     Vector translationUnits{0.0f, 0.0f, 0.0f};

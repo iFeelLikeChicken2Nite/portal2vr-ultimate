@@ -6,6 +6,7 @@
 #include "offsets.h"
 #include "logger.h"
 #include "trace.h"
+#include "aim_feedback.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -211,7 +212,7 @@ void VR::CreateExperimentalHUDOverlay()
     Logger::Write("EXPERIMENTAL HUD overlay created: " +
         std::to_string(m_Config.hudWidthMeters) + "m wide, " +
         std::to_string(m_Config.hudDistanceMeters) +
-        "m from HMD; shown only with controller-laser aim; alpha/subtitles unverified");
+        "m from HMD; VGUI capture/alpha/subtitles require runtime verification");
 }
 
 bool VR::SetActionManifest(const char *fileName)
@@ -554,8 +555,13 @@ void VR::SubmitExperimentalHUDOverlay()
         Logger::Write("Experimental HUD: first VGUI render target redirect observed (painted contents unverified)");
         m_HUDCaptureLogged = true;
     }
-    const bool worldAimSeparated = m_AimMode == 2 && m_Game->m_Offsets->m_LaserAvailable;
-    const bool canShow = worldAimSeparated && m_RenderedNewFrame && m_RenderedHud && m_CreatedVRTextures &&
+    if (m_RenderedHud)
+        m_HUDMissingCaptureFrames = 0;
+    else if (m_RenderedNewFrame && m_CreatedVRTextures &&
+             m_Game->m_Hooks->m_HudCaptureHooksReady &&
+             ++m_HUDMissingCaptureFrames == 120)
+        Logger::Write("Experimental HUD: no VGUI render target redirect after 120 stereo frames; overlay remains hidden");
+    const bool canShow = m_Config.experimentalHudOverlay && m_RenderedNewFrame && m_RenderedHud && m_CreatedVRTextures &&
         m_HmdPose.valid && !m_Game->m_VguiSurface->IsCursorVisible() && m_HUDTexture &&
         m_VKHUD.m_VRTexture.handle;
     if (!canShow) {
@@ -1193,32 +1199,15 @@ QAngle& VR::GetRightControllerAbsAngleConst()
     return m_RightControllerAngAbs;
 }
 
-Vector VR::GetRightControllerAbsPos(Vector eyePosition)
+Vector VR::GetRightControllerAbsPos()
 {
-    Vector offset = eyePosition;
-
-    if (offset.x == 0 && offset.y == 0 && offset.z == 0) {
-        /*int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
-        C_BasePlayer* localPlayer = (C_BasePlayer*)m_Game->GetClientEntity(playerIndex);
-        if (!localPlayer)
-            return {0, 0, 0};
-
-        offset = localPlayer->EyePosition();*/
-
-        offset = m_SetupOrigin;
-    }
-
-    Vector position = offset + m_RightControllerPosRel;
-
-    if (m_6DOF)
-        position += m_HmdPosRelative;
-
-    return position;
+    return TrackingSpace::ControllerWorldOrigin(m_SetupOrigin, m_RightControllerPosRel,
+        m_HmdPosRelative, m_6DOF);
 }
 
-Vector VR::GetRecommendedViewmodelAbsPos(Vector eyePosition)
+Vector VR::GetRecommendedViewmodelAbsPos()
 {
-    Vector viewmodelPos = GetRightControllerAbsPos(eyePosition);
+    Vector viewmodelPos = GetRightControllerAbsPos();
     viewmodelPos -= m_ViewmodelForward * m_ViewmodelPosOffset.x;
     viewmodelPos -= m_ViewmodelRight * m_ViewmodelPosOffset.y;
     viewmodelPos -= m_ViewmodelUp * m_ViewmodelPosOffset.z;
@@ -1265,6 +1254,15 @@ void VR::ResetPosition()
         }
         m_Playspace.Recenter(m_HmdPose.TrackedDevicePos);
         m_Center = m_HmdPose.TrackedDevicePos;
+        if (m_Playspace.mode == TrackingSpace::TrackingMode::Standing && m_6DOF) {
+            if (const auto anchor = TrackingSpace::StandingEyeAnchorUnits(
+                    m_HmdPose.TrackedDevicePos.z, m_VRScale)) {
+                m_LastEyeHeightUnits = *anchor;
+                m_HasEyeHeight = true;
+                m_EyeHeightWasInvalid = false;
+                Logger::Write("Standing height reanchored to tracked HMD; Source avatar eye offset unverified");
+            }
+        }
         m_HmdLostSinceLastValid = false;
         m_RoomscaleObserver.Reset();
         if (ExperimentalPortalOrientation()) {
@@ -1347,25 +1345,20 @@ void VR::UpdateTracking()
         m_EyeHeightWasInvalid = false;
         m_HasLastHmdOffset = false;
     }
-    if (m_Playspace.mode == TrackingSpace::TrackingMode::Standing && m_6DOF) {
-        const Vector eyePosition = localPlayer->EyePosition();
-        const Vector playerOrigin = localPlayer->GetAbsOrigin();
-        const auto measuredHeight = TrackingSpace::EyeHeightUnits(eyePosition.z, playerOrigin.z);
-        if (measuredHeight) {
-            m_LastEyeHeightUnits = *measuredHeight;
+    if (m_Playspace.mode == TrackingSpace::TrackingMode::Standing && m_6DOF && !m_HasEyeHeight) {
+        const auto anchor = TrackingSpace::StandingEyeAnchorUnits(
+            m_HmdPose.TrackedDevicePos.z, m_VRScale);
+        if (anchor) {
+            m_LastEyeHeightUnits = *anchor;
             m_HasEyeHeight = true;
-            if (m_EyeHeightWasInvalid)
-                Logger::Write("Source player eye height available again");
+            Logger::Write("Standing height anchored to tracked HMD at player entry; Source avatar eye offset unverified");
             m_EyeHeightWasInvalid = false;
         } else {
             if (!m_EyeHeightWasInvalid)
-                Logger::Write("Source player eye height unavailable; keeping last valid height or deferring standing view");
+                Logger::Write("Standing height unavailable: invalid HMD floor height; deferring standing view");
             m_EyeHeightWasInvalid = true;
-            if (!m_HasEyeHeight)
-            {
-                m_RoomscaleObserver.Reset();
-                return;
-            }
+            m_RoomscaleObserver.Reset();
+            return;
         }
     }
 
@@ -1531,13 +1524,25 @@ void VR::UpdateTracking()
     if (m_AimMode == 2 && m_Game->m_Offsets->m_LaserAvailable) {
         C_Portal_Player* portalPlayer = (C_Portal_Player*)localPlayer;
         auto activeWeaponAddr = (*(int(__thiscall**)(void*))(*(uintptr_t*)portalPlayer + 968))(portalPlayer);
-        if (activeWeaponAddr && m_DrawCrosshair) {
+        const bool requestLaser = AimFeedback::ShouldRequestLaser(
+            m_AimMode, m_Game->m_Offsets->m_LaserAvailable,
+            m_RightControllerPose.valid, activeWeaponAddr != 0,
+            m_Game->m_VguiSurface->IsCursorVisible());
+        if (requestLaser) {
             CWeaponPortalBase* activeWeapon = (CWeaponPortalBase*)activeWeaponAddr;
             if (portalPlayer->m_PointLaser) {
+                if (!m_LaserParticleObserved) {
+                    Logger::Write("Controller laser particle pointer observed; actual visibility unverified");
+                    m_LaserParticleObserved = true;
+                }
                 const int portalColor = std::clamp(activeWeapon->m_iLastFiredPortal, 0, 2);
                 portalPlayer->m_PointLaser->SetControlPoint(1, m_AimPos);
                 portalPlayer->m_PointLaser->SetControlPoint(2, m_Game->m_singlePlayerPortalColors[portalColor] * 0.5f);
             } else {
+                if (!m_LaserRequestLogged) {
+                    Logger::Write("Controller laser creation requested; crosshair paint state is no longer a prerequisite");
+                    m_LaserRequestLogged = true;
+                }
                 m_Game->m_Hooks->CreatePingPointer(localPlayer, m_AimPos);
             }
         } else if (portalPlayer->m_PointLaser) {
@@ -1961,7 +1966,11 @@ void VR::ParseConfigFile()
         m_Playspace.scale = m_VRScale;
     }
     m_IpdScale = m_Config.ipdScale;
+    const bool wasSixDof = m_6DOF;
     m_6DOF = m_Config.sixDof;
+    if (m_Playspace.mode == TrackingSpace::TrackingMode::Standing &&
+        m_6DOF && !wasSixDof)
+        m_HasEyeHeight = false;
     const bool standingHeightInactive =
         m_Playspace.mode == TrackingSpace::TrackingMode::Standing && !m_6DOF;
     if (standingHeightInactive != m_StandingHeightInactiveLogged) {

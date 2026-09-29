@@ -12,6 +12,8 @@
 #include "../L4D2VR/runtime_publication.h"
 #include "../L4D2VR/render_diagnostics.h"
 #include "../L4D2VR/menu_overlay_placement.h"
+#include "../L4D2VR/hud_capture.h"
+#include "../L4D2VR/aim_feedback.h"
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -461,6 +463,39 @@ int main()
            false, "NaN eye position rejected");
     expect(TrackingSpace::EyeHeightUnits(72.0f, std::numeric_limits<float>::infinity()).has_value(),
            false, "infinite player origin rejected");
+    const auto standingAnchor = TrackingSpace::StandingEyeAnchorUnits(1.7f, 43.2f);
+    expect(standingAnchor.has_value(), true, "standing anchor accepts a tracked HMD height");
+    if (standingAnchor)
+        expectNear(*standingAnchor, 73.44f, "standing anchor uses the tracking height");
+    expect(TrackingSpace::StandingEyeAnchorUnits(0.0f, 43.2f).has_value(), false,
+           "standing anchor rejects an uncalibrated floor height");
+    expect(TrackingSpace::StandingEyeAnchorUnits(1.7f, std::numeric_limits<float>::infinity()).has_value(),
+           false, "standing anchor rejects an invalid scale");
+    expectVectorNear(TrackingSpace::ControllerWorldOrigin({10.0f, 20.0f, 30.0f},
+        {1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}, true),
+        {15.0f, 27.0f, 39.0f}, "controller world origin shares the trace origin");
+    expectVectorNear(TrackingSpace::ControllerWorldOrigin({10.0f, 20.0f, 30.0f},
+        {1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}, false),
+        {11.0f, 22.0f, 33.0f}, "controller world origin respects disabled 6DOF");
+
+    expect(HudCapture::ShouldRedirectTarget(true, true, true, true, false, false), true,
+           "opt-in VGUI paint redirects one render target");
+    expect(HudCapture::ShouldRedirectTarget(false, true, true, true, false, false), false,
+           "default VGUI paint leaves render targets alone");
+    expect(HudCapture::ShouldRedirectTarget(true, true, true, false, false, false), false,
+           "unrelated render-target pushes are not redirected");
+    expect(HudCapture::ShouldRedirectTarget(true, true, true, true, true, false), false,
+           "menu paint does not redirect the HUD");
+    expect(HudCapture::ShouldRedirectTarget(true, true, true, true, false, true), false,
+           "only the first target push per paint is redirected");
+    expect(AimFeedback::ShouldRequestLaser(2, true, true, true, false), true,
+           "laser request does not depend on Source crosshair paint");
+    expect(AimFeedback::ShouldRequestLaser(1, true, true, true, false), false,
+           "head-aim mode does not request controller laser");
+    expect(AimFeedback::ShouldRequestLaser(2, true, false, true, false), false,
+           "tracking loss stops controller laser requests");
+    expect(AimFeedback::ShouldRequestLaser(2, true, true, true, true), false,
+           "menus do not request controller laser");
 
     TrackingSpace::PlayspaceState turning;
     turning.scale = 50.0f;

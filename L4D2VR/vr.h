@@ -52,6 +52,7 @@ public:
 	vr::VROverlayHandle_t m_HUDHandle = vr::k_ulOverlayHandleInvalid;
 	std::chrono::steady_clock::time_point m_NextHUDOverlayErrorLog{};
 	bool m_HUDCaptureLogged = false;
+	unsigned m_HUDMissingCaptureFrames = 0;
 	UiInput::MenuPointerState m_MenuPointerState;
 	std::chrono::steady_clock::time_point m_NextMenuInputErrorLog{};
 	std::chrono::steady_clock::time_point m_NextHapticErrorLog{};
@@ -184,7 +185,8 @@ public:
 	bool m_RenderedHud = false;
 	bool m_CreatedVRTextures = false;
 	bool m_RenderTargetsFailed = false;
-	bool m_DrawCrosshair = false;
+	bool m_LaserRequestLogged = false;
+	bool m_LaserParticleObserved = false;
 	TextureID m_CreatingTextureID = Texture_None;
 
 	bool m_PressedTurn = false;
@@ -287,8 +289,8 @@ public:
 	bool CheckOverlayIntersectionForController(vr::VROverlayHandle_t overlayHandle, vr::ETrackedControllerRole controllerRole);
 	QAngle GetRightControllerAbsAngle();
 	QAngle& GetRightControllerAbsAngleConst();
-	Vector GetRightControllerAbsPos(Vector eyePosition = {0, 0, 0});
-	Vector GetRecommendedViewmodelAbsPos(Vector eyePosition);
+	Vector GetRightControllerAbsPos();
+	Vector GetRecommendedViewmodelAbsPos();
 	QAngle GetRecommendedViewmodelAbsAngle();
 	void UpdateHMDAngles();
 	void UpdateTracking();
