@@ -8,6 +8,8 @@
 #include "../L4D2VR/ui_input.h"
 #include "../L4D2VR/haptics.h"
 #include "../L4D2VR/viewport_readiness.h"
+#include "../L4D2VR/render_target_readiness.h"
+#include "../L4D2VR/runtime_publication.h"
 #include "../L4D2VR/render_diagnostics.h"
 #include "../L4D2VR/menu_overlay_placement.h"
 #include <cmath>
@@ -34,6 +36,11 @@ struct TestViewportGame
 struct TestViewportVr
 {
     bool m_IsInitialized = false;
+};
+
+struct TestPublishedGame
+{
+    bool m_Initialized = false;
 };
 
 static void expectCommand(const char* actual, const char* expected, const char* caseName)
@@ -70,6 +77,43 @@ static void expectVectorNear(const Vector &actual, const Vector &expected, const
 
 int main()
 {
+    std::atomic<TestPublishedGame*> publishedGame{nullptr};
+    TestPublishedGame initializingGame;
+    expect(Portal2VRRuntime::IsPublished(publishedGame, &initializingGame), false,
+           "render hook bypasses VR before game publication");
+    expect(Portal2VRRuntime::PublishInitialized(publishedGame, &initializingGame), false,
+           "partially initialized game is not published to renderer");
+    expect(publishedGame.load() == nullptr, true,
+           "renderer sees no game after initialization failure");
+    initializingGame.m_Initialized = true;
+    expect(Portal2VRRuntime::PublishInitialized(publishedGame, &initializingGame), true,
+           "initialized game is published to renderer");
+    expect(publishedGame.load() == &initializingGame, true,
+           "renderer sees the initialized game");
+    expect(Portal2VRRuntime::IsPublished(publishedGame, &initializingGame), true,
+           "render hook may use VR after game publication");
+
+    RenderTargetReadiness targets{{true, true, true}, {true, true, true},
+                                  {true, true, true}};
+    expect(targets.Ready(), true, "complete stereo and menu targets are ready");
+    targets.left.shared = false;
+    expect(targets.Ready(), false, "missing left Vulkan share blocks stereo");
+    targets.left.shared = true;
+    targets.right.surface = false;
+    expect(targets.Ready(), false, "missing right D3D surface blocks stereo");
+    targets.right.surface = true;
+    targets.blank.texture = false;
+    expect(targets.Ready(), false, "missing menu texture blocks target readiness");
+
+    expect(Portal2VRViewport::CanUseRecommendedVRSize(false, 1920, 1080), false,
+           "failed OpenVR initialization preserves game backbuffer size");
+    expect(Portal2VRViewport::CanUseRecommendedVRSize(true, 0, 1080), false,
+           "zero OpenVR width preserves game backbuffer size");
+    expect(Portal2VRViewport::CanUseRecommendedVRSize(true, 1920, 0), false,
+           "zero OpenVR height preserves game backbuffer size");
+    expect(Portal2VRViewport::CanUseRecommendedVRSize(true, 1920, 1080), true,
+           "valid OpenVR size may override game backbuffer size");
+
     RenderDiagnosticGate renderDiagnostics;
     expect(renderDiagnostics.First(RenderDiagnosticEvent::MenuSubmission), true,
            "first menu submission is logged");

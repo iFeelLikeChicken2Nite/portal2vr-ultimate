@@ -409,6 +409,24 @@ void VR::Update()
 
 void VR::CreateVRTextures()
 {
+    if (m_RenderTargetsFailed)
+        return;
+    m_CreatedVRTextures = false;
+    auto releaseSurface = [](IDirect3DSurface9*& surface) {
+        if (surface) {
+            surface->Release();
+            surface = nullptr;
+        }
+    };
+    releaseSurface(m_D9LeftEyeSurface);
+    releaseSurface(m_D9RightEyeSurface);
+    releaseSurface(m_D9HUDSurface);
+    releaseSurface(m_D9BlankSurface);
+    m_VKLeftEye.m_VRTexture.handle = nullptr;
+    m_VKRightEye.m_VRTexture.handle = nullptr;
+    m_VKHUD.m_VRTexture.handle = nullptr;
+    m_VKBlankTexture.m_VRTexture.handle = nullptr;
+
     int windowWidth, windowHeight;
 
     IMatRenderContext* rndrContext = m_Game->m_MaterialSystem->GetRenderContext();
@@ -444,7 +462,22 @@ void VR::CreateVRTextures()
         (!m_HUDTexture || !m_VKHUD.m_VRTexture.handle))
         Logger::Write("Experimental HUD: render target or Vulkan share unavailable; overlay stays hidden");
 
-    m_CreatedVRTextures = true;
+    const RenderTargetReadiness readiness{
+        {m_LeftEyeTexture != nullptr, m_D9LeftEyeSurface != nullptr,
+         m_VKLeftEye.m_VRTexture.handle != nullptr},
+        {m_RightEyeTexture != nullptr, m_D9RightEyeSurface != nullptr,
+         m_VKRightEye.m_VRTexture.handle != nullptr},
+        {m_BlankTexture != nullptr, m_D9BlankSurface != nullptr,
+         m_VKBlankTexture.m_VRTexture.handle != nullptr}};
+    m_CreatedVRTextures = readiness.Ready();
+    if (!m_CreatedVRTextures) {
+        m_RenderTargetsFailed = true;
+        Logger::Write("VR render target creation failed: left=" +
+            std::to_string(readiness.left.Ready()) + " right=" +
+            std::to_string(readiness.right.Ready()) + " blank=" +
+            std::to_string(readiness.blank.Ready()) +
+            "; stereo rendering disabled until restart");
+    }
 }
 
 void VR::SubmitVRTextures()
@@ -453,8 +486,11 @@ void VR::SubmitVRTextures()
     m_RenderedHud = false;
     if (!m_RenderedNewFrame)
     {
-        if (!m_BlankTexture)
+        if (!m_BlankTexture && !m_RenderTargetsFailed)
             CreateVRTextures();
+
+        if (!m_BlankTexture || !m_VKBlankTexture.m_VRTexture.handle)
+            return;
 
         if (m_MenuOverlayPlacement.ShouldAttempt(
                 vr::VROverlay()->IsOverlayVisible(m_MainMenuHandle), m_HmdPose.valid))

@@ -6,6 +6,7 @@
 #include "vr.h"
 #include "offsets.h"
 #include "logger.h"
+#include "runtime_publication.h"
 #include <Windows.h>
 #include <cstdint>
 #include <iostream>
@@ -238,6 +239,9 @@ ITexture* __fastcall Hooks::dGetRenderTarget(void* ecx, void* edx)
 
 void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CViewSetup &hudViewSetup, int nClearFlags, int whatToDraw)
 {
+	// MinHook may dispatch this while Game::Initialize is still enabling hooks.
+	if (!Portal2VRRuntime::IsPublished(g_Game, m_Game))
+		return hkRenderView.fOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
 	m_VR->ApplyPendingPortalOrientation(setup.origin);
     if (!m_VR->m_TrackingOutputValid) {
         if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::TrackingBypass))
@@ -247,6 +251,11 @@ void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CVie
 	if (!m_VR->m_CreatedVRTextures) {
 		m_VR->CreateVRTextures();
 	}
+	if (!m_VR->m_CreatedVRTextures) {
+        if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::RenderTargetBypass))
+            Logger::Write("RenderView: stereo bypassed because VR render targets are unavailable");
+        return hkRenderView.fOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
+    }
 
 	if (m_Game->m_VguiSurface->IsCursorVisible()) {
         if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::CursorBypass))

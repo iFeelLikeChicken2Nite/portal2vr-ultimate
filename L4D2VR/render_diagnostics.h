@@ -6,6 +6,7 @@
 enum class RenderDiagnosticEvent : std::size_t
 {
     TrackingBypass,
+    RenderTargetBypass,
     CursorBypass,
     StereoRendered,
     MenuSubmission,

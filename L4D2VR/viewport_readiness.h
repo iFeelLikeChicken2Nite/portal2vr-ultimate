@@ -1,7 +1,14 @@
 #pragma once
+#include <cstdint>
 
 namespace Portal2VRViewport
 {
+    inline bool CanUseRecommendedVRSize(bool vrReady, std::uint32_t width,
+                                        std::uint32_t height)
+    {
+        return vrReady && width != 0 && height != 0;
+    }
+
     template <typename GameType>
     bool HasInitializedVR(GameType *game)
     {

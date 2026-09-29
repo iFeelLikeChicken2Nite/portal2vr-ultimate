@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <array>
+#include <atomic>
 #include "vector.h"
 
 class IClientEntityList;
@@ -25,7 +26,8 @@ class Offsets;
 class VR;
 class Hooks;
 
-inline Game *g_Game;
+// Published only after initialization succeeds; DXVK reads it on the render thread.
+inline std::atomic<Game *> g_Game{nullptr};
 
 struct Player
 {
