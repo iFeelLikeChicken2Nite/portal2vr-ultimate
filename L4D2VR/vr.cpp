@@ -7,6 +7,7 @@
 #include "logger.h"
 #include "trace.h"
 #include "aim_feedback.h"
+#include "hud_capture.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -410,6 +411,7 @@ void VR::Update()
 
 void VR::CreateVRTextures()
 {
+    m_HUDBoundsReady = false;
     if (m_RenderTargetsFailed)
         return;
     m_CreatedVRTextures = false;
@@ -458,6 +460,31 @@ void VR::CreateVRTextures()
     m_CreatingTextureID = Texture_None;
 
     m_Game->m_MaterialSystem->EndRenderTargetAllocation();
+
+    if (m_Config.experimentalHudOverlay && m_Overlay &&
+        m_HUDHandle != vr::k_ulOverlayHandleInvalid) {
+        const auto crop = HudCapture::WindowTextureCrop(
+            static_cast<int>(m_RenderWidth), static_cast<int>(m_RenderHeight),
+            windowWidth, windowHeight);
+        if (!crop) {
+            Logger::Write("Experimental HUD: cannot map Source window " +
+                std::to_string(windowWidth) + "x" + std::to_string(windowHeight) +
+                " into HUD target " + std::to_string(m_RenderWidth) + "x" +
+                std::to_string(m_RenderHeight) + "; overlay stays hidden");
+        } else {
+            const vr::VRTextureBounds_t bounds{0.0f, 0.0f, crop->uMax, crop->vMax};
+            const auto boundsError = m_Overlay->SetOverlayTextureBounds(m_HUDHandle, &bounds);
+            m_HUDBoundsReady = boundsError == vr::VROverlayError_None;
+            Logger::Write("Experimental HUD texture bounds: window=" +
+                std::to_string(windowWidth) + "x" + std::to_string(windowHeight) +
+                " target=" + std::to_string(m_RenderWidth) + "x" +
+                std::to_string(m_RenderHeight) + " uMax=" + std::to_string(crop->uMax) +
+                " vMax=" + std::to_string(crop->vMax) +
+                " clamped=" + std::to_string(windowWidth > static_cast<int>(m_RenderWidth) ||
+                    windowHeight > static_cast<int>(m_RenderHeight)) +
+                " error=" + std::to_string(boundsError));
+        }
+    }
 
     if (m_Config.experimentalHudOverlay &&
         (!m_HUDTexture || !m_VKHUD.m_VRTexture.handle))
@@ -561,7 +588,8 @@ void VR::SubmitExperimentalHUDOverlay()
              m_Game->m_Hooks->m_HudCaptureHooksReady &&
              ++m_HUDMissingCaptureFrames == 120)
         Logger::Write("Experimental HUD: no HUD capture target after 120 stereo frames; overlay remains hidden");
-    const bool canShow = m_Config.experimentalHudOverlay && m_RenderedNewFrame && m_RenderedHud && m_CreatedVRTextures &&
+    const bool canShow = m_Config.experimentalHudOverlay && m_HUDBoundsReady &&
+        m_RenderedNewFrame && m_RenderedHud && m_CreatedVRTextures &&
         m_HmdPose.valid && !m_Game->m_VguiSurface->IsCursorVisible() && m_HUDTexture &&
         m_VKHUD.m_VRTexture.handle;
     if (!canShow) {

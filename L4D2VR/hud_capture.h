@@ -1,6 +1,25 @@
 #pragma once
 
+#include <optional>
+
 namespace HudCapture {
+
+struct TextureCrop
+{
+    float uMax;
+    float vMax;
+};
+
+inline std::optional<TextureCrop> WindowTextureCrop(int textureWidth, int textureHeight,
+                                                    int windowWidth, int windowHeight)
+{
+    if (textureWidth <= 0 || textureHeight <= 0 || windowWidth <= 0 || windowHeight <= 0)
+        return std::nullopt;
+    const int visibleWidth = windowWidth < textureWidth ? windowWidth : textureWidth;
+    const int visibleHeight = windowHeight < textureHeight ? windowHeight : textureHeight;
+    return TextureCrop{static_cast<float>(visibleWidth) / textureWidth,
+                       static_cast<float>(visibleHeight) / textureHeight};
+}
 
 class RouteState
 {

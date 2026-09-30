@@ -28,6 +28,7 @@ enum class RenderDiagnosticEvent : std::size_t
     CrosshairShouldDrawFalse,
     CrosshairTransformTrue,
     CrosshairTransformFalse,
+    CrosshairHudDraw,
     LaserControlPoints,
     Count
 };

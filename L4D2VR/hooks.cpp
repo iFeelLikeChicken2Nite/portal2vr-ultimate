@@ -7,6 +7,7 @@
 #include "offsets.h"
 #include "logger.h"
 #include "runtime_publication.h"
+#include "aim_feedback.h"
 #include <Windows.h>
 #include <cstdint>
 #include <iostream>
@@ -940,18 +941,29 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 
 		const bool clipTransformResult = ScreenTransform(m_VR->m_AimPos, &screen,
 			m_VR->m_RenderWidth, m_VR->m_RenderHeight);
-
-		int offsetX = x - (windowWidth * 0.5f);
-		int offsetY = y - (windowHeight * 0.5f);
-
-		newX = screen.x + offsetX;
-		newY = screen.y + offsetY;
+		const bool drawingToHud = m_ExplicitHudCaptureActive || m_HudTargetActive;
+		const auto projected = AimFeedback::ProjectedCrosshairPosition(
+			clipTransformResult, screen.x, screen.y, x, y, windowWidth, windowHeight,
+			m_VR->m_RenderWidth, m_VR->m_RenderHeight,
+			drawingToHud ? windowWidth : static_cast<int>(m_VR->m_RenderWidth),
+			drawingToHud ? windowHeight : static_cast<int>(m_VR->m_RenderHeight));
+		if (!projected) {
+			if (Portal2VRRuntime::IsPublished(g_Game, m_Game) &&
+				m_Game->m_EngineClient->IsInGame() &&
+				m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::CrosshairTransformTrue))
+				Logger::Write("Crosshair DrawSelf: projection outside VR viewport; draw skipped (clip=" +
+					std::to_string(clipTransformResult) + ")");
+			return 0;
+		}
+		newX = projected->x;
+		newY = projected->y;
 		if (Portal2VRRuntime::IsPublished(g_Game, m_Game) &&
 			m_Game->m_EngineClient->IsInGame() &&
-			m_VR->m_RenderDiagnostics.First(clipTransformResult ?
-				RenderDiagnosticEvent::CrosshairTransformTrue :
+			m_VR->m_RenderDiagnostics.First(drawingToHud ?
+				RenderDiagnosticEvent::CrosshairHudDraw :
 				RenderDiagnosticEvent::CrosshairTransformFalse))
 			Logger::Write("Crosshair DrawSelf: ClipTransformResult=" + std::to_string(clipTransformResult) +
+				" hudTarget=" + std::to_string(drawingToHud) +
 				" source=" + std::to_string(x) + "," + std::to_string(y) +
 				" output=" + std::to_string(newX) + "," + std::to_string(newY) +
 				" target=" + std::to_string(screen.x) + "," + std::to_string(screen.y) +

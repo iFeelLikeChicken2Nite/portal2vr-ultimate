@@ -131,6 +131,10 @@ int main()
            "eligible HUD paint diagnostic does not spam each frame");
     expect(renderDiagnostics.First(RenderDiagnosticEvent::HudPushInPaint), true,
            "render-target push diagnostic is independent from paint diagnostic");
+    expect(renderDiagnostics.First(RenderDiagnosticEvent::CrosshairHudDraw), true,
+           "first crosshair draw in the HUD target is logged independently");
+    expect(renderDiagnostics.First(RenderDiagnosticEvent::CrosshairHudDraw), false,
+           "crosshair HUD draw diagnostic does not spam each frame");
 
     MenuOverlayPlacement menuPlacement;
     expect(menuPlacement.ShouldAttempt(false, false), false,
@@ -504,6 +508,24 @@ int main()
            "menu VGUI paint cannot capture HUD");
     expect(HudCapture::CanCapturePaint(true, true, true, true, true, true, true), false,
            "visible cursor blocks paint capture");
+    const auto croppedHud = HudCapture::WindowTextureCrop(2528, 2704, 1280, 720);
+    expect(croppedHud.has_value(), true,
+           "window-sized VGUI region can be mapped within the HUD texture");
+    if (croppedHud) {
+        expectNear(croppedHud->uMax, 0.506329f,
+                   "HUD overlay crops to the Source window width");
+        expectNear(croppedHud->vMax, 0.266272f,
+                   "HUD overlay crops to the Source window height");
+    }
+    expect(HudCapture::WindowTextureCrop(2528, 2704, 0, 720).has_value(), false,
+           "HUD crop rejects an unavailable window size");
+    const auto oversizedHud = HudCapture::WindowTextureCrop(1280, 720, 2528, 2704);
+    expect(oversizedHud.has_value(), true,
+           "oversized windows retain the full HUD texture rather than hiding subtitles");
+    if (oversizedHud) {
+        expectNear(oversizedHud->uMax, 1.0f, "oversized HUD crop clamps horizontal bounds");
+        expectNear(oversizedHud->vMax, 1.0f, "oversized HUD crop clamps vertical bounds");
+    }
     HudCapture::RouteState hudRoute;
     expect(hudRoute.ShouldCaptureExplicitly(true, true, false), false,
            "HUD capture initially waits for Source target push");
@@ -546,6 +568,37 @@ int main()
            "laser request does not depend on Source crosshair paint");
     expect(AimFeedback::ShouldRequestLaser(1, true, true, true, false), false,
            "head-aim mode does not request controller laser");
+    const auto projectedCrosshair = AimFeedback::ProjectedCrosshairPosition(
+        false, 711.811584f, 1847.891113f, 612, 318, 1280, 720, 2528, 2704);
+    expect(projectedCrosshair.has_value(), true,
+           "on-screen controller aim produces a crosshair position");
+    if (projectedCrosshair) {
+        expect(projectedCrosshair->x, 683,
+               "crosshair projection preserves the Source sprite offset");
+        expect(projectedCrosshair->y, 1805,
+               "crosshair projection uses the VR viewport height");
+    }
+    const auto croppedCrosshair = AimFeedback::ProjectedCrosshairPosition(
+        false, 711.811584f, 1847.891113f, 612, 318,
+        1280, 720, 2528, 2704, 1280, 720);
+    expect(croppedCrosshair.has_value(), true,
+           "crosshair remains inside the cropped Source window overlay");
+    if (croppedCrosshair) {
+        expect(croppedCrosshair->x, 332,
+               "HUD crosshair X is scaled from the eye target to the cropped window");
+        expect(croppedCrosshair->y, 450,
+               "HUD crosshair Y is scaled from the eye target to the cropped window");
+    }
+    expect(AimFeedback::ProjectedCrosshairPosition(true, 2141487616.0f, 21570732032.0f,
+        612, 318, 1280, 720, 2528, 2704).has_value(), false,
+        "clipped Source projection never becomes an overflowing sprite coordinate");
+    expect(AimFeedback::ProjectedCrosshairPosition(false,
+        std::numeric_limits<float>::quiet_NaN(), 100.0f,
+        612, 318, 1280, 720, 2528, 2704).has_value(), false,
+        "non-finite crosshair projection is rejected");
+    expect(AimFeedback::ProjectedCrosshairPosition(false, 2800.0f, 100.0f,
+        612, 318, 1280, 720, 2528, 2704).has_value(), false,
+        "crosshair outside the VR viewport is not drawn at a misleading position");
     expect(AimFeedback::ShouldRequestLaser(2, true, false, true, false), false,
            "tracking loss stops controller laser requests");
     expect(AimFeedback::ShouldRequestLaser(2, true, true, true, true), false,
