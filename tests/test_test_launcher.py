@@ -14,6 +14,7 @@ TEMPLATE = (
     "RoomscaleMode=Off\n"
     "PortalOrientationMode=LegacyYaw\n"
     "ExperimentalHUDOverlay=false\n"
+    "ExperimentalWorldAimMarker=false\n"
     "ExperimentalPortalShotHaptics=false\n"
     "AimMode=2\n"
     "RenderWindow=0\n"
@@ -44,6 +45,14 @@ class ProfileTests(unittest.TestCase):
         self.assertIn("RoomscaleMode=Off\n", rendered)
         self.assertIn("ExperimentalHUDOverlay=false\n", rendered)
         self.assertIn("ExperimentalPortalShotHaptics=false\n", rendered)
+
+    def test_aim_marker_profile_is_isolated_from_baseline(self):
+        baseline = core.render_config(TEMPLATE, "baseline")
+        aimed = core.render_config(TEMPLATE, "aim_marker")
+        self.assertIn("ExperimentalWorldAimMarker=false\n", baseline)
+        self.assertIn("ExperimentalWorldAimMarker=true\n", aimed)
+        self.assertIn("ExperimentalHUDOverlay=false\n", aimed)
+        self.assertIn("ExperimentalPortalShotHaptics=false\n", aimed)
 
     def test_missing_or_duplicate_required_key_refuses_partial_config(self):
         with self.assertRaisesRegex(ValueError, "Missing config keys: RenderWindow"):

@@ -4,6 +4,7 @@ MovementDirection=HMD # HMD, LeftController, RightController
 RoomscaleMode=Off # Off or Observe; Observe only logs physical-step diagnostics and does not move the player
 PortalOrientationMode=LegacyYaw # FullRotation, YawOnly, PreserveHorizon are experimental; restart required
 ExperimentalHUDOverlay=false # Existing HUD capture shown in a noninteractive SteamVR overlay; hardware-unverified, restart required
+ExperimentalWorldAimMarker=false # Experimental Source 3D line and impact marker; replaces the particle laser when available
 ExperimentalPortalShotHaptics=false # Local portal-gun fire callback only; experimental, hardware-unverified
 PortalShotHapticAmplitude=0.35 # 0.0-1.0
 PortalShotHapticDurationSeconds=0.05 # 0.01-0.15 seconds; duplicate callbacks rate-limited to 100 ms

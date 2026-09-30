@@ -568,6 +568,56 @@ int main()
            "laser request does not depend on Source crosshair paint");
     expect(AimFeedback::ShouldRequestLaser(1, true, true, true, false), false,
            "head-aim mode does not request controller laser");
+    expect(AimFeedback::ShouldUseWorldAimMarker(2, true, true, true, true, false), true,
+           "opted-in world marker follows a tracked right controller with a weapon");
+    expect(AimFeedback::ShouldUseWorldAimMarker(2, false, true, true, true, false), false,
+           "default controller aim does not change its legacy laser rendering");
+    expect(AimFeedback::ShouldUseWorldAimMarker(1, true, true, true, true, false), false,
+           "head-aim mode does not draw a controller line");
+    expect(AimFeedback::ShouldUseWorldAimMarker(2, true, false, true, true, false), false,
+           "missing Source debug overlay cannot request a world marker");
+    expect(AimFeedback::ShouldUseWorldAimMarker(2, true, true, true, false, false), false,
+           "putting away the portal gun removes the world marker");
+    expect(AimFeedback::ShouldUseWorldAimMarker(2, true, true, false, true, false), false,
+           "lost controller tracking removes the world marker");
+    expect(AimFeedback::ShouldUseWorldAimMarker(2, true, true, true, true, true), false,
+           "a visible game menu removes the world marker");
+    expect(AimFeedback::ShouldInspectActiveWeaponForAim(2, false, false, false), false,
+           "default aim skips weapon lookup when legacy laser symbols are absent");
+    expect(AimFeedback::ShouldInspectActiveWeaponForAim(2, true, false, false), true,
+           "legacy laser still inspects the active weapon when available");
+    expect(AimFeedback::ShouldInspectActiveWeaponForAim(2, false, true, true), true,
+           "enabled world marker inspects the active weapon with its overlay available");
+    expect(AimFeedback::ShouldInspectActiveWeaponForAim(2, false, true, false), false,
+           "missing overlay does not trigger an unsafe weapon lookup");
+    const auto wallAim = AimFeedback::PrepareWorldAimGeometry(
+        Vector{10, 20, 30}, Vector{110, 20, 30}, true);
+    expect(wallAim.has_value(), true, "finite wall hit produces aim geometry");
+    if (wallAim) {
+        expectVectorNear(wallAim->beamEnd, {110, 20, 30},
+                         "nearby impact marker stays at the controller trace endpoint");
+        expectVectorNear(wallAim->impactPoint, {109, 20, 30},
+                         "impact marker sits just in front of the traced wall");
+        expect(wallAim->showImpact, true, "nearby wall hit gets a visible endpoint marker");
+    }
+    const auto distantAim = AimFeedback::PrepareWorldAimGeometry(
+        Vector{10, 20, 30}, Vector{10010, 20, 30}, true);
+    expect(distantAim.has_value(), true, "long trace keeps a directional beam");
+    if (distantAim) {
+        expectVectorNear(distantAim->beamEnd, {10010, 20, 30},
+                         "long trace beam reaches the actual shot trace endpoint");
+        expect(distantAim->showImpact, true,
+               "distant trace hit retains its impact marker");
+    }
+    const auto openAim = AimFeedback::PrepareWorldAimGeometry(
+        Vector{10, 20, 30}, Vector{10010, 20, 30}, false);
+    expect(openAim.has_value() && !openAim->showImpact, true,
+           "open-space trace has a directional beam without a false impact marker");
+    expect(AimFeedback::PrepareWorldAimGeometry(Vector{0, 0, 0}, Vector{0, 0, 0}, true).has_value(), false,
+           "zero-length aim trace has no beam");
+    expect(AimFeedback::PrepareWorldAimGeometry(Vector{0, 0, 0},
+        Vector{std::numeric_limits<float>::quiet_NaN(), 0, 0}, true).has_value(), false,
+        "nonfinite aim trace has no beam");
     const auto projectedCrosshair = AimFeedback::ProjectedCrosshairPosition(
         false, 711.811584f, 1847.891113f, 612, 318, 1280, 720, 2528, 2704);
     expect(projectedCrosshair.has_value(), true,
@@ -726,6 +776,18 @@ int main()
            "portal orientation keeps legacy yaw by default");
     expect(m2Defaults.experimentalHudOverlay, false,
            "unverified HUD overlay is disabled by default");
+    expect(m2Defaults.experimentalWorldAimMarker, false,
+           "unverified world-space aim marker is disabled by default");
+    std::istringstream aimMarkerOption("ExperimentalWorldAimMarker=true\n");
+    const auto enabledAimMarker = ParseConfig(aimMarkerOption, m2Defaults);
+    expect(enabledAimMarker.value.experimentalWorldAimMarker, true,
+           "world-space aim marker accepts explicit opt-in");
+    std::istringstream badAimMarker("ExperimentalWorldAimMarker=maybe\n");
+    const auto retainedAimMarker = ParseConfig(badAimMarker, enabledAimMarker.value);
+    expect(retainedAimMarker.value.experimentalWorldAimMarker, true,
+           "invalid world-space aim marker option keeps prior value");
+    expect(retainedAimMarker.errors.size() == 1, true,
+           "invalid world-space aim marker option is diagnosed");
     std::istringstream hudOptions("ExperimentalHUDOverlay=true\nHUDDistanceMeters=1.6\n"
                                   "HUDWidthMeters=1.4\nHUDVerticalOffsetMeters=-0.25\n");
     const auto hudConfig = ParseConfig(hudOptions, m2Defaults);

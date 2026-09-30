@@ -8,6 +8,7 @@
 #include "trace.h"
 #include "aim_feedback.h"
 #include "hud_capture.h"
+#include "sdk/ivdebugoverlay.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -1550,11 +1551,46 @@ void VR::UpdateTracking()
     m_ViewmodelUp = VectorRotate(m_ViewmodelUp, m_ViewmodelForward, m_ViewmodelAngOffset.z);
 
     ApplyPortalRigToDerivedPose();
-    m_AimPos = Trace((uint32_t*)localPlayer);
-    if (m_AimMode == 2 && m_Game->m_Offsets->m_LaserAvailable) {
+    bool aimTraceHit = false;
+    m_AimPos = Trace((uint32_t*)localPlayer, aimTraceHit);
+    if (AimFeedback::ShouldInspectActiveWeaponForAim(
+            m_AimMode, m_Game->m_Offsets->m_LaserAvailable,
+            m_Config.experimentalWorldAimMarker, m_Game->m_DebugOverlay != nullptr)) {
         C_Portal_Player* portalPlayer = (C_Portal_Player*)localPlayer;
         auto activeWeaponAddr = (*(int(__thiscall**)(void*))(*(uintptr_t*)portalPlayer + 968))(portalPlayer);
-        const bool requestLaser = AimFeedback::ShouldRequestLaser(
+        const bool worldMarker = AimFeedback::ShouldUseWorldAimMarker(
+            m_AimMode, m_Config.experimentalWorldAimMarker,
+            m_Game->m_DebugOverlay != nullptr, m_RightControllerPose.valid,
+            activeWeaponAddr != 0, m_Game->m_VguiSurface->IsCursorVisible());
+        if (worldMarker) {
+            const Vector controllerOrigin = GetRightControllerAbsPos();
+            const auto geometry = AimFeedback::PrepareWorldAimGeometry(
+                controllerOrigin, m_AimPos, aimTraceHit);
+            if (geometry) {
+                // Fixed color avoids reading portal-gun-specific memory for this
+                // experimental visual; the native HUD retains portal status.
+                constexpr int r = 64, g = 200, b = 255;
+                constexpr float lifetime = 0.08f;
+                m_Game->m_DebugOverlay->AddLineOverlay(controllerOrigin, geometry->beamEnd,
+                    r, g, b, false, lifetime);
+                if (geometry->showImpact) {
+                    const Vector right = m_HmdRight * 1.5f;
+                    const Vector up = m_HmdUp * 1.5f;
+                    m_Game->m_DebugOverlay->AddLineOverlay(
+                        geometry->impactPoint - right, geometry->impactPoint + right,
+                        r, g, b, false, lifetime);
+                    m_Game->m_DebugOverlay->AddLineOverlay(
+                        geometry->impactPoint - up, geometry->impactPoint + up,
+                        r, g, b, false, lifetime);
+                }
+                if (!m_WorldAimMarkerLogged) {
+                    Logger::Write("Experimental world aim marker submitted to Source debug overlay; "
+                        "actual stereo visibility and shot alignment require VR testing");
+                    m_WorldAimMarkerLogged = true;
+                }
+            }
+        }
+        const bool requestLaser = !worldMarker && AimFeedback::ShouldRequestLaser(
             m_AimMode, m_Game->m_Offsets->m_LaserAvailable,
             m_RightControllerPose.valid, activeWeaponAddr != 0,
             m_Game->m_VguiSurface->IsCursorVisible());
@@ -1585,7 +1621,7 @@ void VR::UpdateTracking()
                 }
                 m_Game->m_Hooks->CreatePingPointer(localPlayer, m_AimPos);
             }
-        } else if (portalPlayer->m_PointLaser) {
+        } else if (m_Game->m_Offsets->m_LaserAvailable && portalPlayer->m_PointLaser) {
             portalPlayer->m_PointLaser->StopEmission(false, true, false);
             portalPlayer->m_PointLaser = NULL;
         }
@@ -1753,7 +1789,7 @@ Vector VR::GetViewOriginRight(Vector setupOrigin)
     return viewOriginRight;
 }
 
-Vector VR::Trace(uint32_t* localPlayer) {
+Vector VR::Trace(uint32_t* localPlayer, bool &didHit) {
     Vector vecStart = GetRightControllerAbsPos();
     Vector vecEnd = vecStart + m_RightControllerForward * MAX_TRACE_LENGTH;
 
@@ -1765,6 +1801,7 @@ Vector VR::Trace(uint32_t* localPlayer) {
 
     m_Game->m_EngineTrace->TraceRay(ray, MASK_SHOT | MASK_SHOT_HULL, &tracefilter, &trace);
 
+    didHit = trace.DidHit();
     return trace.endpos;
 }
 
@@ -2020,6 +2057,8 @@ void VR::ParseConfigFile()
         m_StandingHeightInactiveLogged = standingHeightInactive;
     }
     m_AimMode = m_Config.aimMode;
+    if (m_Config.experimentalWorldAimMarker && !m_Game->m_DebugOverlay)
+        Logger::Write("Experimental world aim marker unavailable: VDebugOverlay004 missing; legacy particle retained");
     m_AntiAliasing = m_Config.antiAliasing;
     m_RenderWindow = m_Config.renderWindow;
     m_ViewmodelPosCustomOffset = {m_Config.viewmodelPosOffset[0], m_Config.viewmodelPosOffset[1], m_Config.viewmodelPosOffset[2]};
@@ -2029,6 +2068,8 @@ void VR::ParseConfigFile()
         " VRScale=" + std::to_string(m_VRScale) +
         " IPDScale=" + std::to_string(m_IpdScale) +
         " AimMode=" + std::to_string(m_AimMode) +
+        " ExperimentalWorldAimMarker=" +
+        std::to_string(m_Config.experimentalWorldAimMarker) +
         " AntiAliasing=" + std::to_string(m_AntiAliasing) +
         " ExperimentalHUDOverlay=" + std::to_string(m_Config.experimentalHudOverlay) +
         " ExperimentalPortalShotHaptics=" +

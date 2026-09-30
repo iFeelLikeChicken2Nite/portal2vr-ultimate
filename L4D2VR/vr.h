@@ -51,6 +51,7 @@ public:
 	vr::VROverlayHandle_t m_MainMenuHandle = vr::k_ulOverlayHandleInvalid;
 	vr::VROverlayHandle_t m_HUDHandle = vr::k_ulOverlayHandleInvalid;
 	bool m_HUDBoundsReady = false;
+	bool m_WorldAimMarkerLogged = false;
 	std::chrono::steady_clock::time_point m_NextHUDOverlayErrorLog{};
 	bool m_HUDCaptureLogged = false;
 	unsigned m_HUDMissingCaptureFrames = 0;
@@ -311,6 +312,6 @@ public:
 	void ResetPosition();
 	void GetPoseData(vr::TrackedDevicePose_t &poseRaw, TrackedDevicePoseData &poseOut);
 	void ParseConfigFile();
-	Vector Trace(uint32_t* localPlayer);
+	Vector Trace(uint32_t* localPlayer, bool &didHit);
 	Vector TraceEye(uint32_t* localPlayer, Vector cameraPos, Vector eyePos, QAngle& eyeAngle);
 };

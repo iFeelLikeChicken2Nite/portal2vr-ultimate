@@ -7,6 +7,7 @@
 class IClientEntityList;
 class IEngineTrace;
 class IEngineClient;
+class IVDebugOverlay;
 class IMaterialSystem;
 class IBaseClientDLL;
 class IViewRender;
@@ -51,6 +52,7 @@ public:
     IClientEntityList* m_ClientEntityList = nullptr;
     IEngineTrace* m_EngineTrace = nullptr;
     IEngineClient* m_EngineClient = nullptr;
+    IVDebugOverlay* m_DebugOverlay = nullptr; // optional VDebugOverlay004
     IMaterialSystem* m_MaterialSystem = nullptr;
     IBaseClientDLL* m_BaseClientDll = nullptr;
     IViewRender* m_EngineViewRender = nullptr;

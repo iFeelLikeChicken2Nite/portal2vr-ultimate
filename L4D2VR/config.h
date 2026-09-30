@@ -20,6 +20,7 @@ struct ConfigSnapshot {
     RoomscaleMotion::Mode roomscaleMode = RoomscaleMotion::Mode::Off;
     PortalOrientation::Mode portalOrientationMode = PortalOrientation::Mode::LegacyYaw;
     bool experimentalHudOverlay = false;
+    bool experimentalWorldAimMarker = false;
     bool experimentalPortalShotHaptics = false;
     float portalShotHapticAmplitude = 0.35f;
     float portalShotHapticDurationSeconds = 0.05f;
@@ -145,6 +146,7 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
             result.errors.push_back("PortalOrientationMode is invalid; keeping previous value");
     }
     readBool("ExperimentalHUDOverlay", result.value.experimentalHudOverlay);
+    readBool("ExperimentalWorldAimMarker", result.value.experimentalWorldAimMarker);
     readBool("ExperimentalPortalShotHaptics", result.value.experimentalPortalShotHaptics);
     readFloat("PortalShotHapticAmplitude", result.value.portalShotHapticAmplitude, 0.0f, 1.0f);
     readFloat("PortalShotHapticDurationSeconds", result.value.portalShotHapticDurationSeconds,
