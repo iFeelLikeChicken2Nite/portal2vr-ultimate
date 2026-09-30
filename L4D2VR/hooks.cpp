@@ -9,7 +9,9 @@
 #include "runtime_publication.h"
 #include "aim_feedback.h"
 #include <Windows.h>
+#include <array>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <optional>
 
@@ -29,6 +31,33 @@ static std::optional<PortalOrientation::Rotation> ReadPortalRotation(const void*
                            &matrix, sizeof(matrix), &bytesRead) || bytesRead != sizeof(matrix))
         return std::nullopt;
     return PortalOrientation::Rotation::FromVMatrix(matrix);
+}
+
+struct SourceHudTextureIdentity
+{
+    std::array<char, 64> shortName{};
+    std::array<char, 64> textureFile{};
+};
+
+static std::optional<SourceHudTextureIdentity> ReadSourceHudTextureIdentity(const void *texture)
+{
+    if (!texture)
+        return std::nullopt;
+    // Valve's x86 CHudTexture starts with a virtual-destructor vptr, followed
+    // by these two 64-byte names. Read defensively: Portal 2's exact ABI is
+    // not guaranteed to match SDK 2013.
+    const auto base = reinterpret_cast<std::uintptr_t>(texture);
+    if (base > UINTPTR_MAX - sizeof(void *))
+        return std::nullopt;
+    SourceHudTextureIdentity identity;
+    SIZE_T bytesRead = 0;
+    if (!ReadProcessMemory(GetCurrentProcess(),
+            reinterpret_cast<const void *>(base + sizeof(void *)),
+            &identity, sizeof(identity), &bytesRead) || bytesRead != sizeof(identity) ||
+        !std::memchr(identity.shortName.data(), '\0', identity.shortName.size()) ||
+        !std::memchr(identity.textureFile.data(), '\0', identity.textureFile.size()))
+        return std::nullopt;
+    return identity;
 }
 
 Hooks::Hooks(Game *game)
@@ -370,7 +399,13 @@ void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CVie
 	IMatRenderContext* rndrContext = matSystem->GetRenderContext();
 	rndrContext->SetRenderTarget(m_VR->m_LeftEyeTexture);
 	rndrContext->Release();
+	const CViewSetup *previousAimEyeView = m_ActiveAimEyeView;
+	const int previousAimEye = m_ActiveAimEye;
+	m_ActiveAimEyeView = &leftEyeView;
+	m_ActiveAimEye = 1;
 	hkRenderView.fOriginal(ecx, leftEyeView, hudViewSetup, nClearFlags, whatToDraw);
+	m_ActiveAimEyeView = previousAimEyeView;
+	m_ActiveAimEye = previousAimEye;
 	
 	// Right eye CViewSetup
 	tempAngle = QAngle(setup.angles.x, setup.angles.y, setup.angles.z);
@@ -384,7 +419,11 @@ void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CVie
 	rndrContext = matSystem->GetRenderContext();
 	rndrContext->SetRenderTarget(m_VR->m_RightEyeTexture);
 	rndrContext->Release();
+	m_ActiveAimEyeView = &rightEyeView;
+	m_ActiveAimEye = 2;
 	hkRenderView.fOriginal(ecx, rightEyeView, hudViewSetup, nClearFlags, whatToDraw);
+	m_ActiveAimEyeView = previousAimEyeView;
+	m_ActiveAimEye = previousAimEye;
 
 	m_PushedHud = false;
 
@@ -932,6 +971,72 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 		IMatRenderContext* context = m_Game->m_MaterialSystem->GetRenderContext();
 		context->GetWindowSize(windowWidth, windowHeight);
 		context->Release();
+
+		const bool worldReticle = m_VR->m_AimMode == 2 &&
+			m_VR->m_Config.experimentalWorldAimMarker && m_Game->m_DebugOverlay &&
+			m_Game->m_EngineClient->IsInGame() &&
+			!m_Game->m_VguiSurface->IsCursorVisible();
+		if (worldReticle && !m_ActiveAimEyeView &&
+			AimFeedback::IsCenteredReticleSprite(x, y, w, h, windowWidth, windowHeight)) {
+			const auto identity = ReadSourceHudTextureIdentity(ecx);
+			if (identity && AimFeedback::IsReticleIconName(
+				identity->shortName.data(), identity->textureFile.data()) &&
+				m_VR->m_RenderDiagnostics.First(
+					RenderDiagnosticEvent::CrosshairWorldOutsideStereo))
+				Logger::Write("Experimental stereo reticle: Portal 2 center sprite rendered "
+					"outside both eye passes; dynamic stereo status unavailable on this route");
+		}
+		if (worldReticle && m_ActiveAimEyeView) {
+			// Reposition centered Source HUD texture calls in each eye. Any portal
+			// status encoded in these draws remains Source-owned; other HUD stays put.
+			if (!AimFeedback::IsCenteredReticleSprite(x, y, w, h, windowWidth, windowHeight))
+				return hkDrawSelf.fOriginal(ecx, x, y, w, h, clr, flApparentZ);
+			const auto identity = ReadSourceHudTextureIdentity(ecx);
+			const bool isReticle = identity && AimFeedback::IsReticleIconName(
+				identity->shortName.data(), identity->textureFile.data());
+			if (!isReticle) {
+				if (m_VR->m_RenderDiagnostics.First(
+					RenderDiagnosticEvent::CrosshairWorldUnknownIcon)) {
+					const auto printable = [](const char *name) {
+						for (const char *at = name; *at; ++at)
+							if (*at < 32 || *at > 126)
+								return false;
+						return true;
+					};
+					Logger::Write(std::string("Experimental stereo reticle: centered Source icon left unchanged, identity=") +
+						(identity && printable(identity->shortName.data()) ? identity->shortName.data() : "unreadable") +
+						" material=" +
+						(identity && printable(identity->textureFile.data()) ? identity->textureFile.data() : "unreadable"));
+				}
+				return hkDrawSelf.fOriginal(ecx, x, y, w, h, clr, flApparentZ);
+			}
+			Vector forward, right, up;
+			const Vector &viewAngles = m_ActiveAimEyeView->angles;
+			const QAngle eyeAngles(viewAngles.x, viewAngles.y, viewAngles.z);
+			QAngle::AngleVectors(eyeAngles, &forward, &right, &up);
+			const auto projected = AimFeedback::ProjectReticleSpriteToEye(
+				m_VR->m_AimPos, m_ActiveAimEyeView->origin, forward, right, up,
+				m_ActiveAimEyeView->fov, m_ActiveAimEyeView->m_flAspectRatio,
+				m_ActiveAimEyeView->width, m_ActiveAimEyeView->height,
+				x, y, w, h, windowWidth, windowHeight);
+			if (!projected) {
+				if (m_VR->m_RenderDiagnostics.First(
+					RenderDiagnosticEvent::CrosshairWorldProjectionSkipped))
+					Logger::Write("Experimental stereo reticle: center sprite outside eye viewport; skipped");
+				return 0;
+			}
+			const auto event = m_ActiveAimEye == 1 ?
+				RenderDiagnosticEvent::CrosshairWorldLeftEye :
+				RenderDiagnosticEvent::CrosshairWorldRightEye;
+			if (m_VR->m_RenderDiagnostics.First(event))
+				Logger::Write(std::string("Experimental stereo reticle: Portal 2 center sprite ") +
+					(m_ActiveAimEye == 1 ? "left" : "right") + " eye " +
+					std::to_string(x) + "," + std::to_string(y) + " -> " +
+					std::to_string(projected->x) + "," + std::to_string(projected->y) +
+					"; actual status pixels require VR verification");
+			return hkDrawSelf.fOriginal(ecx, projected->x, projected->y,
+				w, h, clr, flApparentZ);
+		}
 
 		Vector screen = { 0, 0, 0 };
 

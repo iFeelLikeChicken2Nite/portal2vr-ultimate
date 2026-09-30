@@ -179,6 +179,8 @@ public:
 	static inline bool m_HudPushSeenDuringPaint = false;
 	static inline bool m_HudRedirectSeenDuringPaint = false;
 	static inline bool m_ExplicitHudCaptureActive = false;
+	static inline thread_local const CViewSetup *m_ActiveAimEyeView = nullptr;
+	static inline thread_local int m_ActiveAimEye = 0; // 1=left, 2=right
 	static inline bool m_HudUnexpectedPopDuringPaint = false;
 	static inline HudCapture::RouteState m_HudCaptureRoute;
 	static inline unsigned m_HudPushDepth = 0;

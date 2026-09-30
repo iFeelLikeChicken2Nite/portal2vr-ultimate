@@ -618,6 +618,71 @@ int main()
     expect(AimFeedback::PrepareWorldAimGeometry(Vector{0, 0, 0},
         Vector{std::numeric_limits<float>::quiet_NaN(), 0, 0}, true).has_value(), false,
         "nonfinite aim trace has no beam");
+    expectNear(AimFeedback::WorldAimOverlayLifetime(1.0f / 120.0f), 1.25f / 120.0f,
+               "120 Hz game cadence limits aim history to roughly one frame");
+    expectNear(AimFeedback::WorldAimOverlayLifetime(1.0f / 60.0f), 1.25f / 60.0f,
+               "overlay lifetime follows actual game frame cadence rather than HMD refresh");
+    expectNear(AimFeedback::WorldAimOverlayLifetime(0.2f), 0.05f,
+               "a stalled frame cannot leave a long trail of old aim samples");
+    expectNear(AimFeedback::WorldAimOverlayLifetime(0.0f), 1.25f / 90.0f,
+               "first frame uses a short fallback interval");
+    const Vector eyeForward{1, 0, 0};
+    const Vector eyeRight{0, -1, 0};
+    const Vector eyeUp{0, 0, 1};
+    const auto eyeCenter = AimFeedback::ProjectWorldToEye(
+        Vector{10, 0, 0}, Vector{0, 0, 0}, eyeForward, eyeRight, eyeUp,
+        90.0f, 1.0f, 1000, 1000);
+    expect(eyeCenter.has_value(), true, "world aim endpoint in front of an eye is projectable");
+    if (eyeCenter) {
+        expectNear(eyeCenter->x, 500.0f, "center hit projects to eye viewport center X");
+        expectNear(eyeCenter->y, 500.0f, "center hit projects to eye viewport center Y");
+    }
+    const auto leftEye = AimFeedback::ProjectWorldToEye(
+        Vector{10, 0, 0}, Vector{0, 0.1f, 0}, eyeForward, eyeRight, eyeUp,
+        90.0f, 1.0f, 1000, 1000);
+    const auto rightEye = AimFeedback::ProjectWorldToEye(
+        Vector{10, 0, 0}, Vector{0, -0.1f, 0}, eyeForward, eyeRight, eyeUp,
+        90.0f, 1.0f, 1000, 1000);
+    expect(leftEye.has_value() && rightEye.has_value(), true,
+           "both eye origins can independently project the same world hit");
+    if (leftEye && rightEye) {
+        expectNear(leftEye->x, 505.0f, "left eye projects the hit to its own screen coordinate");
+        expectNear(rightEye->x, 495.0f, "right eye projects the hit to its own screen coordinate");
+    }
+    expect(AimFeedback::ProjectWorldToEye(Vector{-10, 0, 0}, Vector{0, 0, 0},
+        eyeForward, eyeRight, eyeUp, 90.0f, 1.0f, 1000, 1000).has_value(), false,
+        "hit behind the eye is not redrawn as a misleading reticle");
+    expect(AimFeedback::IsCenteredReticleSprite(612, 318, 56, 84, 1280, 720), true,
+           "native center reticle sprite remains eligible for stereo placement");
+    expect(AimFeedback::IsCenteredReticleSprite(10, 10, 56, 84, 1280, 720), false,
+           "unrelated HUD icons are not relocated to the aim endpoint");
+    expect(AimFeedback::IsCenteredReticleSprite(500, 300, 400, 80, 1280, 720), false,
+           "large center HUD panels are not mistaken for the reticle");
+    expect(AimFeedback::IsReticleIconName("crosshair", "Crosshairs"), true,
+           "Portal 2 weapon crosshair icon is recognized by its Source name");
+    expect(AimFeedback::IsReticleIconName("portal_left", "hud/portal_crosshairs"), true,
+           "portal-status texture is recognized by its Source material name");
+    expect(AimFeedback::IsReticleIconName("crosshair", "sprites/qi_center"), true,
+           "quick-info center icon remains eligible when used by Portal 2");
+    expect(AimFeedback::IsReticleIconName("health", "sprites/health"), false,
+           "unrelated centered Source HUD icon cannot be moved with the reticle");
+    expect(AimFeedback::IsReticleIconName("", ""), false,
+           "unreadable Source icon identity is not treated as a reticle");
+    const auto stereoReticle = AimFeedback::ProjectReticleSpriteToEye(
+        Vector{10, 0, 0}, Vector{0, 0.1f, 0}, eyeForward, eyeRight, eyeUp,
+        90.0f, 1.0f, 1000, 1000, 612, 318, 56, 84, 1280, 720);
+    expect(stereoReticle.has_value(), true,
+           "native center HUD icon can be repositioned for one eye");
+    if (stereoReticle) {
+        expect(stereoReticle->x, 477,
+               "left-eye reticle preserves Source icon offset from its projected hit");
+        expect(stereoReticle->y, 458,
+               "left-eye reticle preserves Source vertical icon offset");
+    }
+    expect(AimFeedback::ProjectReticleSpriteToEye(
+        Vector{10, 0, 0}, Vector{0, 0, 0}, eyeForward, eyeRight, eyeUp,
+        90.0f, 1.0f, 1000, 1000, 10, 10, 56, 84, 1280, 720).has_value(), false,
+        "unrelated native HUD texture cannot be moved to the controller hit");
     const auto projectedCrosshair = AimFeedback::ProjectedCrosshairPosition(
         false, 711.811584f, 1847.891113f, 612, 318, 1280, 720, 2528, 2704);
     expect(projectedCrosshair.has_value(), true,

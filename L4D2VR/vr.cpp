@@ -1570,7 +1570,12 @@ void VR::UpdateTracking()
                 // Fixed color avoids reading portal-gun-specific memory for this
                 // experimental visual; the native HUD retains portal status.
                 constexpr int r = 64, g = 200, b = 255;
-                constexpr float lifetime = 0.08f;
+                const auto now = std::chrono::steady_clock::now();
+                const float frameInterval = m_LastWorldAimMarkerUpdate ==
+                    std::chrono::steady_clock::time_point{} ? 0.0f :
+                    std::chrono::duration<float>(now - m_LastWorldAimMarkerUpdate).count();
+                const float lifetime = AimFeedback::WorldAimOverlayLifetime(frameInterval);
+                m_LastWorldAimMarkerUpdate = now;
                 m_Game->m_DebugOverlay->AddLineOverlay(controllerOrigin, geometry->beamEnd,
                     r, g, b, false, lifetime);
                 if (geometry->showImpact) {
@@ -1587,6 +1592,12 @@ void VR::UpdateTracking()
                     Logger::Write("Experimental world aim marker submitted to Source debug overlay; "
                         "actual stereo visibility and shot alignment require VR testing");
                     m_WorldAimMarkerLogged = true;
+                }
+                if (!m_WorldAimMarkerCadenceLogged && frameInterval >= 0.005f) {
+                    Logger::Write("Experimental world aim marker cadence: updateInterval=" +
+                        std::to_string(frameInterval) + "s overlayLifetime=" +
+                        std::to_string(lifetime) + "s (not HMD refresh rate)");
+                    m_WorldAimMarkerCadenceLogged = true;
                 }
             }
         }

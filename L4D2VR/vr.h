@@ -52,6 +52,8 @@ public:
 	vr::VROverlayHandle_t m_HUDHandle = vr::k_ulOverlayHandleInvalid;
 	bool m_HUDBoundsReady = false;
 	bool m_WorldAimMarkerLogged = false;
+	bool m_WorldAimMarkerCadenceLogged = false;
+	std::chrono::steady_clock::time_point m_LastWorldAimMarkerUpdate{};
 	std::chrono::steady_clock::time_point m_NextHUDOverlayErrorLog{};
 	bool m_HUDCaptureLogged = false;
 	unsigned m_HUDMissingCaptureFrames = 0;

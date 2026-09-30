@@ -1,7 +1,9 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
+#include <string_view>
 #include "sdk/vector.h"
 
 namespace AimFeedback {
@@ -32,6 +34,72 @@ struct WorldAimGeometry
     Vector impactPoint;
     bool showImpact;
 };
+
+inline float WorldAimOverlayLifetime(float frameIntervalSeconds)
+{
+    // Retain roughly one frame of history so small timing jitter does not
+    // cause gaps, without accumulating a long trail of old controller poses.
+    if (!std::isfinite(frameIntervalSeconds) || frameIntervalSeconds <= 0.0f)
+        frameIntervalSeconds = 1.0f / 90.0f;
+    return std::clamp(frameIntervalSeconds * 1.25f, 0.006f, 0.05f);
+}
+
+struct ProjectedPoint
+{
+    float x;
+    float y;
+};
+
+inline std::optional<ProjectedPoint> ProjectWorldToEye(
+    const Vector &target, const Vector &eyeOrigin, const Vector &forward,
+    const Vector &right, const Vector &up, float horizontalFovDegrees,
+    float aspect, int width, int height)
+{
+    if (width <= 0 || height <= 0 || !std::isfinite(horizontalFovDegrees) ||
+        horizontalFovDegrees <= 1.0f || horizontalFovDegrees >= 179.0f ||
+        !std::isfinite(aspect) || aspect <= 0.0f)
+        return std::nullopt;
+    const Vector toTarget = target - eyeOrigin;
+    const double depth = static_cast<double>(DotProduct(toTarget, forward));
+    if (!std::isfinite(depth) || depth <= 0.01)
+        return std::nullopt;
+    constexpr double radiansPerDegree = 3.14159265358979323846 / 180.0;
+    const double tanHalfX = std::tan(horizontalFovDegrees * radiansPerDegree * 0.5);
+    const double horizontal = static_cast<double>(DotProduct(toTarget, right));
+    const double vertical = static_cast<double>(DotProduct(toTarget, up));
+    const double x = width * (0.5 + horizontal / (2.0 * depth * tanHalfX));
+    const double y = height * (0.5 - vertical * aspect / (2.0 * depth * tanHalfX));
+    if (!std::isfinite(x) || !std::isfinite(y) || x < 0.0 || x >= width ||
+        y < 0.0 || y >= height)
+        return std::nullopt;
+    return ProjectedPoint{static_cast<float>(x), static_cast<float>(y)};
+}
+
+inline bool IsCenteredReticleSprite(int x, int y, int width, int height,
+                                    int windowWidth, int windowHeight)
+{
+    if (width <= 0 || height <= 0 || width > 192 || height > 192 ||
+        windowWidth <= 0 || windowHeight <= 0)
+        return false;
+    const double centerX = static_cast<double>(x) + width * 0.5;
+    const double centerY = static_cast<double>(y) + height * 0.5;
+    return std::abs(centerX - windowWidth * 0.5) <= 128.0 &&
+           std::abs(centerY - windowHeight * 0.5) <= 128.0;
+}
+
+inline bool IsReticleIconName(std::string_view shortName, std::string_view textureFile)
+{
+    const auto contains = [](std::string_view text, std::string_view needle) {
+        const auto lower = [](char value) {
+            return value >= 'A' && value <= 'Z' ?
+                static_cast<char>(value + ('a' - 'A')) : value;
+        };
+        return std::search(text.begin(), text.end(), needle.begin(), needle.end(),
+            [&](char a, char b) { return lower(a) == lower(b); }) != text.end();
+    };
+    return contains(shortName, "crosshair") || contains(textureFile, "crosshair") ||
+           contains(textureFile, "qi_center");
+}
 
 inline std::optional<WorldAimGeometry> PrepareWorldAimGeometry(
     const Vector &origin, const Vector &target, bool traceHit)
@@ -82,6 +150,24 @@ inline std::optional<ScreenPoint> ProjectedCrosshairPosition(
 {
     return ProjectedCrosshairPosition(clipped, projectedX, projectedY, sourceX, sourceY,
         windowWidth, windowHeight, renderWidth, renderHeight, renderWidth, renderHeight);
+}
+
+inline std::optional<ScreenPoint> ProjectReticleSpriteToEye(
+    const Vector &target, const Vector &eyeOrigin, const Vector &forward,
+    const Vector &right, const Vector &up, float horizontalFovDegrees,
+    float aspect, int renderWidth, int renderHeight,
+    int spriteX, int spriteY, int spriteWidth, int spriteHeight,
+    int windowWidth, int windowHeight)
+{
+    if (!IsCenteredReticleSprite(spriteX, spriteY, spriteWidth, spriteHeight,
+                                windowWidth, windowHeight))
+        return std::nullopt;
+    const auto point = ProjectWorldToEye(target, eyeOrigin, forward, right, up,
+                                         horizontalFovDegrees, aspect, renderWidth, renderHeight);
+    if (!point)
+        return std::nullopt;
+    return ProjectedCrosshairPosition(false, point->x, point->y, spriteX, spriteY,
+        windowWidth, windowHeight, renderWidth, renderHeight);
 }
 
 } // namespace AimFeedback
