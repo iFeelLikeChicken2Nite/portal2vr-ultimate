@@ -166,8 +166,11 @@ inline std::optional<ScreenPoint> ProjectReticleSpriteToEye(
                                          horizontalFovDegrees, aspect, renderWidth, renderHeight);
     if (!point)
         return std::nullopt;
+    // Portal 2's observed native reticle coordinates are centered on the
+    // Source window, even while the world renders to a larger eye target.
     return ProjectedCrosshairPosition(false, point->x, point->y, spriteX, spriteY,
-        windowWidth, windowHeight, renderWidth, renderHeight);
+        windowWidth, windowHeight, renderWidth, renderHeight,
+        windowWidth, windowHeight);
 }
 
 } // namespace AimFeedback

@@ -62,6 +62,14 @@ static void expect(bool actual, bool expected, const char* caseName)
     }
 }
 
+static void expectInt(int actual, int expected, const char* caseName)
+{
+    if (actual != expected) {
+        std::cerr << caseName << " failed: " << actual << " != " << expected << "\n";
+        ++failures;
+    }
+}
+
 static void expectNear(float actual, float expected, const char* caseName)
 {
     if (!std::isfinite(actual) || std::fabs(actual - expected) > 0.0001f) {
@@ -674,10 +682,21 @@ int main()
     expect(stereoReticle.has_value(), true,
            "native center HUD icon can be repositioned for one eye");
     if (stereoReticle) {
-        expect(stereoReticle->x, 477,
-               "left-eye reticle preserves Source icon offset from its projected hit");
-        expect(stereoReticle->y, 458,
-               "left-eye reticle preserves Source vertical icon offset");
+        expectInt(stereoReticle->x, 618,
+               "left-eye reticle maps the eye projection back to Source window coordinates");
+        expectInt(stereoReticle->y, 318,
+               "left-eye reticle stays inside the Source window at eye center height");
+    }
+    const auto nativeWindowReticle = AimFeedback::ProjectReticleSpriteToEye(
+        Vector{10, 0, 0}, Vector{0, 0, 0}, eyeForward, eyeRight, eyeUp,
+        90.0f, 1.0f, 2528, 2704, 612, 318, 56, 84, 1280, 720);
+    expect(nativeWindowReticle.has_value(), true,
+           "eye-size and window-size mismatch still projects the native reticle");
+    if (nativeWindowReticle) {
+        expectInt(nativeWindowReticle->x, 612,
+               "eye-center hit keeps the original Source reticle X at mismatched resolutions");
+        expectInt(nativeWindowReticle->y, 318,
+               "eye-center hit keeps the original Source reticle Y at mismatched resolutions");
     }
     expect(AimFeedback::ProjectReticleSpriteToEye(
         Vector{10, 0, 0}, Vector{0, 0, 0}, eyeForward, eyeRight, eyeUp,
@@ -688,9 +707,9 @@ int main()
     expect(projectedCrosshair.has_value(), true,
            "on-screen controller aim produces a crosshair position");
     if (projectedCrosshair) {
-        expect(projectedCrosshair->x, 683,
+        expectInt(projectedCrosshair->x, 683,
                "crosshair projection preserves the Source sprite offset");
-        expect(projectedCrosshair->y, 1805,
+        expectInt(projectedCrosshair->y, 1805,
                "crosshair projection uses the VR viewport height");
     }
     const auto croppedCrosshair = AimFeedback::ProjectedCrosshairPosition(
@@ -699,9 +718,9 @@ int main()
     expect(croppedCrosshair.has_value(), true,
            "crosshair remains inside the cropped Source window overlay");
     if (croppedCrosshair) {
-        expect(croppedCrosshair->x, 332,
+        expectInt(croppedCrosshair->x, 332,
                "HUD crosshair X is scaled from the eye target to the cropped window");
-        expect(croppedCrosshair->y, 450,
+        expectInt(croppedCrosshair->y, 450,
                "HUD crosshair Y is scaled from the eye target to the cropped window");
     }
     expect(AimFeedback::ProjectedCrosshairPosition(true, 2141487616.0f, 21570732032.0f,
