@@ -439,6 +439,14 @@ void VR::CreateVRTextures()
 
     Logger::Write("Creating VR render targets: " + std::to_string(m_RenderWidth) +
                   "x" + std::to_string(m_RenderHeight));
+    if (windowWidth > 0 && windowHeight > 0)
+        Logger::Write("Projection geometry: Source window=" +
+            std::to_string(windowWidth) + "x" + std::to_string(windowHeight) +
+            " aspect=" + std::to_string(static_cast<float>(windowWidth) / windowHeight) +
+            " VR eye=" + std::to_string(m_RenderWidth) + "x" +
+            std::to_string(m_RenderHeight) + " projectionAspect=" +
+            std::to_string(m_Aspect) + " horizontalFov=" + std::to_string(m_Fov) +
+            "; native viewmodel aspect requires in-game verification");
 
     m_Game->m_MaterialSystem->isGameRunning = false;
     m_Game->m_MaterialSystem->BeginRenderTargetAllocation();
