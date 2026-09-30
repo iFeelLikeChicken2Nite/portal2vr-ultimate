@@ -504,6 +504,44 @@ int main()
            "menu VGUI paint cannot capture HUD");
     expect(HudCapture::CanCapturePaint(true, true, true, true, true, true, true), false,
            "visible cursor blocks paint capture");
+    HudCapture::RouteState hudRoute;
+    expect(hudRoute.ShouldCaptureExplicitly(true, true, false), false,
+           "HUD capture initially waits for Source target push");
+    expect(hudRoute.ObserveRedirectPaint(false, false), true,
+           "eligible paint without a nested target push arms explicit capture");
+    expect(hudRoute.AllowsRedirect(), false,
+           "explicit capture does not also redirect nested Source pushes");
+    expect(hudRoute.ShouldCaptureExplicitly(true, false, false), false,
+           "explicit HUD capture skips non-UI paint passes");
+    expect(hudRoute.ShouldCaptureExplicitly(true, true, true), false,
+           "explicit HUD capture runs at most once before submission");
+    expect(hudRoute.ShouldCaptureExplicitly(true, true, false), true,
+           "next eligible UI paint captures into the HUD target");
+    expect(hudRoute.ObserveExplicitPaint(true), true,
+           "unexpected nested target push disables unsafe explicit capture");
+    expect(hudRoute.ShouldCaptureExplicitly(true, true, false), false,
+           "disabled capture does not reuse an ambiguous render target");
+    unsigned nestedPushDepth = 2;
+    unsigned nestedPops = 0;
+    HudCapture::UnwindNestedTargets(nestedPushDepth, [&] { ++nestedPops; });
+    expect(nestedPops, 2u,
+           "explicit capture unwinds unmatched nested pushes before its outer target");
+    expect(nestedPushDepth, 0u,
+           "nested target depth is reset only after matching pops");
+    HudCapture::UnwindNestedTargets(nestedPushDepth, [&] { ++nestedPops; });
+    expect(nestedPops, 2u,
+           "balanced explicit capture needs no nested target pops");
+    expect(HudCapture::ShouldForwardPaintPop(true, 0), false,
+           "unmatched Source pop cannot remove the explicit HUD target");
+    expect(HudCapture::ShouldForwardPaintPop(true, 1), true,
+           "Source pop can remove a Source target nested inside the HUD target");
+    expect(HudCapture::ShouldForwardPaintPop(false, 0), true,
+           "normal paint keeps Source pop behavior unchanged");
+    HudCapture::RouteState sourcePushRoute;
+    expect(sourcePushRoute.ObserveRedirectPaint(true, false), false,
+           "Source target push preserves original redirect strategy");
+    expect(sourcePushRoute.AllowsRedirect(), true,
+           "original redirect remains available when Source pushes a target");
     expect(AimFeedback::ShouldRequestLaser(2, true, true, true, false), true,
            "laser request does not depend on Source crosshair paint");
     expect(AimFeedback::ShouldRequestLaser(1, true, true, true, false), false,

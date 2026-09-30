@@ -552,7 +552,7 @@ void VR::SubmitExperimentalHUDOverlay()
     if (!m_Overlay || m_HUDHandle == vr::k_ulOverlayHandleInvalid)
         return;
     if (m_RenderedHud && !m_HUDCaptureLogged) {
-        Logger::Write("Experimental HUD: first VGUI render target redirect observed (painted contents unverified)");
+        Logger::Write("Experimental HUD: first capture target ready for overlay submission (painted contents unverified)");
         m_HUDCaptureLogged = true;
     }
     if (m_RenderedHud)
@@ -560,7 +560,7 @@ void VR::SubmitExperimentalHUDOverlay()
     else if (m_RenderedNewFrame && m_CreatedVRTextures &&
              m_Game->m_Hooks->m_HudCaptureHooksReady &&
              ++m_HUDMissingCaptureFrames == 120)
-        Logger::Write("Experimental HUD: no VGUI render target redirect after 120 stereo frames; overlay remains hidden");
+        Logger::Write("Experimental HUD: no HUD capture target after 120 stereo frames; overlay remains hidden");
     const bool canShow = m_Config.experimentalHudOverlay && m_RenderedNewFrame && m_RenderedHud && m_CreatedVRTextures &&
         m_HmdPose.valid && !m_Game->m_VguiSurface->IsCursorVisible() && m_HUDTexture &&
         m_VKHUD.m_VRTexture.handle;
@@ -580,6 +580,8 @@ void VR::SubmitExperimentalHUDOverlay()
                 std::to_string(textureError) + "," + std::to_string(showError));
             m_NextHUDOverlayErrorLog = now + std::chrono::seconds(5);
         }
+    } else if (m_RenderDiagnostics.First(RenderDiagnosticEvent::HudOverlayShown)) {
+        Logger::Write("Experimental HUD overlay submitted successfully (pixels/alpha/subtitles unverified)");
     }
 }
 

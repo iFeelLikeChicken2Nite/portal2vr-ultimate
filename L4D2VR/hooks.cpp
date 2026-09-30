@@ -44,6 +44,7 @@ Hooks::Hooks(Game *game)
 
 	m_PushHUDStep = -999;
 	m_PushedHud = true;
+	m_HudCaptureRoute = HudCapture::RouteState{};
 
 	if (initSourceHooks() != 0)
 		return;
@@ -602,7 +603,7 @@ void Hooks::dPushRenderTargetAndViewport(void *ecx, void *edx, ITexture *pTextur
 {
 	const bool inPaint = m_VguiPaintActive;
 	const bool published = Portal2VRRuntime::IsPublished(g_Game, m_Game);
-	const bool redirect = published &&
+	const bool redirect = published && m_HudCaptureRoute.AllowsRedirect() &&
 		HudCapture::ShouldRedirectTarget(m_VR->m_Config.experimentalHudOverlay,
 			m_Game->m_Hooks->m_HudCaptureHooksReady, m_VR->m_CreatedVRTextures,
 			inPaint, m_Game->m_VguiSurface->IsCursorVisible(), m_PushedHud) &&
@@ -649,6 +650,11 @@ void Hooks::dPushRenderTargetAndViewport(void *ecx, void *edx, ITexture *pTextur
 
 void Hooks::dPopRenderTargetAndViewport(void *ecx, void *edx)
 {
+	if (m_VguiPaintActive && !HudCapture::ShouldForwardPaintPop(
+		m_ExplicitHudCaptureActive, m_HudPushDepth)) {
+		m_HudUnexpectedPopDuringPaint = true;
+		return;
+	}
 	if (m_VguiPaintActive && m_HudPushDepth > 0)
 		--m_HudPushDepth;
 	if (m_HudTargetActive && m_HudPushDepth == 0)
@@ -692,17 +698,65 @@ void Hooks::dVGui_Paint(void *ecx, void *edx, int mode)
 		return hkVgui_Paint.fOriginal(ecx, mode);
 	if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::HudPaintEligible))
 		logPaintState("first eligible call");
+	const bool explicitCapture = m_HudCaptureRoute.ShouldCaptureExplicitly(
+		capture, (mode & PAINT_UIPANELS) != 0, m_VR->m_RenderedHud);
+	IMatRenderContext *captureContext = nullptr;
+	if (explicitCapture) {
+		captureContext = m_Game->m_MaterialSystem->GetRenderContext();
+		if (!captureContext) {
+			if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::HudExplicitContextUnavailable))
+				Logger::Write("Experimental HUD: explicit capture skipped; render context unavailable");
+			return hkVgui_Paint.fOriginal(ecx, mode | PAINT_UIPANELS | PAINT_INGAMEPANELS);
+		}
+	}
 
 	m_HudPushSeenDuringPaint = false;
 	m_HudRedirectSeenDuringPaint = false;
+	m_HudUnexpectedPopDuringPaint = false;
+	m_ExplicitHudCaptureActive = captureContext != nullptr;
 	m_VguiPaintActive = true;
+	if (captureContext) {
+		// The observed post-stereo UI paint has no nested target push. Bracket
+		// that paint using the already-resolved six-argument Source ABI.
+		hkPushRenderTargetAndViewport.fOriginal(captureContext, m_VR->m_HUDTexture,
+			nullptr, 0, 0, m_VR->m_RenderWidth, m_VR->m_RenderHeight);
+		captureContext->OverrideAlphaWriteEnable(true, true);
+		captureContext->ClearColor4ub(0, 0, 0, 0);
+		captureContext->ClearBuffers(true, false);
+	}
 	mode |= PAINT_UIPANELS | PAINT_INGAMEPANELS;
 	hkVgui_Paint.fOriginal(ecx, mode);
+	if (captureContext) {
+		const unsigned unmatchedNestedPushes = m_HudPushDepth;
+		HudCapture::UnwindNestedTargets(m_HudPushDepth, [&] {
+			hkPopRenderTargetAndViewport.fOriginal(captureContext);
+		});
+		captureContext->OverrideAlphaWriteEnable(false, false);
+		captureContext->ClearColor4ub(0, 0, 0, 255);
+		hkPopRenderTargetAndViewport.fOriginal(captureContext);
+		m_ExplicitHudCaptureActive = false;
+		captureContext->Release();
+		if (m_HudCaptureRoute.ObserveExplicitPaint(
+			m_HudPushSeenDuringPaint || m_HudUnexpectedPopDuringPaint)) {
+			m_VR->m_RenderedHud = false;
+			if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::HudExplicitUnexpectedPush))
+				Logger::Write("Experimental HUD: unexpected target stack operation in explicit paint; capture disabled until restart (unmatched pushes unwound=" +
+					std::to_string(unmatchedNestedPushes) + ", unmatched pop blocked=" +
+					std::to_string(m_HudUnexpectedPopDuringPaint) + ")");
+		} else {
+			m_VR->m_RenderedHud = true;
+			if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::HudExplicitCapture))
+				Logger::Write("Experimental HUD: explicit UI paint captured to vrHUD (pixels/alpha unverified)");
+		}
+	}
 	m_VguiPaintActive = false;
-	if (!m_HudRedirectSeenDuringPaint &&
+	if (!captureContext && !m_HudRedirectSeenDuringPaint &&
 		m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::HudPaintNoRedirect))
 		Logger::Write("Experimental HUD: eligible VGui_Paint returned without redirect; "
 			"render-target push during paint=" + std::to_string(m_HudPushSeenDuringPaint));
+	if (!captureContext && m_HudCaptureRoute.ObserveRedirectPaint(
+		m_HudPushSeenDuringPaint, m_HudRedirectSeenDuringPaint))
+		Logger::Write("Experimental HUD: no nested VGUI target push; explicit UI capture armed");
 	if (m_HudPushDepth || m_HudTargetActive) {
 		if (m_HudTargetActive) {
 			IMatRenderContext* context = m_Game->m_MaterialSystem->GetRenderContext();
