@@ -1538,6 +1538,15 @@ void VR::UpdateTracking()
                 const int portalColor = std::clamp(activeWeapon->m_iLastFiredPortal, 0, 2);
                 portalPlayer->m_PointLaser->SetControlPoint(1, m_AimPos);
                 portalPlayer->m_PointLaser->SetControlPoint(2, m_Game->m_singlePlayerPortalColors[portalColor] * 0.5f);
+                if (m_RenderDiagnostics.First(RenderDiagnosticEvent::LaserControlPoints)) {
+                    const Vector controllerOrigin = GetRightControllerAbsPos();
+                    Logger::Write("Controller laser control points updated: controllerOrigin=" +
+                        std::to_string(controllerOrigin.x) + "," + std::to_string(controllerOrigin.y) +
+                        "," + std::to_string(controllerOrigin.z) + " targetCP1=" +
+                        std::to_string(m_AimPos.x) + "," + std::to_string(m_AimPos.y) +
+                        "," + std::to_string(m_AimPos.z) +
+                        "; this path does not set particle CP0; actual visibility unverified");
+                }
             } else {
                 if (!m_LaserRequestLogged) {
                     Logger::Write("Controller laser creation requested; crosshair paint state is no longer a prerequisite");

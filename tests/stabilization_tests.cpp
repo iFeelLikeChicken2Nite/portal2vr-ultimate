@@ -125,6 +125,12 @@ int main()
            "first stereo submission is logged independently");
     expect(renderDiagnostics.First(RenderDiagnosticEvent::StereoSubmission), false,
            "repeated stereo submissions are not logged");
+    expect(renderDiagnostics.First(RenderDiagnosticEvent::HudPaintEligible), true,
+           "first eligible HUD paint diagnostic is logged");
+    expect(renderDiagnostics.First(RenderDiagnosticEvent::HudPaintEligible), false,
+           "eligible HUD paint diagnostic does not spam each frame");
+    expect(renderDiagnostics.First(RenderDiagnosticEvent::HudPushInPaint), true,
+           "render-target push diagnostic is independent from paint diagnostic");
 
     MenuOverlayPlacement menuPlacement;
     expect(menuPlacement.ShouldAttempt(false, false), false,
@@ -488,6 +494,16 @@ int main()
            "menu paint does not redirect the HUD");
     expect(HudCapture::ShouldRedirectTarget(true, true, true, true, false, true), false,
            "only the first target push per paint is redirected");
+    expect(HudCapture::CanCapturePaint(true, true, true, true, true, true, false), true,
+           "eligible in-game VGUI paint may capture HUD");
+    expect(HudCapture::CanCapturePaint(true, true, true, true, false, true, false), false,
+           "VGUI paint before stereo frame cannot capture HUD");
+    expect(HudCapture::CanCapturePaint(true, true, true, false, true, true, false), false,
+           "missing HUD shared target blocks paint capture");
+    expect(HudCapture::CanCapturePaint(true, true, true, true, true, false, false), false,
+           "menu VGUI paint cannot capture HUD");
+    expect(HudCapture::CanCapturePaint(true, true, true, true, true, true, true), false,
+           "visible cursor blocks paint capture");
     expect(AimFeedback::ShouldRequestLaser(2, true, true, true, false), true,
            "laser request does not depend on Source crosshair paint");
     expect(AimFeedback::ShouldRequestLaser(1, true, true, true, false), false,

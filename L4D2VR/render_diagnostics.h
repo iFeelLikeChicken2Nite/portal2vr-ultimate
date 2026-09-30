@@ -13,6 +13,18 @@ enum class RenderDiagnosticEvent : std::size_t
     StereoSubmission,
     OverlayPlacementSucceeded,
     OverlayPlacementFailed,
+    HudPaintEntered,
+    HudPaintInGame,
+    HudPaintEligible,
+    HudPaintNoRedirect,
+    HudPushOutsidePaint,
+    HudPushInPaint,
+    HudRedirected,
+    CrosshairShouldDrawTrue,
+    CrosshairShouldDrawFalse,
+    CrosshairTransformTrue,
+    CrosshairTransformFalse,
+    LaserControlPoints,
     Count
 };
 

@@ -176,6 +176,8 @@ public:
 	static inline Hook<tVgui_Paint> hkVgui_Paint;
 	static inline bool m_VguiPaintActive = false;
 	static inline bool m_HudTargetActive = false;
+	static inline bool m_HudPushSeenDuringPaint = false;
+	static inline bool m_HudRedirectSeenDuringPaint = false;
 	static inline unsigned m_HudPushDepth = 0;
 	static inline Hook<tIsSplitScreen> hkIsSplitScreen;
 	static inline Hook<tPrePushRenderTarget> hkPrePushRenderTarget;

@@ -235,6 +235,12 @@ int Hooks::initSourceHooks()
 
 bool __fastcall Hooks::dCHudCrosshair_ShouldDraw(void* ecx, void* edx) {
 	bool shouldDraw = hkCHudCrosshair_ShouldDraw.fOriginal(ecx);
+	if (Portal2VRRuntime::IsPublished(g_Game, m_Game) && m_VR->m_IsVREnabled &&
+		m_Game->m_EngineClient->IsInGame() &&
+		m_VR->m_RenderDiagnostics.First(shouldDraw ? RenderDiagnosticEvent::CrosshairShouldDrawTrue :
+			RenderDiagnosticEvent::CrosshairShouldDrawFalse))
+		Logger::Write(std::string("Crosshair ShouldDraw: Source returned ") +
+			(shouldDraw ? "true" : "false") + " (actual pixels unverified)");
 
 	// Keep the Source crosshair as a fallback until the optional laser is
 	// confirmed visible by a real VR test. Symbol resolution alone is not proof.
@@ -595,15 +601,34 @@ void Hooks::dDrawModelExecute(void *ecx, void *edx, void *state, const ModelRend
 void Hooks::dPushRenderTargetAndViewport(void *ecx, void *edx, ITexture *pTexture, ITexture *pDepthTexture, int nViewX, int nViewY, int nViewW, int nViewH)
 {
 	const bool inPaint = m_VguiPaintActive;
-	const bool redirect = Portal2VRRuntime::IsPublished(g_Game, m_Game) &&
+	const bool published = Portal2VRRuntime::IsPublished(g_Game, m_Game);
+	const bool redirect = published &&
 		HudCapture::ShouldRedirectTarget(m_VR->m_Config.experimentalHudOverlay,
 			m_Game->m_Hooks->m_HudCaptureHooksReady, m_VR->m_CreatedVRTextures,
 			inPaint, m_Game->m_VguiSurface->IsCursorVisible(), m_PushedHud) &&
 		m_VR->m_HUDTexture && m_VR->m_VKHUD.m_VRTexture.handle;
-	if (inPaint)
+	if (inPaint) {
 		++m_HudPushDepth;
+		m_HudPushSeenDuringPaint = true;
+	}
+	if (published && m_VR->m_Config.experimentalHudOverlay &&
+		m_Game->m_EngineClient->IsInGame()) {
+		const auto event = inPaint ? RenderDiagnosticEvent::HudPushInPaint :
+			RenderDiagnosticEvent::HudPushOutsidePaint;
+		if (m_VR->m_RenderDiagnostics.First(event))
+			Logger::Write(std::string("Experimental HUD render-target push: inEligiblePaint=") +
+				std::to_string(inPaint) + " redirect=" + std::to_string(redirect) +
+				" alreadyRedirected=" + std::to_string(m_PushedHud) +
+				" hudTargetReady=" + std::to_string(m_VR->m_HUDTexture != nullptr &&
+					m_VR->m_VKHUD.m_VRTexture.handle != nullptr) +
+				" sourceTarget=" + std::to_string(pTexture != nullptr) +
+				" viewport=" + std::to_string(nViewW) + "x" + std::to_string(nViewH));
+	}
 	if (redirect)
 	{
+		m_HudRedirectSeenDuringPaint = true;
+		if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::HudRedirected))
+			Logger::Write("Experimental HUD render-target redirect reached (painted pixels unverified)");
 		pTexture = m_VR->m_HUDTexture;
 		hkPushRenderTargetAndViewport.fOriginal(ecx, pTexture, pDepthTexture, nViewX, nViewY, nViewW, nViewH);
 		IMatRenderContext *renderContext = m_Game->m_MaterialSystem->GetRenderContext();
@@ -641,18 +666,43 @@ void Hooks::dPopRenderTargetAndViewport(void *ecx, void *edx)
 void Hooks::dVGui_Paint(void *ecx, void *edx, int mode)
 {
 	if (!Portal2VRRuntime::IsPublished(g_Game, m_Game) ||
-		!m_Game->m_Hooks->m_HudCaptureHooksReady ||
-		!m_VR->m_Config.experimentalHudOverlay ||
-		!m_VR->m_CreatedVRTextures || !m_VR->m_HUDTexture ||
-		!m_VR->m_VKHUD.m_VRTexture.handle ||
-		!m_VR->m_RenderedNewFrame || !m_Game->m_EngineClient->IsInGame() ||
-		m_VR->m_Game->m_VguiSurface->IsCursorVisible())
+		!m_VR->m_Config.experimentalHudOverlay)
 		return hkVgui_Paint.fOriginal(ecx, mode);
 
+	const bool inGame = m_Game->m_EngineClient->IsInGame();
+	const bool cursorVisible = m_Game->m_VguiSurface->IsCursorVisible();
+	const bool targetReady = m_VR->m_HUDTexture && m_VR->m_VKHUD.m_VRTexture.handle;
+	const bool capture = HudCapture::CanCapturePaint(true, m_Game->m_Hooks->m_HudCaptureHooksReady,
+		m_VR->m_CreatedVRTextures, targetReady, m_VR->m_RenderedNewFrame,
+		inGame, cursorVisible);
+	auto logPaintState = [&](const char *phase) {
+		Logger::Write(std::string("Experimental HUD VGui_Paint ") + phase +
+			": mode=" + std::to_string(mode) + " inGame=" + std::to_string(inGame) +
+			" cursor=" + std::to_string(cursorVisible) +
+			" hooks=" + std::to_string(m_Game->m_Hooks->m_HudCaptureHooksReady) +
+			" textures=" + std::to_string(m_VR->m_CreatedVRTextures) +
+			" target=" + std::to_string(targetReady) +
+			" stereoFrame=" + std::to_string(m_VR->m_RenderedNewFrame));
+	};
+	if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::HudPaintEntered))
+		logPaintState("first call");
+	if (inGame && m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::HudPaintInGame))
+		logPaintState("first in-game call");
+	if (!capture)
+		return hkVgui_Paint.fOriginal(ecx, mode);
+	if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::HudPaintEligible))
+		logPaintState("first eligible call");
+
+	m_HudPushSeenDuringPaint = false;
+	m_HudRedirectSeenDuringPaint = false;
 	m_VguiPaintActive = true;
 	mode |= PAINT_UIPANELS | PAINT_INGAMEPANELS;
 	hkVgui_Paint.fOriginal(ecx, mode);
 	m_VguiPaintActive = false;
+	if (!m_HudRedirectSeenDuringPaint &&
+		m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::HudPaintNoRedirect))
+		Logger::Write("Experimental HUD: eligible VGui_Paint returned without redirect; "
+			"render-target push during paint=" + std::to_string(m_HudPushSeenDuringPaint));
 	if (m_HudPushDepth || m_HudTargetActive) {
 		if (m_HudTargetActive) {
 			IMatRenderContext* context = m_Game->m_MaterialSystem->GetRenderContext();
@@ -834,13 +884,26 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 
 		//newZ = 1.0 / sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z);
 
-		ScreenTransform(m_VR->m_AimPos, &screen, m_VR->m_RenderWidth, m_VR->m_RenderHeight);
+		const bool clipTransformResult = ScreenTransform(m_VR->m_AimPos, &screen,
+			m_VR->m_RenderWidth, m_VR->m_RenderHeight);
 
 		int offsetX = x - (windowWidth * 0.5f);
 		int offsetY = y - (windowHeight * 0.5f);
 
 		newX = screen.x + offsetX;
 		newY = screen.y + offsetY;
+		if (Portal2VRRuntime::IsPublished(g_Game, m_Game) &&
+			m_Game->m_EngineClient->IsInGame() &&
+			m_VR->m_RenderDiagnostics.First(clipTransformResult ?
+				RenderDiagnosticEvent::CrosshairTransformTrue :
+				RenderDiagnosticEvent::CrosshairTransformFalse))
+			Logger::Write("Crosshair DrawSelf: ClipTransformResult=" + std::to_string(clipTransformResult) +
+				" source=" + std::to_string(x) + "," + std::to_string(y) +
+				" output=" + std::to_string(newX) + "," + std::to_string(newY) +
+				" target=" + std::to_string(screen.x) + "," + std::to_string(screen.y) +
+				" window=" + std::to_string(windowWidth) + "x" + std::to_string(windowHeight) +
+				" vr=" + std::to_string(m_VR->m_RenderWidth) + "x" +
+				std::to_string(m_VR->m_RenderHeight));
 	}
 
 	return hkDrawSelf.fOriginal(ecx, newX, newY, w, h, clr, flApparentZ);
