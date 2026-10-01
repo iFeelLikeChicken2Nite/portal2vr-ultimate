@@ -12,6 +12,7 @@ from tools import test_launcher_core as core
 TEMPLATE = (
     "TrackingMode=Seated # tracking\n"
     "RoomscaleMode=Off\n"
+    "6DOF=true\n"
     "PortalOrientationMode=LegacyYaw\n"
     "ExperimentalHUDOverlay=false\n"
     "ExperimentalWorldAimMarker=false\n"
@@ -90,6 +91,23 @@ class ProfileTests(unittest.TestCase):
             core.render_config(TEMPLATE.replace("RenderWindow=0\n", ""), "baseline")
         with self.assertRaisesRegex(ValueError, "Duplicate config key: RoomscaleMode"):
             core.render_config(TEMPLATE + "RoomscaleMode=Observe\n", "baseline")
+
+    def test_active_roomscale_is_explicit_and_preserves_current_vr_setup(self):
+        self.assertIn("roomscale_active_experimental", core.PROFILES)
+        active = core.render_config(TEMPLATE.replace("6DOF=true", "6DOF=false"),
+                                    "roomscale_active_experimental")
+        self.assertIn("RoomscaleMode=ActiveExperimental\n", active)
+        self.assertIn("6DOF=true\n", active)
+        self.assertIn("PortalOrientationMode=LegacyYaw\n", active)
+        self.assertIn("ExperimentalHUDOverlay=true\n", active)
+        self.assertIn("ExperimentalWorldAimMarker=true\n", active)
+        self.assertIn("ExperimentalPortalShotHaptics=true\n", active)
+        self.assertIn("ViewmodelPosCustomOffsetX=-4.5\n", active)
+        self.assertIn("ViewmodelPosCustomOffsetY=1.0\n", active)
+        self.assertIn("ViewmodelPosCustomOffsetZ=-1.5\n", active)
+        self.assertIn("RoomscaleMode=Off\n", core.render_config(TEMPLATE, "baseline"))
+        self.assertIn("RoomscaleMode=Observe\n",
+                      core.render_config(TEMPLATE, "roomscale_observe_combined"))
 
     def test_combined_profile_keeps_confirmed_features_active_for_reticle_test(self):
         rendered = core.render_config(TEMPLATE, "combined")

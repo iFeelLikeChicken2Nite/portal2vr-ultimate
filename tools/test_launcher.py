@@ -61,7 +61,8 @@ class TestLauncher:
         selector.grid(row=2, column=1, sticky="ew", padx=8)
         ttk.Label(outer, text="The combined profile enables confirmed HUD, laser and haptics "
                   "settings; the native reticle is still experimental. "
-                  "M3 Observe does not move the player; OpenXR is not included.",
+                  "M3 Active roomscale requests experimental movement; test small steps first. "
+                  "M3 Observe remains diagnostic only.",
                   wraplength=850).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 6))
 
         checklist = ttk.LabelFrame(outer, text="Checklist — tick only after a real test")
