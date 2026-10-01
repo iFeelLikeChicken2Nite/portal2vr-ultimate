@@ -16,10 +16,14 @@ TEMPLATE = (
     "PortalOrientationMode=LegacyYaw\n"
     "ExperimentalHUDOverlay=false\n"
     "ExperimentalWorldAimMarker=false\n"
+    "ExperimentalViewmodelAlignment=false\n"
     "ExperimentalPortalShotHaptics=false\n"
     "AimMode=2\n"
     "RenderWindow=0\n"
     "TurnSpeed=0.15\n"
+    "HUDDistanceMeters=1.3\n"
+    "HUDWidthMeters=1.4\n"
+    "HUDVerticalOffsetMeters=-0.15\n"
     "ViewmodelPosCustomOffsetX=0.0\n"
     "ViewmodelPosCustomOffsetY=0.0\n"
     "ViewmodelPosCustomOffsetZ=0.0\n"
@@ -27,6 +31,32 @@ TEMPLATE = (
 
 
 class ProfileTests(unittest.TestCase):
+    def test_active_roomscale_raises_and_enlarges_captions_without_leaking_to_baseline(self):
+        def settings(profile):
+            return dict(line.split("=", 1) for line in
+                        core.render_config(TEMPLATE, profile).splitlines() if "=" in line)
+        active = settings("roomscale_active_experimental")
+        baseline = settings("baseline")
+        self.assertGreater(float(active["HUDVerticalOffsetMeters"]),
+                           float(baseline["HUDVerticalOffsetMeters"]))
+        # Physical width / distance is proportional to tan(angular width/2).
+        active_size = float(active["HUDWidthMeters"]) / float(active["HUDDistanceMeters"])
+        baseline_size = float(baseline["HUDWidthMeters"]) / float(baseline["HUDDistanceMeters"])
+        self.assertGreater(active_size, baseline_size * 1.2)
+        self.assertIn("HUDVerticalOffsetMeters=-0.15\n", core.render_config(TEMPLATE, "baseline"))
+
+    def test_viewmodel_fix_is_enabled_only_in_alignment_test_profiles(self):
+        for profile in ("roomscale_active_experimental", "aim_model_alignment"):
+            with self.subTest(profile=profile):
+                self.assertIn("ExperimentalViewmodelAlignment=true\n",
+                              core.render_config(TEMPLATE, profile))
+        template = TEMPLATE.replace("ExperimentalViewmodelAlignment=false",
+                                    "ExperimentalViewmodelAlignment=true")
+        for profile in ("baseline", "roomscale_observe_combined", "combined", "hud"):
+            with self.subTest(profile=profile):
+                self.assertIn("ExperimentalViewmodelAlignment=false\n",
+                              core.render_config(template, profile))
+
     def test_gui_import_has_no_window_side_effect_and_checklist_ids_are_unique(self):
         gui = importlib.import_module("tools.test_launcher")
         self.assertTrue(callable(gui.main))
