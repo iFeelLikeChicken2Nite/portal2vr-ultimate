@@ -672,20 +672,28 @@ int main()
            "portal-status texture is recognized by its Source material name");
     expect(AimFeedback::IsReticleIconName("crosshair", "sprites/qi_center"), true,
            "quick-info center icon remains eligible when used by Portal 2");
+    expect(AimFeedback::IsReticleIconName("qi_center", "sprites/other"), true,
+           "QuickInfo short name remains eligible when texture filename differs");
     expect(AimFeedback::IsReticleIconName("health", "sprites/health"), false,
            "unrelated centered Source HUD icon cannot be moved with the reticle");
     expect(AimFeedback::IsReticleIconName("", ""), false,
            "unreadable Source icon identity is not treated as a reticle");
+    expect(AimFeedback::IsPortalStatusIconName("portal_left", "hud/portal_crosshairs"), true,
+           "portal HUD texture is tracked separately from the weapon crosshair");
+    expect(AimFeedback::IsPortalStatusIconName("quickinfo", "sprites/qi_center"), true,
+           "QuickInfo center texture is tracked as a possible status route");
+    expect(AimFeedback::IsPortalStatusIconName("crosshair", "Crosshairs"), false,
+           "ordinary weapon crosshair is not mistaken for portal status");
     const auto stereoReticle = AimFeedback::ProjectReticleSpriteToEye(
         Vector{10, 0, 0}, Vector{0, 0.1f, 0}, eyeForward, eyeRight, eyeUp,
         90.0f, 1.0f, 1000, 1000, 612, 318, 56, 84, 1280, 720);
     expect(stereoReticle.has_value(), true,
            "native center HUD icon can be repositioned for one eye");
     if (stereoReticle) {
-        expectInt(stereoReticle->x, 618,
-               "left-eye reticle maps the eye projection back to Source window coordinates");
-        expectInt(stereoReticle->y, 318,
-               "left-eye reticle stays inside the Source window at eye center height");
+        expectInt(stereoReticle->x, 477,
+               "left-eye reticle follows the projected point in the eye target");
+        expectInt(stereoReticle->y, 458,
+               "left-eye reticle uses eye-target coordinates");
     }
     const auto nativeWindowReticle = AimFeedback::ProjectReticleSpriteToEye(
         Vector{10, 0, 0}, Vector{0, 0, 0}, eyeForward, eyeRight, eyeUp,
@@ -693,10 +701,10 @@ int main()
     expect(nativeWindowReticle.has_value(), true,
            "eye-size and window-size mismatch still projects the native reticle");
     if (nativeWindowReticle) {
-        expectInt(nativeWindowReticle->x, 612,
-               "eye-center hit keeps the original Source reticle X at mismatched resolutions");
-        expectInt(nativeWindowReticle->y, 318,
-               "eye-center hit keeps the original Source reticle Y at mismatched resolutions");
+        expectInt(nativeWindowReticle->x, 1236,
+               "eye-center hit moves the native reticle to eye-target center X");
+        expectInt(nativeWindowReticle->y, 1310,
+               "eye-center hit moves the native reticle to eye-target center Y");
     }
     expect(AimFeedback::ProjectReticleSpriteToEye(
         Vector{10, 0, 0}, Vector{0, 0, 0}, eyeForward, eyeRight, eyeUp,

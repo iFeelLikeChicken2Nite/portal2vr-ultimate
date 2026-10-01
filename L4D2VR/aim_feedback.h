@@ -87,18 +87,30 @@ inline bool IsCenteredReticleSprite(int x, int y, int width, int height,
            std::abs(centerY - windowHeight * 0.5) <= 128.0;
 }
 
+inline bool ContainsAsciiInsensitive(std::string_view text, std::string_view needle)
+{
+    const auto lower = [](char value) {
+        return value >= 'A' && value <= 'Z' ?
+            static_cast<char>(value + ('a' - 'A')) : value;
+    };
+    return std::search(text.begin(), text.end(), needle.begin(), needle.end(),
+        [&](char a, char b) { return lower(a) == lower(b); }) != text.end();
+}
+
 inline bool IsReticleIconName(std::string_view shortName, std::string_view textureFile)
 {
-    const auto contains = [](std::string_view text, std::string_view needle) {
-        const auto lower = [](char value) {
-            return value >= 'A' && value <= 'Z' ?
-                static_cast<char>(value + ('a' - 'A')) : value;
-        };
-        return std::search(text.begin(), text.end(), needle.begin(), needle.end(),
-            [&](char a, char b) { return lower(a) == lower(b); }) != text.end();
-    };
-    return contains(shortName, "crosshair") || contains(textureFile, "crosshair") ||
-           contains(textureFile, "qi_center");
+    return ContainsAsciiInsensitive(shortName, "crosshair") ||
+           ContainsAsciiInsensitive(textureFile, "crosshair") ||
+           ContainsAsciiInsensitive(shortName, "qi_center") ||
+           ContainsAsciiInsensitive(textureFile, "qi_center");
+}
+
+inline bool IsPortalStatusIconName(std::string_view shortName, std::string_view textureFile)
+{
+    return ContainsAsciiInsensitive(shortName, "portal_crosshair") ||
+           ContainsAsciiInsensitive(textureFile, "portal_crosshair") ||
+           ContainsAsciiInsensitive(shortName, "qi_center") ||
+           ContainsAsciiInsensitive(textureFile, "qi_center");
 }
 
 inline std::optional<WorldAimGeometry> PrepareWorldAimGeometry(
@@ -166,11 +178,12 @@ inline std::optional<ScreenPoint> ProjectReticleSpriteToEye(
                                          horizontalFovDegrees, aspect, renderWidth, renderHeight);
     if (!point)
         return std::nullopt;
-    // Portal 2's observed native reticle coordinates are centered on the
-    // Source window, even while the world renders to a larger eye target.
+    // Portal 2 supplies sprite placement in Source-window coordinates, but
+    // this draw occurs on an eye-sized render target. Keep the original
+    // offset from the window center while moving the sprite to the projected
+    // hit in the eye target (not the upper-left window-sized region).
     return ProjectedCrosshairPosition(false, point->x, point->y, spriteX, spriteY,
-        windowWidth, windowHeight, renderWidth, renderHeight,
-        windowWidth, windowHeight);
+        windowWidth, windowHeight, renderWidth, renderHeight);
 }
 
 } // namespace AimFeedback

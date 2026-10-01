@@ -74,6 +74,7 @@ CHECKLIST = (
     Check("M2", "m2_standing", "Standing: level loads; tracked-height anchor and recenter feel correct", "standing"),
     Check("M2", "m2_turn", "Snap/smooth turning and movement direction", "baseline"),
     Check("M2", "m2_aim", "3D line/impact marker matches right-controller shot", "aim_marker"),
+    Check("M2", "m2_portal_status", "Native blue/orange portal status follows the 3D impact marker", "aim_marker"),
     Check("M2", "m2_model_alignment", "Compare portal-gun body/glow against aim-marker profile", "aim_model_alignment"),
     Check("M3", "m3_observe", "Observe logs steps without moving the player", "observe"),
     Check("M3", "m3_collision", "Active roomscale remains off (expected limitation)", "observe"),

@@ -14,6 +14,7 @@
 #include <cstring>
 #include <iostream>
 #include <optional>
+#include <string>
 
 static std::optional<PortalOrientation::Rotation> ReadPortalRotation(const void* portal)
 {
@@ -58,6 +59,20 @@ static std::optional<SourceHudTextureIdentity> ReadSourceHudTextureIdentity(cons
         !std::memchr(identity.textureFile.data(), '\0', identity.textureFile.size()))
         return std::nullopt;
     return identity;
+}
+
+static std::string DescribeHudTexture(const SourceHudTextureIdentity &identity)
+{
+    const auto printable = [](const auto &name) {
+        for (const char *at = name.data(); *at; ++at)
+            if (*at < 32 || *at > 126)
+                return false;
+        return true;
+    };
+    return std::string("name=") +
+        (printable(identity.shortName) ? identity.shortName.data() : "<unreadable>") +
+        " material=" +
+        (printable(identity.textureFile) ? identity.textureFile.data() : "<unreadable>");
 }
 
 Hooks::Hooks(Game *game)
@@ -979,6 +994,12 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 		if (worldReticle && !m_ActiveAimEyeView &&
 			AimFeedback::IsCenteredReticleSprite(x, y, w, h, windowWidth, windowHeight)) {
 			const auto identity = ReadSourceHudTextureIdentity(ecx);
+			if (identity && AimFeedback::IsPortalStatusIconName(
+				identity->shortName.data(), identity->textureFile.data()) &&
+				m_VR->m_RenderDiagnostics.First(
+					RenderDiagnosticEvent::CrosshairWorldPortalStatusOutsideStereo))
+				Logger::Write("Experimental stereo reticle: possible Portal status outside eye passes; " +
+					DescribeHudTexture(*identity));
 			if (identity && AimFeedback::IsReticleIconName(
 				identity->shortName.data(), identity->textureFile.data()) &&
 				m_VR->m_RenderDiagnostics.First(
@@ -997,16 +1018,8 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 			if (!isReticle) {
 				if (m_VR->m_RenderDiagnostics.First(
 					RenderDiagnosticEvent::CrosshairWorldUnknownIcon)) {
-					const auto printable = [](const char *name) {
-						for (const char *at = name; *at; ++at)
-							if (*at < 32 || *at > 126)
-								return false;
-						return true;
-					};
-					Logger::Write(std::string("Experimental stereo reticle: centered Source icon left unchanged, identity=") +
-						(identity && printable(identity->shortName.data()) ? identity->shortName.data() : "unreadable") +
-						" material=" +
-						(identity && printable(identity->textureFile.data()) ? identity->textureFile.data() : "unreadable"));
+					Logger::Write(std::string("Experimental stereo reticle: centered Source icon left unchanged, ") +
+						(identity ? DescribeHudTexture(*identity) : "identity unreadable"));
 				}
 				return hkDrawSelf.fOriginal(ecx, x, y, w, h, clr, flApparentZ);
 			}
@@ -1025,6 +1038,14 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 					Logger::Write("Experimental stereo reticle: center sprite outside eye viewport; skipped");
 				return 0;
 			}
+			if (AimFeedback::IsPortalStatusIconName(
+				identity->shortName.data(), identity->textureFile.data()) &&
+				m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::CrosshairWorldPortalStatus))
+				Logger::Write("Experimental stereo reticle: possible Portal status moved in eye pass; " +
+					DescribeHudTexture(*identity) + " source=" +
+					std::to_string(x) + "," + std::to_string(y) +
+					" eye=" + std::to_string(projected->x) + "," +
+					std::to_string(projected->y));
 			const auto event = m_ActiveAimEye == 1 ?
 				RenderDiagnosticEvent::CrosshairWorldLeftEye :
 				RenderDiagnosticEvent::CrosshairWorldRightEye;
@@ -1033,6 +1054,7 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 					(m_ActiveAimEye == 1 ? "left" : "right") + " eye " +
 					std::to_string(x) + "," + std::to_string(y) + " -> " +
 					std::to_string(projected->x) + "," + std::to_string(projected->y) +
+					" " + DescribeHudTexture(*identity) +
 					"; actual status pixels require VR verification");
 			return hkDrawSelf.fOriginal(ecx, projected->x, projected->y,
 				w, h, clr, flApparentZ);
