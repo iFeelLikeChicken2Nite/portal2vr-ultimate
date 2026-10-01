@@ -4,6 +4,7 @@
 #include "../L4D2VR/config.h"
 #include "../L4D2VR/tracking_space.h"
 #include "../L4D2VR/roomscale_motion.h"
+#include "../L4D2VR/roomscale_motor.h"
 #include "../L4D2VR/portal_orientation.h"
 #include "../L4D2VR/ui_input.h"
 #include "../L4D2VR/haptics.h"
@@ -380,6 +381,98 @@ int main()
     expect(UiInput::MapMenuPointer(std::numeric_limits<float>::quiet_NaN(), 0,
                                   1920, 1080, 800, 600, false).has_value(), false,
            "nonfinite overlay coordinates cannot reach VGUI");
+
+    // A body echo must remove the same displacement from the visual offset.
+    // Wrong-sign compensation or open-loop commands fail these fixtures.
+    const auto motorTime = std::chrono::steady_clock::time_point{} + std::chrono::seconds(1);
+    RoomscaleMotion::Motor motor;
+    motor.OnRender({100, 200, 64}, {0, 0, 0}, 1, 1, 43.2f, motorTime);
+    expect(motor.OnCommand(1, {1, 0, 0}, false, motorTime).has_value(), false,
+           "roomscale baseline does not request movement");
+    auto motorView = motor.OnRender({100, 200, 64}, {4, 0, 2}, 2, 1, 43.2f, motorTime);
+    auto motorMove = motor.OnCommand(2, {1, 0, 0}, false, motorTime);
+    expect(motorMove.has_value(), true, "physical step requests bounded Source movement");
+    if (motorMove) {
+        expectNear(motorMove->forward, 64.0f, "motor applies positional feedback gain");
+        expectNear(motorMove->side, 0.0f, "motor does not add a perpendicular step");
+    }
+    expectNear(motorView.x, 4.0f, "camera follows head before body accepts step");
+    expectNear(motorView.z, 2.0f, "motor preserves vertical HMD motion");
+    expect(motor.OnCommand(2, {1, 0, 0}, false, motorTime).has_value(), false,
+           "motor does not inject twice into a repeated command");
+    motorView = motor.OnRender({104, 200, 64}, {4, 0, 2}, 2, 1, 43.2f, motorTime);
+    expectNear(motorView.x, 0.0f, "accepted body displacement is not added to head twice");
+    expect(motor.OnCommand(3, {1, 0, 0}, false, motorTime).has_value(), false,
+           "accepted movement stops correction commands");
+    motor.Reset();
+    motorView = motor.OnRender({500, 500, 64}, {4, 0, 2}, 3, 1, 43.2f, motorTime);
+    expectNear(motorView.x, 0.0f, "portal reset preserves compensated camera offset");
+    expect(motor.OnCommand(4, {1, 0, 0}, false, motorTime).has_value(), false,
+           "portal reset discards old movement target");
+    motor.Reset(true);
+    motorView = motor.OnRender({500, 500, 64}, {0, 0, 0}, 4, 1, 43.2f, motorTime);
+    expectNear(motorView.x, 0.0f, "explicit recenter clears visual compensation");
+
+    RoomscaleMotion::Motor blockedMotor;
+    blockedMotor.OnRender({0, 0, 64}, {0, 0, 0}, 1, 1, 43.2f, motorTime);
+    blockedMotor.OnRender({0, 0, 64}, {10, 0, 0}, 2, 1, 43.2f, motorTime);
+    motorMove = blockedMotor.OnCommand(1, {1, 0, 0}, false, motorTime);
+    expect(motorMove.has_value(), true, "wall-blocked step remains a movement request");
+    motorView = blockedMotor.OnRender({0, 0, 64}, {20, 0, 0}, 3, 1, 43.2f, motorTime);
+    expectNear(motorView.x, 8.0f, "wall-blocked camera residual is bounded");
+    motorMove = blockedMotor.OnCommand(2, {0, 1, 0}, false, motorTime);
+    if (motorMove) {
+        expectNear(motorMove->forward, 0.0f, "movement projection respects view yaw");
+        expectNear(motorMove->side, 175.0f, "movement request has bounded speed");
+    } else expect(false, true, "large residual requests movement");
+    blockedMotor.OnRender({0, 0, 64}, {10, 0, 0}, 4, 1, 43.2f, motorTime);
+    blockedMotor.OnRender({0, 0, 64}, {0, 0, 0}, 5, 1, 43.2f, motorTime);
+    expect(blockedMotor.OnCommand(3, {1, 0, 0}, false, motorTime).has_value(), false,
+           "return after blocked step does not move body away from original position");
+    blockedMotor.OnRender({0, 0, 64}, {0.2f, 0.2f, 0}, 6, 1, 43.2f, motorTime);
+    expect(blockedMotor.OnCommand(4, {1, 0, 0}, false, motorTime).has_value(), false,
+           "sub-centimeter tracking noise does not drive body");
+    blockedMotor.OnRender({0, 0, 64}, {10, 0, 0}, 7, 1, 43.2f, motorTime);
+    blockedMotor.Reset();
+    blockedMotor.OnRender({100, 0, 64}, {10, 0, 0}, 8, 1, 43.2f, motorTime);
+    motorView = blockedMotor.OnRender({100, 0, 64}, {20, 0, 0}, 9, 1, 43.2f, motorTime);
+    expectNear(motorView.x, 8.0f, "repeated reset cannot stack wall lean beyond limit");
+
+    RoomscaleMotion::Motor manualMotor;
+    manualMotor.OnRender({0, 0, 64}, {0, 0, 0}, 1, 1, 43.2f, motorTime);
+    manualMotor.OnRender({0, 0, 64}, {4, 0, 0}, 2, 1, 43.2f, motorTime);
+    expect(manualMotor.OnCommand(1, {1, 0, 0}, true, motorTime).has_value(), false,
+           "stick input suppresses roomscale request");
+    manualMotor.OnRender({10, 0, 64}, {4, 0, 0}, 2, 1, 43.2f, motorTime);
+    expect(manualMotor.OnCommand(2, {1, 0, 0}, false, motorTime).has_value(), false,
+           "roomscale does not undo completed stick movement");
+    manualMotor.OnRender({10, 0, 64}, {6, 0, 0}, 3, 1, 43.2f, motorTime);
+    expect(manualMotor.OnCommand(3, {1, 0, 0}, false, motorTime).has_value(), true,
+           "fresh physical movement resumes after stick release");
+    expect(manualMotor.OnCommand(4, {1, 0, 0}, false,
+                                 motorTime + std::chrono::milliseconds(251)).has_value(), false,
+           "missing render feedback prevents stale movement");
+    manualMotor.OnRender({10, 0, 64}, {6, 0, 0}, 3, 1, 43.2f, motorTime);
+    expect(manualMotor.OnCommand(1, {1, 0, 0}, false, motorTime).has_value(), false,
+           "command stream restart reanchors before issuing movement");
+
+    RoomscaleMotion::Motor externalMotor;
+    externalMotor.OnRender({0, 0, 64}, {0, 0, 0}, 1, 1, 43.2f, motorTime);
+    externalMotor.OnCommand(1, {1, 0, 0}, false, motorTime);
+    externalMotor.OnRender({2, 0, 64}, {0, 0, 0}, 2, 1, 43.2f, motorTime);
+    expect(externalMotor.OnCommand(2, {1, 0, 0}, false, motorTime).has_value(), false,
+           "idle external anchor motion is not counteracted");
+    externalMotor.OnRender({2, 0, 64}, {4, 0, 0}, 3, 1, 43.2f, motorTime);
+    motorView = externalMotor.OnRender({100, 0, 64}, {4, 0, 0}, 3, 1, 43.2f, motorTime);
+    expect(externalMotor.OnCommand(3, {1, 0, 0}, false, motorTime).has_value(), false,
+           "large Source anchor discontinuity cancels old target");
+    externalMotor.OnRender({100, 0, 64}, {100, 0, 0}, 4, 1, 43.2f, motorTime);
+    expect(externalMotor.OnCommand(4, {1, 0, 0}, false, motorTime).has_value(), false,
+           "tracking relocalization is not requested as walking");
+    externalMotor.OnRender({std::numeric_limits<float>::quiet_NaN(), 0, 64},
+                           {100, 0, 0}, 5, 1, 43.2f, motorTime);
+    expect(externalMotor.OnCommand(5, {1, 0, 0}, false, motorTime).has_value(), false,
+           "nonfinite anchor disables movement");
 
     RoomscaleMotion::StepAccumulator roomscale;
     roomscale.Observe(true, {0.0f, 0.0f, 1.6f}, 1, 0.0f, 43.2f);
