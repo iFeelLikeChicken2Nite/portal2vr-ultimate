@@ -5,6 +5,7 @@
 #include "digital_input.h"
 #include "tracked_device.h"
 #include "config.h"
+#include "roomscale_motor.h"
 #include "ui_input.h"
 #include "haptics.h"
 #include "render_diagnostics.h"
@@ -115,6 +116,9 @@ public:
 	Vector m_SetupOrigin = { 0,0,0 };
 	TrackingSpace::PlayspaceState m_Playspace;
 	RoomscaleMotion::Observer m_RoomscaleObserver;
+	RoomscaleMotion::Motor m_RoomscaleMotor;
+	std::optional<bool> m_LastRoomscaleEligibility;
+	std::chrono::steady_clock::time_point m_NextRoomscaleEligibilityLog{};
 	PortalOrientation::Coordinator m_PortalCoordinator;
 	PortalOrientation::RigAnchor m_PortalRigAnchor;
 	PortalOrientation::Rotation m_PortalEffectiveRotation;
@@ -305,6 +309,13 @@ public:
 	void ApplyPortalRigToDerivedPose();
 	void ResetPortalOrientation();
 	void ObserveRoomscaleCommand(int commandNumber);
+	bool RoomscaleEnabled() const;
+	bool RoomscaleEligible() const;
+	void ResetRoomscale(bool recenter = false);
+	void UpdateRoomscaleRenderAnchor(const Vector &sourceAnchor);
+	std::optional<TrackingSpace::MoveAxes> GetRoomscaleCommand(int commandNumber, bool manualMovement);
+	Vector GetHmdViewOffset();
+	void UpdateAimFeedback(C_BasePlayer *localPlayer);
 	Vector GetViewAngle();
 	Vector GetViewOrigin(Vector setupOrigin);
 	Vector GetViewOriginLeft(Vector setupOrigin);

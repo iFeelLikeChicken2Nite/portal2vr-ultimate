@@ -382,6 +382,22 @@ int main()
                                   1920, 1080, 800, 600, false).has_value(), false,
            "nonfinite overlay coordinates cannot reach VGUI");
 
+    RoomscaleMotion::Eligibility roomscaleGate{true, true, true, true, false, true};
+    expect(roomscaleGate.Allowed(), true, "valid LegacyYaw gameplay permits experimental motor");
+    auto rejectedGate = roomscaleGate;
+    rejectedGate.sixDof = false;
+    expect(rejectedGate.Allowed(), false, "motor requires positional tracking mode");
+    rejectedGate = roomscaleGate; rejectedGate.trackingValid = false;
+    expect(rejectedGate.Allowed(), false, "motor requires a valid HMD pose");
+    rejectedGate = roomscaleGate; rejectedGate.legacyYaw = false;
+    expect(rejectedGate.Allowed(), false, "motor cannot combine with unverified 3D portal orientation");
+    rejectedGate = roomscaleGate; rejectedGate.gameplay = false;
+    expect(rejectedGate.Allowed(), false, "motor is disabled outside a level");
+    rejectedGate = roomscaleGate; rejectedGate.cursorVisible = true;
+    expect(rejectedGate.Allowed(), false, "motor is disabled in pause menus");
+    rejectedGate = roomscaleGate; rejectedGate.hasPlayer = false;
+    expect(rejectedGate.Allowed(), false, "motor is disabled without a local player");
+
     // A body echo must remove the same displacement from the visual offset.
     // Wrong-sign compensation or open-loop commands fail these fixtures.
     const auto motorTime = std::chrono::steady_clock::time_point{} + std::chrono::seconds(1);
@@ -473,6 +489,31 @@ int main()
                            {100, 0, 0}, 5, 1, 43.2f, motorTime);
     expect(externalMotor.OnCommand(5, {1, 0, 0}, false, motorTime).has_value(), false,
            "nonfinite anchor disables movement");
+
+    RoomscaleMotion::Motor scaledMotor;
+    scaledMotor.OnRender({0, 0, 64}, {10, 0, 0}, 1, 1, 43.2f, motorTime);
+    scaledMotor.OnRender({0, 0, 64}, {11.111111f, 0, 0}, 2, 1, 48.0f, motorTime);
+    expect(scaledMotor.OnCommand(1, {1, 0, 0}, false, motorTime).has_value(), false,
+           "scale transition is not interpreted as physical movement");
+    RoomscaleMotion::Motor stalledMotor;
+    stalledMotor.OnRender({0, 0, 64}, {0, 0, 0}, 1, 1, 43.2f, motorTime);
+    stalledMotor.OnRender({0, 0, 64}, {4, 0, 0}, 2, 1, 43.2f, motorTime);
+    stalledMotor.OnCommand(1, {1, 0, 0}, false, motorTime);
+    stalledMotor.OnRender({0, 0, 64}, {4, 0, 0}, 2, 1, 43.2f,
+                         motorTime + std::chrono::milliseconds(200));
+    stalledMotor.OnRender({0, 0, 64}, {4, 0, 0}, 2, 1, 43.2f,
+                         motorTime + std::chrono::milliseconds(300));
+    expect(stalledMotor.OnCommand(2, {1, 0, 0}, false,
+                                 motorTime + std::chrono::milliseconds(300)).has_value(), false,
+           "repeated render cannot refresh an expired HMD pose");
+    RoomscaleMotion::Motor preservedMotor;
+    preservedMotor.OnRender({0, 0, 64}, {0, 0, 0}, 1, 1, 43.2f, motorTime);
+    preservedMotor.OnRender({0, 0, 64}, {4, 0, 0}, 2, 1, 43.2f, motorTime);
+    preservedMotor.Reset();
+    motorView = preservedMotor.OnRender({100, 0, 64}, {4, 0, 2}, 3, 1, 43.2f, motorTime);
+    expectNear(motorView.x, 4.0f, "reset preserves a nonzero compensated view offset");
+    expectVectorNear(preservedMotor.ViewOffset({40, 50, 3}), {4, 0, 3},
+                     "head and controller consumers share compensated XY with current vertical offset");
 
     RoomscaleMotion::StepAccumulator roomscale;
     roomscale.Observe(true, {0.0f, 0.0f, 1.6f}, 1, 0.0f, 43.2f);
@@ -1175,6 +1216,11 @@ int main()
     expect(observedConfig.errors.empty(), true, "roomscale observe config is valid");
     expect(observedConfig.value.roomscaleMode == RoomscaleMotion::Mode::Observe, true,
            "roomscale observe config selects no-motion diagnostics");
+    std::istringstream roomscaleActive("RoomscaleMode=ActiveExperimental\n");
+    const auto activeConfig = ParseConfig(roomscaleActive, m2Defaults);
+    expect(activeConfig.errors.empty(), true, "explicit experimental roomscale config is valid");
+    expect(activeConfig.value.roomscaleMode == RoomscaleMotion::Mode::ActiveExperimental, true,
+           "active roomscale requires explicit experimental mode name");
     std::istringstream roomscaleBad("RoomscaleMode=Active\n");
     const auto badRoomscaleConfig = ParseConfig(roomscaleBad, observedConfig.value);
     expect(badRoomscaleConfig.value.roomscaleMode == RoomscaleMotion::Mode::Observe, true,

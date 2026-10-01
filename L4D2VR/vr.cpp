@@ -368,6 +368,13 @@ void VR::Update()
             Logger::Write("Roomscale observe: " + std::to_string(summary.steps) +
                 " physical intents, " + std::to_string(summary.distanceUnits) +
                 " requested Source units (not accepted movement)");
+        const auto motor = m_RoomscaleMotor.TakeSummary();
+        if (motor.requestedCommands || motor.manualCommands || motor.maximumErrorUnits > 0.5f)
+            Logger::Write("Roomscale active experimental: " + std::to_string(motor.requestedCommands) +
+                " movement requests, " + std::to_string(motor.manualCommands) +
+                " manual-input commands suppressed, maxAnchorError=" +
+                std::to_string(motor.maximumErrorUnits) +
+                " units; feedback is Source view origin, accepted hull movement unverified");
     }
 
     if (m_IsVREnabled && g_D3DVR9)
@@ -1245,7 +1252,7 @@ QAngle& VR::GetRightControllerAbsAngleConst()
 Vector VR::GetRightControllerAbsPos()
 {
     return TrackingSpace::ControllerWorldOrigin(m_SetupOrigin, m_RightControllerPosRel,
-        m_HmdPosRelative, m_6DOF);
+        GetHmdViewOffset(), m_6DOF);
 }
 
 Vector VR::GetRecommendedViewmodelAbsPos()
@@ -1307,7 +1314,7 @@ void VR::ResetPosition()
             }
         }
         m_HmdLostSinceLastValid = false;
-        m_RoomscaleObserver.Reset();
+        ResetRoomscale(true);
         if (ExperimentalPortalOrientation()) {
             const Vector baseOffset = m_Playspace.HmdOffsetUnits(
                 m_HmdPose.TrackedDevicePos, m_LastEyeHeightUnits);
@@ -1346,6 +1353,7 @@ void VR::UpdateTracking()
         ResetPortalOrientation();
 
     if (!m_HmdPose.valid) {
+        m_RoomscaleMotor.Reset();
         m_PortalCoordinator.CancelPending();
         if (m_RoomscaleObserver.OnPose(false, {}, m_PoseFetchSequence, 0.0f, 1.0f, true) ==
             RoomscaleMotion::Observation::TrackingLost) {
@@ -1371,7 +1379,7 @@ void VR::UpdateTracking()
     C_BasePlayer* localPlayer = playerIndex > 0 ?
         (C_BasePlayer*)m_Game->GetClientEntity(playerIndex) : nullptr;
     if (!localPlayer) {
-        m_RoomscaleObserver.Reset();
+        ResetRoomscale();
         ResetPortalOrientation();
         m_EyeHeightPlayerEntity = nullptr;
         m_HasEyeHeight = false;
@@ -1380,7 +1388,7 @@ void VR::UpdateTracking()
     }
 
     if (playerIndex != m_EyeHeightPlayerIndex || localPlayer != m_EyeHeightPlayerEntity) {
-        m_RoomscaleObserver.Reset();
+        ResetRoomscale();
         ResetPortalOrientation();
         m_EyeHeightPlayerIndex = playerIndex;
         m_EyeHeightPlayerEntity = localPlayer;
@@ -1400,7 +1408,7 @@ void VR::UpdateTracking()
             if (!m_EyeHeightWasInvalid)
                 Logger::Write("Standing height unavailable: invalid HMD floor height; deferring standing view");
             m_EyeHeightWasInvalid = true;
-            m_RoomscaleObserver.Reset();
+            ResetRoomscale();
             return;
         }
     }
@@ -1432,6 +1440,10 @@ void VR::UpdateTracking()
     const auto roomscaleStatus = m_RoomscaleObserver.OnPose(
         true, hmdPosLocal, m_PoseFetchSequence, m_Playspace.yawDegrees, m_Playspace.scale,
         m_Game->m_EngineClient->IsInGame() && !m_Game->m_VguiSurface->IsCursorVisible());
+    if (roomscaleStatus == RoomscaleMotion::Observation::MappingChanged ||
+        roomscaleStatus == RoomscaleMotion::Observation::Discontinuity ||
+        roomscaleStatus == RoomscaleMotion::Observation::InvalidSample)
+        m_RoomscaleMotor.Reset();
     if (roomscaleStatus == RoomscaleMotion::Observation::TrackingRecovered) {
         const auto now = std::chrono::steady_clock::now();
         if (now >= m_NextRoomscaleTrackingLog) {
@@ -1561,6 +1573,14 @@ void VR::UpdateTracking()
     m_ViewmodelUp = VectorRotate(m_ViewmodelUp, m_ViewmodelForward, m_ViewmodelAngOffset.z);
 
     ApplyPortalRigToDerivedPose();
+    if (!RoomscaleEnabled() || !RoomscaleEligible())
+        UpdateAimFeedback(localPlayer);
+}
+
+void VR::UpdateAimFeedback(C_BasePlayer *localPlayer)
+{
+    if (!localPlayer || !m_TrackingOutputValid || !m_RightControllerPose.valid)
+        return;
     bool aimTraceHit = false;
     m_AimPos = Trace((uint32_t*)localPlayer, aimTraceHit);
     if (AimFeedback::ShouldInspectActiveWeaponForAim(
@@ -1641,13 +1661,80 @@ void VR::UpdateTracking()
 
 void VR::ObserveRoomscaleCommand(int commandNumber)
 {
-    if (m_Config.roomscaleMode != RoomscaleMotion::Mode::Observe)
+    if (m_Config.roomscaleMode == RoomscaleMotion::Mode::Off)
         return;
     const int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
     const bool gameplayEligible = m_IsVREnabled && m_HmdPose.valid &&
         m_Game->m_EngineClient->IsInGame() && !m_Game->m_VguiSurface->IsCursorVisible() &&
         playerIndex > 0 && m_Game->GetClientEntity(playerIndex) != nullptr;
     (void)m_RoomscaleObserver.OnCommand(commandNumber, gameplayEligible);
+}
+
+bool VR::RoomscaleEnabled() const
+{
+    return m_Config.roomscaleMode == RoomscaleMotion::Mode::ActiveExperimental &&
+        m_6DOF && !ExperimentalPortalOrientation();
+}
+
+bool VR::RoomscaleEligible() const
+{
+    const int index = m_Game->m_EngineClient->GetLocalPlayer();
+    return RoomscaleMotion::Eligibility{
+        m_6DOF, m_IsVREnabled && m_TrackingOutputValid && m_HmdPose.valid,
+        !ExperimentalPortalOrientation(), m_Game->m_EngineClient->IsInGame(),
+        m_Game->m_VguiSurface->IsCursorVisible(),
+        index > 0 && m_Game->GetClientEntity(index) != nullptr}.Allowed();
+}
+
+void VR::ResetRoomscale(bool recenter)
+{
+    m_RoomscaleObserver.Reset();
+    m_RoomscaleMotor.Reset(recenter);
+}
+
+Vector VR::GetHmdViewOffset()
+{
+    return RoomscaleEnabled() ? m_RoomscaleMotor.ViewOffset(m_HmdPosRelative) : m_HmdPosRelative;
+}
+
+void VR::UpdateRoomscaleRenderAnchor(const Vector &sourceAnchor)
+{
+    if (m_Config.roomscaleMode != RoomscaleMotion::Mode::ActiveExperimental)
+        return;
+    const bool eligible = RoomscaleEligible();
+    const auto now = std::chrono::steady_clock::now();
+    if (!m_LastRoomscaleEligibility || *m_LastRoomscaleEligibility != eligible) {
+        if (now >= m_NextRoomscaleEligibilityLog) {
+            Logger::Write(eligible ?
+                "Roomscale active experimental: render feedback ready; view-anchor proxy, collision behavior unverified" :
+                "Roomscale active experimental suspended: requires 6DOF, LegacyYaw, valid HMD and local gameplay without cursor");
+            m_NextRoomscaleEligibilityLog = now + std::chrono::seconds(5);
+        }
+        m_LastRoomscaleEligibility = eligible;
+    }
+    if (!eligible) {
+        m_RoomscaleMotor.Reset();
+        return;
+    }
+    const int index = m_Game->m_EngineClient->GetLocalPlayer();
+    auto *player = (C_BasePlayer*)m_Game->GetClientEntity(index);
+    m_SetupOrigin = sourceAnchor;
+    (void)m_RoomscaleMotor.OnRender(sourceAnchor, m_HmdPosRelative,
+        m_PoseFetchSequence, reinterpret_cast<std::uintptr_t>(player), m_VRScale, now);
+    // Rebuild the beam/trace after compensation, before either eye uses it.
+    UpdateAimFeedback(player);
+}
+
+std::optional<TrackingSpace::MoveAxes> VR::GetRoomscaleCommand(int commandNumber, bool manualMovement)
+{
+    if (m_Config.roomscaleMode != RoomscaleMotion::Mode::ActiveExperimental)
+        return std::nullopt;
+    if (!RoomscaleEligible()) {
+        m_RoomscaleMotor.Reset();
+        return std::nullopt;
+    }
+    return m_RoomscaleMotor.OnCommand(commandNumber, m_HmdForward, manualMovement,
+                                     std::chrono::steady_clock::now());
 }
 
 bool VR::ExperimentalPortalOrientation() const
@@ -1728,7 +1815,7 @@ void VR::ApplyPendingPortalOrientation(const Vector &renderOrigin)
         m_HmdPose.TrackedDevicePos, m_LastEyeHeightUnits);
     m_PortalRigAnchor.Reanchor(baseOffset, m_HmdPosRelative);
     m_PortalEffectiveRotation = frame.effective;
-    m_RoomscaleObserver.Reset();
+    ResetRoomscale();
     m_SetupOrigin = renderOrigin; // traces rebuilt below must use the teleported render origin
     UpdateTracking(); // rebuild head and hands from the same pose before either eye is rendered
     Logger::Write("Experimental portal orientation: applied " +
@@ -1779,7 +1866,7 @@ Vector VR::GetViewOrigin(Vector setupOrigin)
     Vector center = setupOrigin;
 
     if (m_6DOF)
-        center += m_HmdPosRelative;
+        center += GetHmdViewOffset();
 
     return center + (m_HmdForward * -(m_EyeZ * m_VRScale));
 }
@@ -2014,6 +2101,12 @@ void VR::ParseConfigFile()
         Logger::Write("Config: PortalOrientationMode change requires restart; keeping active mode");
         parsed.value.portalOrientationMode = m_ActivePortalMode;
     }
+    if (m_IsInitialized && parsed.value.roomscaleMode != m_Config.roomscaleMode &&
+        (parsed.value.roomscaleMode == RoomscaleMotion::Mode::ActiveExperimental ||
+         m_Config.roomscaleMode == RoomscaleMotion::Mode::ActiveExperimental)) {
+        Logger::Write("Config: entering/leaving ActiveExperimental roomscale requires restart; keeping active mode");
+        parsed.value.roomscaleMode = m_Config.roomscaleMode;
+    }
     if (m_IsInitialized &&
         (parsed.value.experimentalHudOverlay != m_Config.experimentalHudOverlay ||
          parsed.value.hudDistanceMeters != m_Config.hudDistanceMeters ||
@@ -2038,10 +2131,14 @@ void VR::ParseConfigFile()
         if (ExperimentalPortalOrientation())
             Logger::Write("EXPERIMENTAL portal orientation enabled; hardware alignment is unverified");
     }
-    if (m_RoomscaleObserver.SetMode(m_Config.roomscaleMode))
-        Logger::Write(m_Config.roomscaleMode == RoomscaleMotion::Mode::Observe ?
+    if (m_RoomscaleObserver.SetMode(m_Config.roomscaleMode)) {
+        m_RoomscaleMotor.Reset(true);
+        Logger::Write(m_Config.roomscaleMode == RoomscaleMotion::Mode::ActiveExperimental ?
+            "RoomscaleMode=ActiveExperimental: CUserCmd movement prototype; LegacyYaw + 6DOF required; hardware/collision unverified" :
+            m_Config.roomscaleMode == RoomscaleMotion::Mode::Observe ?
             "RoomscaleMode=Observe: diagnostics only; physical movement is disabled" :
             "RoomscaleMode=Off: roomscale diagnostics disabled");
+    }
     m_SnapTurning = m_Config.snapTurning;
     m_SnapTurnAngle = m_Config.snapTurnAngle;
     m_TurnSpeed = m_Config.turnSpeed;

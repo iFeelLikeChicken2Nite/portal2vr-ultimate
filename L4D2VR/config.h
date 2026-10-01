@@ -129,8 +129,10 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
             result.value.roomscaleMode = RoomscaleMotion::Mode::Off;
         else if (roomscaleMode->second == "Observe")
             result.value.roomscaleMode = RoomscaleMotion::Mode::Observe;
+        else if (roomscaleMode->second == "ActiveExperimental")
+            result.value.roomscaleMode = RoomscaleMotion::Mode::ActiveExperimental;
         else
-            result.errors.push_back("RoomscaleMode is invalid; only Off and Observe are supported");
+            result.errors.push_back("RoomscaleMode is invalid; expected Off, Observe or ActiveExperimental");
     }
     const auto portalMode = entries.find("PortalOrientationMode");
     if (portalMode != entries.end()) {

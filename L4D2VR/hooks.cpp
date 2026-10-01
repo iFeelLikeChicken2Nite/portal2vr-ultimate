@@ -599,6 +599,7 @@ void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CVie
 	}
 
 	m_VR->m_SetupOrigin = position;
+	m_VR->UpdateRoomscaleRenderAnchor(position);
 
 	Vector hmdAngle = m_VR->GetViewAngle();
 	QAngle inGameAngle(hmdAngle.x, hmdAngle.y, hmdAngle.z);
@@ -744,6 +745,18 @@ bool __fastcall Hooks::dCreateMove(void *ecx, void *edx, float flInputSampleTime
 
 	}
 	m_VR->ObserveRoomscaleCommand(cmd->command_number); // diagnostic only; never changes CUserCmd
+	const bool manualMovement = std::fabs(cmd->forwardmove) > 0.001f ||
+		std::fabs(cmd->sidemove) > 0.001f || std::fabs(cmd->upmove) > 0.001f ||
+		(cmd->buttons & IN_JUMP) != 0;
+	if (const auto movement = m_VR->GetRoomscaleCommand(cmd->command_number, manualMovement)) {
+		cmd->forwardmove += movement->forward;
+		cmd->sidemove += movement->side;
+		cmd->buttons &= ~(IN_FORWARD | IN_BACK | IN_MOVELEFT | IN_MOVERIGHT);
+		if (cmd->forwardmove > 0.0f) cmd->buttons |= IN_FORWARD;
+		else if (cmd->forwardmove < 0.0f) cmd->buttons |= IN_BACK;
+		if (cmd->sidemove > 0.0f) cmd->buttons |= IN_MOVERIGHT;
+		else if (cmd->sidemove < 0.0f) cmd->buttons |= IN_MOVELEFT;
+	}
 
 	return false;
 }
@@ -1162,6 +1175,8 @@ void __fastcall Hooks::dPlayerPortalled(void* ecx, void* edx, void* a2, __int64 
 	m_Game->m_EngineClient->GetViewAngles(angAbsRotationBefore);
 
 	hkPlayerPortalled.fOriginal(ecx, a2, a3);
+	if (localPlayer)
+		m_VR->ResetRoomscale();
 
 	QAngle angAbsRotationAfter;
 	m_Game->m_EngineClient->GetViewAngles(angAbsRotationAfter);

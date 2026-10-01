@@ -1,7 +1,7 @@
 TurnSpeed=0.15
 TrackingMode=Seated # Standing uses SteamVR floor height; changing this requires a restart
 MovementDirection=HMD # HMD, LeftController, RightController
-RoomscaleMode=Off # Off or Observe; Observe only logs physical-step diagnostics and does not move the player
+RoomscaleMode=Off # Off, Observe (no movement), or ActiveExperimental (unverified CUserCmd movement; LegacyYaw + 6DOF required; restart)
 PortalOrientationMode=LegacyYaw # FullRotation, YawOnly, PreserveHorizon are experimental; restart required
 ExperimentalHUDOverlay=false # Existing HUD capture shown in a noninteractive SteamVR overlay; hardware-unverified, restart required
 ExperimentalWorldAimMarker=false # Experimental Source 3D line plus native portal status reticle in each eye; replaces particle laser when available

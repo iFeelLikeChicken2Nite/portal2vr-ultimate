@@ -10,6 +10,20 @@
 
 namespace RoomscaleMotion {
 
+struct Eligibility {
+    bool sixDof = false;
+    bool trackingValid = false;
+    bool legacyYaw = false;
+    bool gameplay = false;
+    bool cursorVisible = true;
+    bool hasPlayer = false;
+
+    bool Allowed() const
+    {
+        return sixDof && trackingValid && legacyYaw && gameplay && !cursorVisible && hasPlayer;
+    }
+};
+
 struct MotorSummary {
     std::uint64_t requestedCommands = 0;
     std::uint64_t manualCommands = 0;
@@ -31,6 +45,12 @@ public:
             m_HasVisualOffset = false;
     }
 
+    Vector ViewOffset(const Vector &hmdOffset)
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        return m_HasVisualOffset ? SafeView(hmdOffset) : hmdOffset;
+    }
+
     Vector OnRender(const Vector &sourceAnchor, const Vector &hmdOffset,
                     std::uint64_t poseSequence, std::uintptr_t playerKey,
                     float scale, Clock::time_point now)
@@ -47,6 +67,11 @@ public:
         }
         const bool changedPlayer = playerKey != m_PlayerKey;
         const bool changedStream = poseSequence < m_PoseSequence;
+        const bool changedScale = scale != m_Scale;
+        if (!m_HasPoseTime || poseSequence != m_PoseSequence) {
+            m_PoseTime = now;
+            m_HasPoseTime = true;
+        }
         const bool anchorJump = m_HasRender && HorizontalLength(sourceAnchor - m_SourceAnchor) > 35.0f;
         const bool poseJump = m_HasRender && HorizontalLength(hmdOffset - m_HmdOffset) > 0.35f * scale;
         const bool externalMotion = m_HasRender && !m_LastRequested &&
@@ -57,8 +82,13 @@ public:
         m_HmdOffset = hmdOffset;
         m_PlayerKey = playerKey;
         m_PoseSequence = poseSequence;
+        m_Scale = scale;
         m_RenderTime = now;
-        if (!m_HasRender || changedPlayer || changedStream || anchorJump || poseJump ||
+        if (now < m_PoseTime || now - m_PoseTime > std::chrono::milliseconds(250)) {
+            ResetLocked();
+            return SafeView(hmdOffset);
+        }
+        if (!m_HasRender || changedPlayer || changedStream || changedScale || anchorJump || poseJump ||
             externalMotion || m_ManualMovement) {
             ReanchorLocked();
             m_LastRequested = false;
@@ -92,7 +122,8 @@ public:
         m_LastCommand = commandNumber;
         if (!m_HasRender)
             return std::nullopt;
-        if (now < m_RenderTime || now - m_RenderTime > std::chrono::milliseconds(250)) {
+        if (now < m_RenderTime || now - m_RenderTime > std::chrono::milliseconds(250) ||
+            now < m_PoseTime || now - m_PoseTime > std::chrono::milliseconds(250)) {
             ResetLocked();
             return std::nullopt;
         }
@@ -177,12 +208,15 @@ private:
     std::mutex m_Mutex;
     bool m_HasRender = false;
     bool m_HasVisualOffset = false;
+    bool m_HasPoseTime = false;
     bool m_ManualMovement = false;
     bool m_LastRequested = false;
     int m_LastCommand = 0;
     std::uint64_t m_PoseSequence = 0;
     std::uintptr_t m_PlayerKey = 0;
     Clock::time_point m_RenderTime{};
+    Clock::time_point m_PoseTime{};
+    float m_Scale = 0.0f;
     Vector m_SourceAnchor{0, 0, 0};
     Vector m_HmdOffset{0, 0, 0};
     Vector m_OriginAnchor{0, 0, 0};

@@ -9,7 +9,7 @@
 
 namespace RoomscaleMotion {
 
-enum class Mode { Off, Observe };
+enum class Mode { Off, Observe, ActiveExperimental };
 
 enum class Observation {
     Baseline, StepQueued, NoStep, TrackingLost, TrackingRecovered,
