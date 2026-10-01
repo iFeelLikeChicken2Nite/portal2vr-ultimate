@@ -10,6 +10,13 @@
 
 namespace RoomscaleMotion {
 
+inline bool HasManualInput(float forward, float side, float up, bool movementButton)
+{
+    return movementButton || !std::isfinite(forward) || !std::isfinite(side) ||
+        !std::isfinite(up) || std::fabs(forward) > 0.001f ||
+        std::fabs(side) > 0.001f || std::fabs(up) > 0.001f;
+}
+
 struct Eligibility {
     bool sixDof = false;
     bool trackingValid = false;
@@ -37,10 +44,12 @@ class Motor {
 public:
     using Clock = std::chrono::steady_clock;
 
-    void Reset(bool recenter = false)
+    void Reset(bool recenter = false, bool newCommandStream = false)
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
         ResetLocked();
+        if (newCommandStream)
+            m_LastCommand = 0;
         if (recenter)
             m_HasVisualOffset = false;
     }
@@ -66,6 +75,8 @@ public:
             m_HasVisualOffset = true;
         }
         const bool changedPlayer = playerKey != m_PlayerKey;
+        if (changedPlayer)
+            m_LastCommand = 0;
         const bool changedStream = poseSequence < m_PoseSequence;
         const bool changedScale = scale != m_Scale;
         if (!m_HasPoseTime || poseSequence != m_PoseSequence) {
@@ -111,14 +122,10 @@ public:
         const Vector &viewForward, bool manualMovement, Clock::time_point now)
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
-        if (commandNumber <= 0 || commandNumber == m_LastCommand)
+        // An older prediction callback is not evidence of a new level stream.
+        // Only the player/level lifecycle may clear this guard.
+        if (commandNumber <= 0 || commandNumber <= m_LastCommand)
             return std::nullopt;
-        if (commandNumber < m_LastCommand) {
-            // Level/replay command streams may restart. Do not replay an old target.
-            m_LastCommand = commandNumber;
-            ResetLocked();
-            return std::nullopt;
-        }
         m_LastCommand = commandNumber;
         if (!m_HasRender)
             return std::nullopt;

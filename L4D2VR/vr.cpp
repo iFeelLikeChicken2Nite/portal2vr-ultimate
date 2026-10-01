@@ -1349,6 +1349,13 @@ void VR::UpdateTracking()
     m_LeftControllerPosRel = {0.0f, 0.0f, 0.0f};
     m_RightControllerPosRel = {0.0f, 0.0f, 0.0f};
 
+    if (m_Config.roomscaleMode == RoomscaleMotion::Mode::ActiveExperimental) {
+        if (!m_Game->m_EngineClient->IsInGame())
+            ResetRoomscale(false, true);
+        else if (m_Game->m_VguiSurface->IsCursorVisible())
+            m_RoomscaleMotor.Reset();
+    }
+
     if (ExperimentalPortalOrientation() && !m_Game->m_EngineClient->IsInGame())
         ResetPortalOrientation();
 
@@ -1379,7 +1386,7 @@ void VR::UpdateTracking()
     C_BasePlayer* localPlayer = playerIndex > 0 ?
         (C_BasePlayer*)m_Game->GetClientEntity(playerIndex) : nullptr;
     if (!localPlayer) {
-        ResetRoomscale();
+        ResetRoomscale(false, true);
         ResetPortalOrientation();
         m_EyeHeightPlayerEntity = nullptr;
         m_HasEyeHeight = false;
@@ -1388,7 +1395,7 @@ void VR::UpdateTracking()
     }
 
     if (playerIndex != m_EyeHeightPlayerIndex || localPlayer != m_EyeHeightPlayerEntity) {
-        ResetRoomscale();
+        ResetRoomscale(false, true);
         ResetPortalOrientation();
         m_EyeHeightPlayerIndex = playerIndex;
         m_EyeHeightPlayerEntity = localPlayer;
@@ -1663,6 +1670,10 @@ void VR::ObserveRoomscaleCommand(int commandNumber)
 {
     if (m_Config.roomscaleMode == RoomscaleMotion::Mode::Off)
         return;
+    if (!m_Game->m_EngineClient->IsInGame()) {
+        m_RoomscaleObserver.Reset(true);
+        return;
+    }
     const int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
     const bool gameplayEligible = m_IsVREnabled && m_HmdPose.valid &&
         m_Game->m_EngineClient->IsInGame() && !m_Game->m_VguiSurface->IsCursorVisible() &&
@@ -1686,10 +1697,10 @@ bool VR::RoomscaleEligible() const
         index > 0 && m_Game->GetClientEntity(index) != nullptr}.Allowed();
 }
 
-void VR::ResetRoomscale(bool recenter)
+void VR::ResetRoomscale(bool recenter, bool newCommandStream)
 {
-    m_RoomscaleObserver.Reset();
-    m_RoomscaleMotor.Reset(recenter);
+    m_RoomscaleObserver.Reset(newCommandStream);
+    m_RoomscaleMotor.Reset(recenter, newCommandStream);
 }
 
 Vector VR::GetHmdViewOffset()
@@ -1713,7 +1724,7 @@ void VR::UpdateRoomscaleRenderAnchor(const Vector &sourceAnchor)
         m_LastRoomscaleEligibility = eligible;
     }
     if (!eligible) {
-        m_RoomscaleMotor.Reset();
+        m_RoomscaleMotor.Reset(false, !m_Game->m_EngineClient->IsInGame());
         return;
     }
     const int index = m_Game->m_EngineClient->GetLocalPlayer();
@@ -1730,7 +1741,7 @@ std::optional<TrackingSpace::MoveAxes> VR::GetRoomscaleCommand(int commandNumber
     if (m_Config.roomscaleMode != RoomscaleMotion::Mode::ActiveExperimental)
         return std::nullopt;
     if (!RoomscaleEligible()) {
-        m_RoomscaleMotor.Reset();
+        m_RoomscaleMotor.Reset(false, !m_Game->m_EngineClient->IsInGame());
         return std::nullopt;
     }
     return m_RoomscaleMotor.OnCommand(commandNumber, m_HmdForward, manualMovement,

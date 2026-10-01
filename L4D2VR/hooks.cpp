@@ -705,6 +705,7 @@ bool __fastcall Hooks::dCreateMove(void *ecx, void *edx, float flInputSampleTime
 {
 	if (!cmd->command_number)
 		return hkCreateMove.fOriginal(ecx, flInputSampleTime, cmd);
+	const int manualButtons = cmd->buttons & (IN_FORWARD | IN_BACK | IN_MOVELEFT | IN_MOVERIGHT | IN_JUMP);
 
 	if (m_VR->m_IsVREnabled && m_VR->m_TrackingOutputValid)
 	{
@@ -745,15 +746,15 @@ bool __fastcall Hooks::dCreateMove(void *ecx, void *edx, float flInputSampleTime
 
 	}
 	m_VR->ObserveRoomscaleCommand(cmd->command_number); // diagnostic only; never changes CUserCmd
-	const bool manualMovement = std::fabs(cmd->forwardmove) > 0.001f ||
-		std::fabs(cmd->sidemove) > 0.001f || std::fabs(cmd->upmove) > 0.001f ||
-		(cmd->buttons & IN_JUMP) != 0;
+	const bool manualMovement = RoomscaleMotion::HasManualInput(
+		cmd->forwardmove, cmd->sidemove, cmd->upmove, manualButtons != 0);
 	if (const auto movement = m_VR->GetRoomscaleCommand(cmd->command_number, manualMovement)) {
 		cmd->forwardmove += movement->forward;
 		cmd->sidemove += movement->side;
 		cmd->buttons &= ~(IN_FORWARD | IN_BACK | IN_MOVELEFT | IN_MOVERIGHT);
 		if (cmd->forwardmove > 0.0f) cmd->buttons |= IN_FORWARD;
 		else if (cmd->forwardmove < 0.0f) cmd->buttons |= IN_BACK;
+		// Source ComputeSideMove uses positive sidemove for +moveright.
 		if (cmd->sidemove > 0.0f) cmd->buttons |= IN_MOVERIGHT;
 		else if (cmd->sidemove < 0.0f) cmd->buttons |= IN_MOVELEFT;
 	}

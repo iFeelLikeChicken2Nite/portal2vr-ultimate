@@ -18,11 +18,13 @@ enum class Observation {
 
 class StepAccumulator {
 public:
-    void Reset()
+    void Reset(bool newCommandStream = false)
     {
         m_HasBaseline = false;
         m_TrackingLost = false;
         m_PreviousSequence = 0;
+        if (newCommandStream)
+            m_LastCommand = 0;
         m_PendingUnits = {0.0f, 0.0f, 0.0f};
     }
 
@@ -124,10 +126,10 @@ public:
         return true;
     }
 
-    void Reset()
+    void Reset(bool newCommandStream = false)
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
-        m_Steps.Reset();
+        m_Steps.Reset(newCommandStream);
         m_Eligible = false;
     }
 

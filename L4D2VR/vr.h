@@ -311,7 +311,7 @@ public:
 	void ObserveRoomscaleCommand(int commandNumber);
 	bool RoomscaleEnabled() const;
 	bool RoomscaleEligible() const;
-	void ResetRoomscale(bool recenter = false);
+	void ResetRoomscale(bool recenter = false, bool newCommandStream = false);
 	void UpdateRoomscaleRenderAnchor(const Vector &sourceAnchor);
 	std::optional<TrackingSpace::MoveAxes> GetRoomscaleCommand(int commandNumber, bool manualMovement);
 	Vector GetHmdViewOffset();

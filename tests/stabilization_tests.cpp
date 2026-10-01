@@ -383,6 +383,14 @@ int main()
            "nonfinite overlay coordinates cannot reach VGUI");
 
     RoomscaleMotion::Eligibility roomscaleGate{true, true, true, true, false, true};
+    expect(RoomscaleMotion::HasManualInput(0, 0, 0, false), false,
+           "idle command permits physical movement");
+    expect(RoomscaleMotion::HasManualInput(0, 0, 0, true), true,
+           "directional button without float movement still suppresses motor");
+    expect(RoomscaleMotion::HasManualInput(0, -20, 0, false), true,
+           "stick or keyboard movement suppresses motor");
+    expect(RoomscaleMotion::HasManualInput(std::numeric_limits<float>::quiet_NaN(), 0, 0, false), true,
+           "malformed input cannot receive additional motor movement");
     expect(roomscaleGate.Allowed(), true, "valid LegacyYaw gameplay permits experimental motor");
     auto rejectedGate = roomscaleGate;
     rejectedGate.sixDof = false;
@@ -515,12 +523,38 @@ int main()
     expectVectorNear(preservedMotor.ViewOffset({40, 50, 3}), {4, 0, 3},
                      "head and controller consumers share compensated XY with current vertical offset");
 
+    RoomscaleMotion::Motor replayMotor;
+    replayMotor.OnRender({0, 0, 64}, {0, 0, 0}, 1, 1, 43.2f, motorTime);
+    replayMotor.OnRender({0, 0, 64}, {4, 0, 0}, 2, 1, 43.2f, motorTime);
+    replayMotor.OnCommand(100, {1, 0, 0}, false, motorTime);
+    replayMotor.OnCommand(99, {1, 0, 0}, false, motorTime);
+    replayMotor.OnRender({0, 0, 64}, {4, 0, 0}, 3, 1, 43.2f, motorTime);
+    replayMotor.OnRender({0, 0, 64}, {6, 0, 0}, 4, 1, 43.2f, motorTime);
+    expect(replayMotor.OnCommand(100, {1, 0, 0}, false, motorTime).has_value(), false,
+           "older callback cannot make an already injected command eligible again");
+    replayMotor.Reset(false, true);
+    replayMotor.OnRender({0, 0, 64}, {6, 0, 0}, 5, 1, 43.2f, motorTime);
+    expect(replayMotor.OnCommand(1, {1, 0, 0}, false, motorTime).has_value(), false,
+           "explicit new level stream starts with a fresh target");
+    replayMotor.OnRender({0, 0, 64}, {8, 0, 0}, 6, 1, 43.2f, motorTime);
+    expect(replayMotor.OnCommand(2, {1, 0, 0}, false, motorTime).has_value(), true,
+           "new level stream can request fresh movement using restarted command numbers");
+
     RoomscaleMotion::StepAccumulator roomscale;
     roomscale.Observe(true, {0.0f, 0.0f, 1.6f}, 1, 0.0f, 43.2f);
     expect(roomscale.Consume(100).has_value(), false, "first HMD sample establishes baseline");
     roomscale.Observe(true, {0.1f, 0.0f, 1.7f}, 2, 0.0f, 43.2f);
     const auto roomscaleStep = roomscale.Consume(101);
     expect(roomscaleStep.has_value(), true, "small fresh HMD step becomes one move intent");
+    RoomscaleMotion::StepAccumulator newLevelObservation;
+    newLevelObservation.Observe(true, {0, 0, 1.6f}, 1, 0, 43.2f);
+    newLevelObservation.Observe(true, {0.1f, 0, 1.6f}, 2, 0, 43.2f);
+    newLevelObservation.Consume(500);
+    newLevelObservation.Reset(true);
+    newLevelObservation.Observe(true, {0, 0, 1.6f}, 3, 0, 43.2f);
+    newLevelObservation.Observe(true, {0.1f, 0, 1.6f}, 4, 0, 43.2f);
+    expect(newLevelObservation.Consume(1).has_value(), true,
+           "observer reset allows diagnostic commands from a new level stream");
     if (roomscaleStep)
         expectVectorNear(*roomscaleStep, {4.32f, 0.0f, 0.0f}, "physical step is horizontal Source units");
     expect(roomscale.Consume(101).has_value(), false, "same command does not repeat physical step");
