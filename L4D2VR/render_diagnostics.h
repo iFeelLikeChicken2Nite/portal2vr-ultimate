@@ -41,6 +41,12 @@ enum class RenderDiagnosticEvent : std::size_t
     CrosshairCanvasOutsideY,
     CrosshairCanvasOutsideBoth,
     CrosshairCanvasInvalid,
+    CrosshairDirectAtlasUnavailable,
+    CrosshairDirectMaterialUnavailable,
+    CrosshairDirectEyeTargetUnavailable,
+    CrosshairDirectViewportUnavailable,
+    CrosshairDirectColorUnavailable,
+    CrosshairDirectAbiUnsupported,
     LaserControlPoints,
     Count
 };

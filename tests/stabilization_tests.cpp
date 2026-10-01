@@ -14,6 +14,7 @@
 #include "../L4D2VR/menu_overlay_placement.h"
 #include "../L4D2VR/hud_capture.h"
 #include "../L4D2VR/aim_feedback.h"
+#include "../L4D2VR/render_context_abi.h"
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -599,32 +600,23 @@ int main()
     expect(AimFeedback::ShouldInspectActiveWeaponForAim(2, false, true, false), false,
            "missing overlay does not trigger an unsafe weapon lookup");
     const auto wallAim = AimFeedback::PrepareWorldAimGeometry(
-        Vector{10, 20, 30}, Vector{110, 20, 30}, true);
+        Vector{10, 20, 30}, Vector{110, 20, 30});
     expect(wallAim.has_value(), true, "finite wall hit produces aim geometry");
     if (wallAim) {
         expectVectorNear(wallAim->beamEnd, {110, 20, 30},
-                         "nearby impact marker stays at the controller trace endpoint");
-        expectVectorNear(wallAim->impactPoint, {109, 20, 30},
-                         "impact marker sits just in front of the traced wall");
-        expect(wallAim->showImpact, true, "nearby wall hit gets a visible endpoint marker");
+                         "nearby beam stays at the controller trace endpoint");
     }
     const auto distantAim = AimFeedback::PrepareWorldAimGeometry(
-        Vector{10, 20, 30}, Vector{10010, 20, 30}, true);
+        Vector{10, 20, 30}, Vector{10010, 20, 30});
     expect(distantAim.has_value(), true, "long trace keeps a directional beam");
     if (distantAim) {
         expectVectorNear(distantAim->beamEnd, {10010, 20, 30},
                          "long trace beam reaches the actual shot trace endpoint");
-        expect(distantAim->showImpact, true,
-               "distant trace hit retains its impact marker");
     }
-    const auto openAim = AimFeedback::PrepareWorldAimGeometry(
-        Vector{10, 20, 30}, Vector{10010, 20, 30}, false);
-    expect(openAim.has_value() && !openAim->showImpact, true,
-           "open-space trace has a directional beam without a false impact marker");
-    expect(AimFeedback::PrepareWorldAimGeometry(Vector{0, 0, 0}, Vector{0, 0, 0}, true).has_value(), false,
+    expect(AimFeedback::PrepareWorldAimGeometry(Vector{0, 0, 0}, Vector{0, 0, 0}).has_value(), false,
            "zero-length aim trace has no beam");
     expect(AimFeedback::PrepareWorldAimGeometry(Vector{0, 0, 0},
-        Vector{std::numeric_limits<float>::quiet_NaN(), 0, 0}, true).has_value(), false,
+        Vector{std::numeric_limits<float>::quiet_NaN(), 0, 0}).has_value(), false,
         "nonfinite aim trace has no beam");
     expectNear(AimFeedback::WorldAimOverlayLifetime(1.0f / 120.0f), 1.25f / 120.0f,
                "120 Hz game cadence limits aim history to roughly one frame");
@@ -684,6 +676,43 @@ int main()
            "QuickInfo center texture is tracked as a possible status route");
     expect(AimFeedback::IsPortalStatusIconName("crosshair", "Crosshairs"), false,
            "ordinary weapon crosshair is not mistaken for portal status");
+    const auto atlasRect = AimFeedback::SourceHudAtlasRect(
+        {0.5f / 256.0f, 0.5f / 256.0f, 43.5f / 256.0f, 63.5f / 256.0f},
+        0, 44, 0, 64, 256, 256, 44, 64);
+    expect(atlasRect.has_value(), true,
+           "original Portal HUD subrectangle is accepted for direct eye rendering");
+    if (atlasRect) {
+        expectNear(atlasRect->x0, 0.0f, "atlas left texel is preserved");
+        expectNear(atlasRect->y0, 0.0f, "atlas top texel is preserved");
+        expectNear(atlasRect->x1, 43.0f, "atlas right texel is preserved");
+        expectNear(atlasRect->y1, 63.0f, "atlas bottom texel is preserved");
+    }
+    expect(AimFeedback::SourceHudAtlasRect(
+        {0.5f / 256.0f, 0.5f / 256.0f, 43.5f / 256.0f, 63.5f / 256.0f},
+        0, 44, 0, 64, 256, 256, 44, 65).has_value(), false,
+        "unexpected HUD sprite dimensions reject an unverified Source layout");
+    expect(AimFeedback::SourceHudAtlasRect(
+        {0.4f, 0.5f / 256.0f, 43.5f / 256.0f, 63.5f / 256.0f},
+        0, 44, 0, 64, 256, 256, 44, 64).has_value(), false,
+        "inconsistent texture coordinates cannot sample the wrong portal icon");
+    const Portal2MaterialAbi::Probe queuedContext{
+        0x50000000u, 0x6A4466CAu, 0x14D000u,
+        0x5009BEF4u, 0x50027710u, 0x50025190u, 0x50027C40u};
+    expect(Portal2MaterialAbi::Classify(queuedContext) == Portal2MaterialAbi::Kind::Queued,
+           true, "verified queued context permits the stereo atlas draw");
+    const Portal2MaterialAbi::Probe immediateContext{
+        0x50000000u, 0x6A4466CAu, 0x14D000u,
+        0x5009ED4Cu, 0x5002D8B0u, 0x5002CAF0u, 0x5002A510u};
+    expect(Portal2MaterialAbi::Classify(immediateContext) == Portal2MaterialAbi::Kind::Immediate,
+           true, "verified immediate context permits the stereo atlas draw");
+    auto wrongViewportSlot = queuedContext;
+    wrongViewportSlot.getViewport = 0x50016980u;
+    expect(Portal2MaterialAbi::Classify(wrongViewportSlot) == Portal2MaterialAbi::Kind::Unsupported,
+           true, "one-argument slot 40 cannot be mistaken for four-output GetViewport");
+    auto changedEngineBuild = queuedContext;
+    changedEngineBuild.timestamp = 0x6A4466CBu;
+    expect(Portal2MaterialAbi::Classify(changedEngineBuild) == Portal2MaterialAbi::Kind::Unsupported,
+           true, "unknown material-system build disables direct atlas rendering");
     const auto stereoReticle = AimFeedback::ProjectReticleSpriteToEye(
         Vector{10, 0, 0}, Vector{0, 0.1f, 0}, eyeForward, eyeRight, eyeUp,
         90.0f, 1.0f, 1000, 1000, 612, 318, 56, 84, 1280, 720);
