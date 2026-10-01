@@ -71,6 +71,20 @@ class ProfileTests(unittest.TestCase):
         self.assertIn("ExperimentalHUDOverlay=true\n", aligned)
         self.assertIn("ExperimentalPortalShotHaptics=true\n", aligned)
 
+    def test_roomscale_observe_keeps_current_vr_setup_without_enabling_movement(self):
+        self.assertIn("roomscale_observe_combined", core.PROFILES)
+        observed = core.render_config(TEMPLATE, "roomscale_observe_combined")
+        self.assertIn("RoomscaleMode=Observe\n", observed)
+        self.assertIn("TrackingMode=Seated # tracking\n", observed)
+        self.assertIn("PortalOrientationMode=LegacyYaw\n", observed)
+        self.assertIn("ExperimentalHUDOverlay=true\n", observed)
+        self.assertIn("ExperimentalWorldAimMarker=true\n", observed)
+        self.assertIn("ExperimentalPortalShotHaptics=true\n", observed)
+        self.assertIn("ViewmodelPosCustomOffsetX=-4.5\n", observed)
+        self.assertIn("ViewmodelPosCustomOffsetY=1.0\n", observed)
+        self.assertIn("ViewmodelPosCustomOffsetZ=-1.5\n", observed)
+        self.assertIn("RoomscaleMode=Off\n", core.render_config(TEMPLATE, "aim_model_alignment"))
+
     def test_missing_or_duplicate_required_key_refuses_partial_config(self):
         with self.assertRaisesRegex(ValueError, "Missing config keys: RenderWindow"):
             core.render_config(TEMPLATE.replace("RenderWindow=0\n", ""), "baseline")
