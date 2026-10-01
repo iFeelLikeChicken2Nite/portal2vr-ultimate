@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <optional>
 #include <string_view>
 #include "sdk/vector.h"
@@ -135,6 +136,32 @@ struct ScreenPoint
     int x;
     int y;
 };
+
+enum class ReticleCanvasPosition
+{
+    Invalid,
+    Inside,
+    OutsideX,
+    OutsideY,
+    OutsideBoth
+};
+
+inline ReticleCanvasPosition ClassifyReticleCanvas(int x, int y, int spriteWidth,
+                                                   int spriteHeight, int canvasWidth,
+                                                   int canvasHeight)
+{
+    if (spriteWidth <= 0 || spriteHeight <= 0 || canvasWidth <= 0 || canvasHeight <= 0)
+        return ReticleCanvasPosition::Invalid;
+    const bool outsideX = x < 0 || static_cast<std::int64_t>(x) + spriteWidth > canvasWidth;
+    const bool outsideY = y < 0 || static_cast<std::int64_t>(y) + spriteHeight > canvasHeight;
+    if (outsideX && outsideY)
+        return ReticleCanvasPosition::OutsideBoth;
+    if (outsideX)
+        return ReticleCanvasPosition::OutsideX;
+    if (outsideY)
+        return ReticleCanvasPosition::OutsideY;
+    return ReticleCanvasPosition::Inside;
+}
 
 inline std::optional<ScreenPoint> ProjectedCrosshairPosition(
     bool clipped, float projectedX, float projectedY, int sourceX, int sourceY,

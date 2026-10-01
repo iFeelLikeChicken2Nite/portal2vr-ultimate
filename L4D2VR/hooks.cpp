@@ -1039,13 +1039,53 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 				return 0;
 			}
 			if (AimFeedback::IsPortalStatusIconName(
-				identity->shortName.data(), identity->textureFile.data()) &&
-				m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::CrosshairWorldPortalStatus))
-				Logger::Write("Experimental stereo reticle: possible Portal status moved in eye pass; " +
-					DescribeHudTexture(*identity) + " source=" +
-					std::to_string(x) + "," + std::to_string(y) +
-					" eye=" + std::to_string(projected->x) + "," +
-					std::to_string(projected->y));
+				identity->shortName.data(), identity->textureFile.data())) {
+				int surfaceWidth = 0, surfaceHeight = 0;
+				m_Game->m_VguiSurface->GetScreenSize(surfaceWidth, surfaceHeight);
+				const auto canvas = AimFeedback::ClassifyReticleCanvas(projected->x,
+					projected->y, w, h, surfaceWidth, surfaceHeight);
+				RenderDiagnosticEvent canvasEvent = RenderDiagnosticEvent::CrosshairCanvasInvalid;
+				const char *canvasLabel = "invalid";
+				switch (canvas) {
+				case AimFeedback::ReticleCanvasPosition::Inside:
+					canvasEvent = RenderDiagnosticEvent::CrosshairCanvasInside;
+					canvasLabel = "inside";
+					break;
+				case AimFeedback::ReticleCanvasPosition::OutsideX:
+					canvasEvent = RenderDiagnosticEvent::CrosshairCanvasOutsideX;
+					canvasLabel = "outside-X";
+					break;
+				case AimFeedback::ReticleCanvasPosition::OutsideY:
+					canvasEvent = RenderDiagnosticEvent::CrosshairCanvasOutsideY;
+					canvasLabel = "outside-Y";
+					break;
+				case AimFeedback::ReticleCanvasPosition::OutsideBoth:
+					canvasEvent = RenderDiagnosticEvent::CrosshairCanvasOutsideBoth;
+					canvasLabel = "outside-both";
+					break;
+				case AimFeedback::ReticleCanvasPosition::Invalid:
+					break;
+				}
+				if (m_VR->m_RenderDiagnostics.First(canvasEvent))
+					Logger::Write(std::string("Experimental reticle canvas: ") + canvasLabel +
+						" reported VGUI bounds (not clip rect); eyePass=" +
+						std::to_string(m_ActiveAimEye) + " vgui=" +
+						std::to_string(surfaceWidth) + "x" + std::to_string(surfaceHeight) +
+						" eyeSetup=" + std::to_string(m_ActiveAimEyeView->width) +
+						"x" + std::to_string(m_ActiveAimEyeView->height) +
+						" window=" + std::to_string(windowWidth) + "x" +
+						std::to_string(windowHeight) + " sprite=" +
+						std::to_string(projected->x) + "," +
+						std::to_string(projected->y) + " " +
+						std::to_string(w) + "x" + std::to_string(h) +
+						" " + DescribeHudTexture(*identity));
+				if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::CrosshairWorldPortalStatus))
+					Logger::Write("Experimental stereo reticle: possible Portal status moved in eye pass; " +
+						DescribeHudTexture(*identity) + " source=" +
+						std::to_string(x) + "," + std::to_string(y) +
+						" eye=" + std::to_string(projected->x) + "," +
+						std::to_string(projected->y));
+			}
 			const auto event = m_ActiveAimEye == 1 ?
 				RenderDiagnosticEvent::CrosshairWorldLeftEye :
 				RenderDiagnosticEvent::CrosshairWorldRightEye;

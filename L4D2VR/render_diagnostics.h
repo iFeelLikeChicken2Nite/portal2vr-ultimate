@@ -36,6 +36,11 @@ enum class RenderDiagnosticEvent : std::size_t
     CrosshairWorldOutsideStereo,
     CrosshairWorldPortalStatus,
     CrosshairWorldPortalStatusOutsideStereo,
+    CrosshairCanvasInside,
+    CrosshairCanvasOutsideX,
+    CrosshairCanvasOutsideY,
+    CrosshairCanvasOutsideBoth,
+    CrosshairCanvasInvalid,
     LaserControlPoints,
     Count
 };

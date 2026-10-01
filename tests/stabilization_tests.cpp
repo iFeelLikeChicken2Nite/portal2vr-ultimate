@@ -706,6 +706,18 @@ int main()
         expectInt(nativeWindowReticle->y, 1310,
                "eye-center hit moves the native reticle to eye-target center Y");
     }
+    expect(AimFeedback::ClassifyReticleCanvas(1078, 1255, 56, 84, 1280, 720) ==
+               AimFeedback::ReticleCanvasPosition::OutsideY, true,
+           "eye-sized reticle below the reported Source canvas is diagnosed separately");
+    expect(AimFeedback::ClassifyReticleCanvas(1799, 25, 56, 84, 1280, 720) ==
+               AimFeedback::ReticleCanvasPosition::OutsideX, true,
+           "reticle beside the reported Source canvas is diagnosed separately");
+    expect(AimFeedback::ClassifyReticleCanvas(1236, 1310, 56, 84, 2528, 2704) ==
+               AimFeedback::ReticleCanvasPosition::Inside, true,
+           "eye-sized canvas accepts the projected center reticle");
+    expect(AimFeedback::ClassifyReticleCanvas(1236, 1310, 56, 84, 0, 2704) ==
+               AimFeedback::ReticleCanvasPosition::Invalid, true,
+           "invalid reported VGUI size is not mistaken for clipping");
     expect(AimFeedback::ProjectReticleSpriteToEye(
         Vector{10, 0, 0}, Vector{0, 0, 0}, eyeForward, eyeRight, eyeUp,
         90.0f, 1.0f, 1000, 1000, 10, 10, 56, 84, 1280, 720).has_value(), false,
