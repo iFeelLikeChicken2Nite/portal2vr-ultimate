@@ -39,6 +39,7 @@ BASE_VALUES = {
     "ExperimentalHUDOverlay": "false",
     "ExperimentalWorldAimMarker": "false",
     "ExperimentalViewmodelAlignment": "false",
+    "AimFromViewmodelMuzzle": "false",
     "ExperimentalPortalShotHaptics": "false",
     "AimMode": "2",
     "RenderWindow": "0",
@@ -66,10 +67,11 @@ PROFILES = {
                                            "ViewmodelPosCustomOffsetX": "-4.5",
                                            "ViewmodelPosCustomOffsetY": "1.0",
                                            "ViewmodelPosCustomOffsetZ": "-1.5"}, True),
-    "roomscale_active_experimental": Profile("M3 Active roomscale (EXPERIMENTAL movement)",
+    "roomscale_active_experimental": Profile("Stereo reticle + muzzle line (fallback)",
                                              {"RoomscaleMode": "ActiveExperimental",
                                               "6DOF": "true",
                                               "ExperimentalViewmodelAlignment": "true",
+                                              "AimFromViewmodelMuzzle": "true",
                                               "HUDDistanceMeters": "1.25",
                                               "HUDWidthMeters": "1.65",
                                               "HUDVerticalOffsetMeters": "0.10",
@@ -97,6 +99,13 @@ PROFILES = {
     "mirror": Profile("M6 Mirror ON", {"RenderWindow": "1"}, True),
 }
 
+# A/B changes only the existing aim-rendering selector. Preserve the confirmed
+# model, captions and roomscale setup without duplicating its calibration.
+PROFILES["roomscale_active_native_aim"] = Profile(
+    "Legacy beam + HUD reticle (muzzle test)",
+    {**PROFILES["roomscale_active_experimental"].changes,
+     "ExperimentalWorldAimMarker": "false"}, True)
+
 CHECKLIST = (
     Check("M0/M1", "m1_launch", "Launch with -insecure; no crash; resolved hooks appear in log", "baseline"),
     Check("M0/M1", "m1_menu", "Menu and game image are visible in the HMD", "baseline"),
@@ -108,6 +117,9 @@ CHECKLIST = (
     Check("M2", "m2_aim", "3D laser line follows the right-controller shot", "aim_marker"),
     Check("M2", "m2_portal_status", "Native blue/orange portal status appears at the laser endpoint", "combined"),
     Check("M2", "m2_model_alignment", "Compare portal-gun body/glow against aim-marker profile", "aim_model_alignment"),
+    Check("Aim A/B", "aim_native_muzzle", "FIRST: robot_point_beam starts at the gun muzzle and follows it", "roomscale_active_native_aim"),
+    Check("Aim A/B", "aim_native_hud", "Legacy HUD crosshair: visible, stable and dynamic blue/orange status", "roomscale_active_native_aim"),
+    Check("Aim A/B", "aim_stereo_muzzle", "FALLBACK: stereo reticle + world line starts at the same gun muzzle", "roomscale_active_experimental"),
     Check("M3", "m3_observe", "Observe logs steps without moving the player", "roomscale_observe_combined"),
     Check("M3", "m3_active_walk", "Small physical steps: body follows head; returning restores alignment", "roomscale_active_experimental"),
     Check("M3", "m3_active_wall", "Wall: view remains bounded; stepping back does not drift the body", "roomscale_active_experimental"),

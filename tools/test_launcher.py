@@ -59,9 +59,10 @@ class TestLauncher:
         selector = ttk.Combobox(outer, textvariable=self.profile_var,
                                 values=self.profile_labels, state="readonly")
         selector.grid(row=2, column=1, sticky="ew", padx=8)
-        ttk.Label(outer, text="The combined profile enables confirmed HUD, laser and haptics "
-                  "settings; the native reticle is still experimental. "
-                  "M3 Active roomscale requests experimental movement; test small steps first. "
+        ttk.Label(outer, text="Aim A/B: test 'Legacy beam + HUD reticle (muzzle test)' first. "
+                  "Use 'Stereo reticle + muzzle line (fallback)' for comparison after restarting. "
+                  "Both preserve the current model, captions and active roomscale settings. "
+                  "Active roomscale remains experimental movement; test small steps first. "
                   "M3 Observe remains diagnostic only.",
                   wraplength=850).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 6))
 

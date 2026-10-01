@@ -17,6 +17,7 @@ TEMPLATE = (
     "ExperimentalHUDOverlay=false\n"
     "ExperimentalWorldAimMarker=false\n"
     "ExperimentalViewmodelAlignment=false\n"
+    "AimFromViewmodelMuzzle=false\n"
     "ExperimentalPortalShotHaptics=false\n"
     "AimMode=2\n"
     "RenderWindow=0\n"
@@ -31,6 +32,28 @@ TEMPLATE = (
 
 
 class ProfileTests(unittest.TestCase):
+    def test_legacy_and_stereo_aim_profiles_use_muzzle_and_preserve_confirmed_setup(self):
+        def settings(profile):
+            return dict(line.split("=", 1) for line in
+                        core.render_config(TEMPLATE, profile).splitlines() if "=" in line)
+        native = settings("roomscale_active_native_aim")
+        fallback = settings("roomscale_active_experimental")
+        self.assertEqual(native["ExperimentalWorldAimMarker"], "false")
+        self.assertEqual(fallback["ExperimentalWorldAimMarker"], "true")
+        self.assertEqual(native["AimFromViewmodelMuzzle"], "true")
+        self.assertEqual(fallback["AimFromViewmodelMuzzle"], "true")
+        for key in native.keys() - {"ExperimentalWorldAimMarker"}:
+            self.assertEqual(native[key], fallback[key], key)
+        self.assertEqual(native["ExperimentalViewmodelAlignment"], "true")
+        self.assertEqual(native["RoomscaleMode"], "ActiveExperimental")
+        self.assertEqual(native["HUDVerticalOffsetMeters"], "0.10")
+
+    def test_baseline_explicitly_disables_muzzle_even_with_opted_in_template(self):
+        template = TEMPLATE.replace("AimFromViewmodelMuzzle=false", "AimFromViewmodelMuzzle=true")
+        for profile in ("baseline", "combined", "roomscale_observe_combined", "aim_marker"):
+            with self.subTest(profile=profile):
+                self.assertIn("AimFromViewmodelMuzzle=false\n", core.render_config(template, profile))
+
     def test_active_roomscale_raises_and_enlarges_captions_without_leaking_to_baseline(self):
         def settings(profile):
             return dict(line.split("=", 1) for line in
