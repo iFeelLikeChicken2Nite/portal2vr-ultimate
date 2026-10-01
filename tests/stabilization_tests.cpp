@@ -599,32 +599,23 @@ int main()
     expect(AimFeedback::ShouldInspectActiveWeaponForAim(2, false, true, false), false,
            "missing overlay does not trigger an unsafe weapon lookup");
     const auto wallAim = AimFeedback::PrepareWorldAimGeometry(
-        Vector{10, 20, 30}, Vector{110, 20, 30}, true);
+        Vector{10, 20, 30}, Vector{110, 20, 30});
     expect(wallAim.has_value(), true, "finite wall hit produces aim geometry");
     if (wallAim) {
         expectVectorNear(wallAim->beamEnd, {110, 20, 30},
-                         "nearby impact marker stays at the controller trace endpoint");
-        expectVectorNear(wallAim->impactPoint, {109, 20, 30},
-                         "impact marker sits just in front of the traced wall");
-        expect(wallAim->showImpact, true, "nearby wall hit gets a visible endpoint marker");
+                         "beam reaches the controller trace endpoint");
     }
     const auto distantAim = AimFeedback::PrepareWorldAimGeometry(
-        Vector{10, 20, 30}, Vector{10010, 20, 30}, true);
+        Vector{10, 20, 30}, Vector{10010, 20, 30});
     expect(distantAim.has_value(), true, "long trace keeps a directional beam");
     if (distantAim) {
         expectVectorNear(distantAim->beamEnd, {10010, 20, 30},
                          "long trace beam reaches the actual shot trace endpoint");
-        expect(distantAim->showImpact, true,
-               "distant trace hit retains its impact marker");
     }
-    const auto openAim = AimFeedback::PrepareWorldAimGeometry(
-        Vector{10, 20, 30}, Vector{10010, 20, 30}, false);
-    expect(openAim.has_value() && !openAim->showImpact, true,
-           "open-space trace has a directional beam without a false impact marker");
-    expect(AimFeedback::PrepareWorldAimGeometry(Vector{0, 0, 0}, Vector{0, 0, 0}, true).has_value(), false,
+    expect(AimFeedback::PrepareWorldAimGeometry(Vector{0, 0, 0}, Vector{0, 0, 0}).has_value(), false,
            "zero-length aim trace has no beam");
     expect(AimFeedback::PrepareWorldAimGeometry(Vector{0, 0, 0},
-        Vector{std::numeric_limits<float>::quiet_NaN(), 0, 0}, true).has_value(), false,
+        Vector{std::numeric_limits<float>::quiet_NaN(), 0, 0}).has_value(), false,
         "nonfinite aim trace has no beam");
     expectNear(AimFeedback::WorldAimOverlayLifetime(1.0f / 120.0f), 1.25f / 120.0f,
                "120 Hz game cadence limits aim history to roughly one frame");

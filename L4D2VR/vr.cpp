@@ -1573,10 +1573,10 @@ void VR::UpdateTracking()
         if (worldMarker) {
             const Vector controllerOrigin = GetRightControllerAbsPos();
             const auto geometry = AimFeedback::PrepareWorldAimGeometry(
-                controllerOrigin, m_AimPos, aimTraceHit);
+                controllerOrigin, m_AimPos);
             if (geometry) {
-                // Fixed color avoids reading portal-gun-specific memory for this
-                // experimental visual; the native HUD retains portal status.
+                // The beam is only a pointing aid. Source owns the reticle artwork
+                // and status; avoid drawing a competing plus at its endpoint.
                 constexpr int r = 64, g = 200, b = 255;
                 const auto now = std::chrono::steady_clock::now();
                 const float frameInterval = m_LastWorldAimMarkerUpdate ==
@@ -1586,16 +1586,6 @@ void VR::UpdateTracking()
                 m_LastWorldAimMarkerUpdate = now;
                 m_Game->m_DebugOverlay->AddLineOverlay(controllerOrigin, geometry->beamEnd,
                     r, g, b, false, lifetime);
-                if (geometry->showImpact) {
-                    const Vector right = m_HmdRight * 1.5f;
-                    const Vector up = m_HmdUp * 1.5f;
-                    m_Game->m_DebugOverlay->AddLineOverlay(
-                        geometry->impactPoint - right, geometry->impactPoint + right,
-                        r, g, b, false, lifetime);
-                    m_Game->m_DebugOverlay->AddLineOverlay(
-                        geometry->impactPoint - up, geometry->impactPoint + up,
-                        r, g, b, false, lifetime);
-                }
                 if (!m_WorldAimMarkerLogged) {
                     Logger::Write("Experimental world aim marker submitted to Source debug overlay; "
                         "actual stereo visibility and shot alignment require VR testing");

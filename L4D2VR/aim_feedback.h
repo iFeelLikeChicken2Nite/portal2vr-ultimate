@@ -33,8 +33,6 @@ inline bool ShouldInspectActiveWeaponForAim(int aimMode, bool laserAvailable,
 struct WorldAimGeometry
 {
     Vector beamEnd;
-    Vector impactPoint;
-    bool showImpact;
 };
 
 inline float WorldAimOverlayLifetime(float frameIntervalSeconds)
@@ -141,7 +139,7 @@ inline std::optional<AtlasTexels> SourceHudAtlasRect(
 }
 
 inline std::optional<WorldAimGeometry> PrepareWorldAimGeometry(
-    const Vector &origin, const Vector &target, bool traceHit)
+    const Vector &origin, const Vector &target)
 {
     if (!std::isfinite(origin.x) || !std::isfinite(origin.y) || !std::isfinite(origin.z) ||
         !std::isfinite(target.x) || !std::isfinite(target.y) || !std::isfinite(target.z))
@@ -152,9 +150,7 @@ inline std::optional<WorldAimGeometry> PrepareWorldAimGeometry(
     if (!std::isfinite(distance) || distance < 0.01)
         return std::nullopt;
 
-    const float impactInset = static_cast<float>(
-        (distance < 4.0 ? distance * 0.25 : 1.0) / distance);
-    return WorldAimGeometry{target, target - delta * impactInset, traceHit};
+    return WorldAimGeometry{target};
 }
 
 struct ScreenPoint
