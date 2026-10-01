@@ -68,7 +68,8 @@ class ProfileTests(unittest.TestCase):
         self.assertIn("ViewmodelPosCustomOffsetY=1.0\n", aligned)
         self.assertIn("ViewmodelPosCustomOffsetZ=-1.5\n", aligned)
         self.assertIn("ExperimentalWorldAimMarker=true\n", aligned)
-        self.assertIn("ExperimentalHUDOverlay=false\n", aligned)
+        self.assertIn("ExperimentalHUDOverlay=true\n", aligned)
+        self.assertIn("ExperimentalPortalShotHaptics=true\n", aligned)
 
     def test_missing_or_duplicate_required_key_refuses_partial_config(self):
         with self.assertRaisesRegex(ValueError, "Missing config keys: RenderWindow"):

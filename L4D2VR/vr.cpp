@@ -17,6 +17,10 @@
 #include <algorithm>
 #include <d3d9_vr.h>
 
+// Original Portal2VR viewmodel calibration, retained for compatibility.
+// The experimental launcher profile cancels it without changing shot origin.
+static const Vector kLegacyViewmodelPositionOffset{4.5f, -1.0f, 1.5f};
+
 VR::VR(Game *game) 
 {
     m_Game = game;
@@ -1536,11 +1540,9 @@ void VR::UpdateTracking()
     QAngle::VectorAngles(m_RightControllerForward, m_RightControllerUp, m_RightControllerAngAbs);
     m_RightControllerAngAbs.Normalize();
 
-    PositionAngle viewmodelOffset = PositionAngle{ {4.5, -1, 1.5}, {0,0,0} };
-
     // Apply both hardcoded and custom (from config) viewmodel offsets here:
-    m_ViewmodelPosOffset = viewmodelOffset.position + m_ViewmodelPosCustomOffset;
-    m_ViewmodelAngOffset = viewmodelOffset.angle + m_ViewmodelAngCustomOffset;
+    m_ViewmodelPosOffset = kLegacyViewmodelPositionOffset + m_ViewmodelPosCustomOffset;
+    m_ViewmodelAngOffset = m_ViewmodelAngCustomOffset;
 
     m_ViewmodelForward = m_RightControllerForward;
     m_ViewmodelUp = m_RightControllerUp;
@@ -2082,5 +2084,13 @@ void VR::ParseConfigFile()
         " AntiAliasing=" + std::to_string(m_AntiAliasing) +
         " ExperimentalHUDOverlay=" + std::to_string(m_Config.experimentalHudOverlay) +
         " ExperimentalPortalShotHaptics=" +
-        std::to_string(m_Config.experimentalPortalShotHaptics));
+        std::to_string(m_Config.experimentalPortalShotHaptics) +
+        " ViewmodelPosCustomOffset=" +
+        std::to_string(m_ViewmodelPosCustomOffset.x) + "," +
+        std::to_string(m_ViewmodelPosCustomOffset.y) + "," +
+        std::to_string(m_ViewmodelPosCustomOffset.z) +
+        " EffectiveViewmodelPosOffset=" +
+        std::to_string(kLegacyViewmodelPositionOffset.x + m_ViewmodelPosCustomOffset.x) + "," +
+        std::to_string(kLegacyViewmodelPositionOffset.y + m_ViewmodelPosCustomOffset.y) + "," +
+        std::to_string(kLegacyViewmodelPositionOffset.z + m_ViewmodelPosCustomOffset.z));
 }
