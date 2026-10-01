@@ -48,6 +48,10 @@ BASE_VALUES = {
 
 PROFILES = {
     "baseline": Profile("Baseline (M0/M1)", {}),
+    "combined": Profile("Confirmed setup + native reticle test",
+                        {"ExperimentalHUDOverlay": "true",
+                         "ExperimentalWorldAimMarker": "true",
+                         "ExperimentalPortalShotHaptics": "true"}, True),
     "standing": Profile("M2 Standing", {"TrackingMode": "Standing"}),
     "observe": Profile("M3 Observe (no player movement)", {"RoomscaleMode": "Observe"}),
     "full_rotation": Profile("M4 FullRotation", {"PortalOrientationMode": "FullRotation"}, True),
@@ -73,8 +77,8 @@ CHECKLIST = (
     Check("M2", "m2_seated", "Seated: head and both hands track correctly", "baseline"),
     Check("M2", "m2_standing", "Standing: level loads; tracked-height anchor and recenter feel correct", "standing"),
     Check("M2", "m2_turn", "Snap/smooth turning and movement direction", "baseline"),
-    Check("M2", "m2_aim", "3D line/impact marker matches right-controller shot", "aim_marker"),
-    Check("M2", "m2_portal_status", "Native blue/orange portal status follows the 3D impact marker", "aim_marker"),
+    Check("M2", "m2_aim", "3D laser line follows the right-controller shot", "aim_marker"),
+    Check("M2", "m2_portal_status", "Native blue/orange portal status appears at the laser endpoint", "combined"),
     Check("M2", "m2_model_alignment", "Compare portal-gun body/glow against aim-marker profile", "aim_model_alignment"),
     Check("M3", "m3_observe", "Observe logs steps without moving the player", "observe"),
     Check("M3", "m3_collision", "Active roomscale remains off (expected limitation)", "observe"),
@@ -82,7 +86,6 @@ CHECKLIST = (
     Check("M4", "m4_full", "FullRotation: head/hand orientation across wall portals", "full_rotation"),
     Check("M4", "m4_floor", "Floor/ceiling portals: comfort and stereo", "preserve_horizon"),
     Check("M4", "m4_recenter", "Recenter around portal traversal; no duplicate event", "full_rotation"),
-    Check("M5", "m5_hud", "HUD: readability, opacity and scale", "hud"),
     Check("M5", "m5_subtitles", "Subtitles: visible, readable, and follow the view", "hud"),
     Check("M5", "m5_menu", "Pause/menu: hover, click, back; no stuck click", "hud"),
     Check("M5", "m5_loss", "Keyboard still operates menu after controller loss", "hud"),
@@ -91,6 +94,12 @@ CHECKLIST = (
     Check("M6", "m6_mirror", "Mirror off/on: image and UI; no performance claim", "mirror"),
     Check("M6", "m6_perf", "Record median and high-percentile CPU/GPU timing", "mirror"),
 )
+
+
+def visible_checks(completed: set[str], show_completed: bool = False) -> tuple[Check, ...]:
+    """Keep the local record while presenting only outstanding checks by default."""
+    return tuple(item for item in CHECKLIST if show_completed or item.id not in completed)
+
 
 SOURCE_TO_TARGET = (
     ("Release/d3d9.dll", "bin/d3d9.dll"),

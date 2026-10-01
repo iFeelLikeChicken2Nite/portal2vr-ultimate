@@ -42,7 +42,11 @@ class TestLauncher:
         selected = state["profile"] if state["profile"] in core.PROFILES else "baseline"
         self.profile_var = tk.StringVar(value=core.PROFILES[selected].label)
         checked = set(state["checks"])
-        self.check_vars: dict[str, tk.BooleanVar] = {}
+        self.check_vars: dict[str, tk.BooleanVar] = {
+            check.id: tk.BooleanVar(value=check.id in checked)
+            for check in core.CHECKLIST
+        }
+        self.show_completed_var = tk.BooleanVar(value=False)
 
         outer = ttk.Frame(root, padding=12)
         outer.pack(fill="both", expand=True)
@@ -55,37 +59,28 @@ class TestLauncher:
         selector = ttk.Combobox(outer, textvariable=self.profile_var,
                                 values=self.profile_labels, state="readonly")
         selector.grid(row=2, column=1, sticky="ew", padx=8)
-        ttk.Label(outer, text="M4–M6 profiles are experimental. "
+        ttk.Label(outer, text="The combined profile enables confirmed HUD, laser and haptics "
+                  "settings; the native reticle is still experimental. "
                   "M3 Observe does not move the player; OpenXR is not included.",
                   wraplength=850).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 6))
 
         checklist = ttk.LabelFrame(outer, text="Checklist — tick only after a real test")
         checklist.grid(row=4, column=0, columnspan=2, sticky="nsew")
         outer.rowconfigure(4, weight=1)
+        ttk.Checkbutton(checklist, text="Show completed checks",
+                        variable=self.show_completed_var,
+                        command=self.render_checklist).pack(anchor="w", padx=6, pady=4)
         canvas = tk.Canvas(checklist, highlightthickness=0)
         scrollbar = ttk.Scrollbar(checklist, orient="vertical", command=canvas.yview)
-        inside = ttk.Frame(canvas)
-        inside.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
-        window_id = canvas.create_window((0, 0), window=inside, anchor="nw")
+        self.inside = ttk.Frame(canvas)
+        self.inside.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        window_id = canvas.create_window((0, 0), window=self.inside, anchor="nw")
         canvas.bind("<Configure>",
                     lambda event: canvas.itemconfigure(window_id, width=event.width))
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        current_group = None
-        for check in core.CHECKLIST:
-            if check.group != current_group:
-                current_group = check.group
-                ttk.Label(inside, text=current_group, font=("Segoe UI", 10, "bold")).pack(
-                    anchor="w", pady=(10, 2))
-            variable = tk.BooleanVar(value=check.id in checked)
-            self.check_vars[check.id] = variable
-            row = ttk.Frame(inside)
-            row.pack(fill="x", anchor="w")
-            ttk.Checkbutton(row, text=check.label, variable=variable).pack(side="left", anchor="w")
-            ttk.Button(row, text=core.PROFILES[check.profile].label,
-                       command=lambda profile=check.profile: self.choose_profile(profile)).pack(
-                           side="right", padx=8)
+        self.render_checklist()
 
         ttk.Label(outer, text="Test notes").grid(row=5, column=0, columnspan=2,
                                                        sticky="w", pady=(10, 2))
@@ -104,6 +99,25 @@ class TestLauncher:
     def choose_profile(self, profile: str) -> None:
         self.profile_var.set(core.PROFILES[profile].label)
 
+    def render_checklist(self) -> None:
+        for child in self.inside.winfo_children():
+            child.destroy()
+        completed = {item_id for item_id, variable in self.check_vars.items()
+                     if variable.get()}
+        current_group = None
+        for check in core.visible_checks(completed, self.show_completed_var.get()):
+            if check.group != current_group:
+                current_group = check.group
+                ttk.Label(self.inside, text=current_group,
+                          font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(10, 2))
+            row = ttk.Frame(self.inside)
+            row.pack(fill="x", anchor="w")
+            ttk.Checkbutton(row, text=check.label,
+                            variable=self.check_vars[check.id]).pack(side="left", anchor="w")
+            ttk.Button(row, text=core.PROFILES[check.profile].label,
+                       command=lambda profile=check.profile: self.choose_profile(profile)).pack(
+                           side="right", padx=8)
+
     def selected_profile(self) -> str:
         return self.profile_ids[self.profile_labels.index(self.profile_var.get())]
 
@@ -111,8 +125,11 @@ class TestLauncher:
         self.state["game_dir"] = self.game_var.get().strip()
         self.state["steam_exe"] = self.steam_var.get().strip()
         self.state["profile"] = self.selected_profile()
+        known = set(self.check_vars)
         self.state["checks"] = [item.id for item in core.CHECKLIST
-                                if self.check_vars[item.id].get()]
+                                if self.check_vars[item.id].get()] + [
+                                    item_id for item_id in self.state["checks"]
+                                    if item_id not in known]
         self.state["notes"] = self.notes.get("1.0", "end-1c")
         self.state = core.save_preferences(STATE_PATH, self.state)
 

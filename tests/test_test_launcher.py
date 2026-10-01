@@ -76,6 +76,25 @@ class ProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Duplicate config key: RoomscaleMode"):
             core.render_config(TEMPLATE + "RoomscaleMode=Observe\n", "baseline")
 
+    def test_combined_profile_keeps_confirmed_features_active_for_reticle_test(self):
+        rendered = core.render_config(TEMPLATE, "combined")
+        self.assertIn("TrackingMode=Seated # tracking\n", rendered)
+        self.assertIn("RoomscaleMode=Off\n", rendered)
+        self.assertIn("PortalOrientationMode=LegacyYaw\n", rendered)
+        self.assertIn("ExperimentalHUDOverlay=true\n", rendered)
+        self.assertIn("ExperimentalWorldAimMarker=true\n", rendered)
+        self.assertIn("ExperimentalPortalShotHaptics=true\n", rendered)
+        self.assertIn("ViewmodelPosCustomOffsetX=0.0\n", rendered)
+
+    def test_completed_checks_are_hidden_but_remain_recoverable(self):
+        completed = {"m1_launch", "m2_seated"}
+        pending = core.visible_checks(completed, show_completed=False)
+        self.assertNotIn("m1_launch", [item.id for item in pending])
+        self.assertNotIn("m2_seated", [item.id for item in pending])
+        self.assertIn("m2_portal_status", [item.id for item in pending])
+        all_checks = core.visible_checks(completed, show_completed=True)
+        self.assertEqual(len(all_checks), len(core.CHECKLIST))
+
 
 class StateTests(unittest.TestCase):
     def test_checklist_and_notes_survive_restart(self):
