@@ -60,6 +60,7 @@ public:
 	unsigned m_HUDMissingCaptureFrames = 0;
 	UiInput::MenuPointerState m_MenuPointerState;
 	std::chrono::steady_clock::time_point m_NextMenuInputErrorLog{};
+	std::chrono::steady_clock::time_point m_NextMenuPlacementLog{};
 	std::chrono::steady_clock::time_point m_NextHapticErrorLog{};
 	Haptics::ShotGate m_PortalShotHapticGate;
 	bool m_HapticOutputsAvailable = false;
@@ -274,7 +275,7 @@ public:
 	void SetScreenSizeOverride(bool bState);
 	void CreateVRTextures();
 	void SubmitVRTextures();
-	void RepositionOverlays();
+	bool RepositionOverlays();
 	void CreateExperimentalHUDOverlay();
 	void SubmitExperimentalHUDOverlay();
 	void GetPoses();

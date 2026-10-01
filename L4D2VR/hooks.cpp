@@ -1,4 +1,5 @@
 #include "hooks.h"
+#include "viewmodel_alignment.h"
 #include "game.h"
 #include "texture.h"
 #include "sdk.h"
@@ -389,7 +390,119 @@ Hooks::Hooks(Game *game)
 			"Experimental HUD VGUI capture hooks enabled" :
 			"Experimental HUD capture unavailable; stereo rendering remains enabled");
 	}
+    InitViewmodelAlignment();
 	m_Ready = true;
+}
+
+void Hooks::InitViewmodelAlignment()
+{
+    if (!m_VR->m_Config.experimentalViewmodelAlignment)
+        return;
+    const auto *offsets = m_Game->m_Offsets;
+    const struct Symbol { const char *name; const Offset *offset; } symbols[] = {
+        {"DrawViewModels", &offsets->DrawViewModels},
+        {"ViewmodelCalcView", &offsets->ViewmodelCalcView},
+        {"FormatViewModelAttachment", &offsets->FormatViewModelAttachment},
+        {"SetViewmodelLocalOrigin", &offsets->SetViewmodelLocalOrigin},
+        {"SetViewmodelLocalAngles", &offsets->SetViewmodelLocalAngles},
+        {"ViewmodelScreenAspect", &offsets->ViewmodelScreenAspect}
+    };
+    bool available = true;
+    for (const auto &symbol : symbols) {
+        Logger::Write(std::string(symbol.name) + " ........ " +
+            (symbol.offset->address ? "OK" : "MISSING") + " [optional viewmodel alignment]");
+        available = available && symbol.offset->address != 0;
+    }
+    if (available) {
+        const bool created =
+            !hkDrawViewModels.createHook((LPVOID)offsets->DrawViewModels.address, &dDrawViewModels) &&
+            !hkViewmodelCalcView.createHook((LPVOID)offsets->ViewmodelCalcView.address, &dViewmodelCalcView) &&
+            !hkFormatViewModelAttachment.createHook((LPVOID)offsets->FormatViewModelAttachment.address, &dFormatViewModelAttachment) &&
+            !hkViewmodelScreenAspect.createHook((LPVOID)offsets->ViewmodelScreenAspect.address, &dViewmodelScreenAspect);
+        if (created) {
+            SetViewmodelLocalOrigin = reinterpret_cast<tSetViewmodelLocalOrigin>(offsets->SetViewmodelLocalOrigin.address);
+            SetViewmodelLocalAngles = reinterpret_cast<tSetViewmodelLocalAngles>(offsets->SetViewmodelLocalAngles.address);
+            m_ViewmodelAlignmentReady = !hkDrawViewModels.enableHook() &&
+                !hkViewmodelCalcView.enableHook() && !hkFormatViewModelAttachment.enableHook() &&
+                !hkViewmodelScreenAspect.enableHook();
+        }
+    }
+    if (!m_ViewmodelAlignmentReady) {
+        if (hkDrawViewModels.isEnabled) hkDrawViewModels.disableHook();
+        if (hkViewmodelCalcView.isEnabled) hkViewmodelCalcView.disableHook();
+        if (hkFormatViewModelAttachment.isEnabled) hkFormatViewModelAttachment.disableHook();
+        if (hkViewmodelScreenAspect.isEnabled) hkViewmodelScreenAspect.disableHook();
+        SetViewmodelLocalOrigin = nullptr;
+        SetViewmodelLocalAngles = nullptr;
+    }
+    Logger::Write(m_ViewmodelAlignmentReady ?
+        "Experimental viewmodel alignment enabled: controller-locked native model; VR aspect; no player-view FOV attachment warp (hardware unverified)" :
+        "Experimental viewmodel alignment unavailable; entire optional group disabled, legacy viewmodel retained");
+}
+
+bool Hooks::CanAlignViewmodel()
+{
+    if (!Portal2VRRuntime::IsPublished(g_Game, m_Game))
+        return false;
+    return ViewmodelAlignment::Eligibility{
+        true, m_VR->m_IsVREnabled && m_VR->m_Config.experimentalViewmodelAlignment,
+        m_Game->m_Hooks->m_ViewmodelAlignmentReady, m_VR->m_TrackingOutputValid,
+        m_VR->m_RightControllerPose.valid, m_Game->m_EngineClient->IsInGame(),
+        m_Game->m_VguiSurface->IsCursorVisible()}.Allowed();
+}
+
+void __fastcall Hooks::dDrawViewModels(void *ecx, void *, const CViewSetup &view, bool draw)
+{
+    // Portal 2 replaces this view's aspect with the engine's width/height-based
+    // aspect (or convar override) inside DrawViewModels, client RVA 0x1F216D.
+    // That is not the symmetric VR projection aspect. Override this draw only.
+    const float aspect = CanAlignViewmodel() && m_ActiveAimEyeView ? view.m_flAspectRatio : 0.0f;
+    ViewmodelAlignment::ProjectionScope scope(m_ViewmodelDrawAspect, aspect);
+    hkDrawViewModels.fOriginal(ecx, view, draw);
+}
+
+float __fastcall Hooks::dViewmodelScreenAspect(void *ecx, void *, int width, int height)
+{
+    const float nativeAspect = hkViewmodelScreenAspect.fOriginal(ecx, width, height);
+    static bool logged = false;
+    if (!logged && std::isfinite(m_ViewmodelDrawAspect) && m_ViewmodelDrawAspect > 0.0f) {
+        logged = true;
+        Logger::Write("Experimental viewmodel projection: nativeAspect=" + std::to_string(nativeAspect) +
+            " eyeAspect=" + std::to_string(m_ViewmodelDrawAspect) +
+            " dimensions=" + std::to_string(width) + "x" + std::to_string(height));
+    }
+    return ViewmodelAlignment::AspectOr(m_ViewmodelDrawAspect, nativeAspect);
+}
+
+void __fastcall Hooks::dViewmodelCalcView(void *ecx, void *, void *owner,
+                                        const Vector &origin, const QAngle &angles)
+{
+    hkViewmodelCalcView.fOriginal(ecx, owner, origin, angles);
+    if (!m_ControllerViewmodelUpdate || !CanAlignViewmodel())
+        return;
+    // The native function adds viewmodel offsets, bob and lag after our player
+    // hook. Retain its housekeeping, then use Source setters (which invalidate
+    // transforms) instead of writing guessed entity fields.
+    SetViewmodelLocalOrigin(ecx, origin);
+    SetViewmodelLocalAngles(ecx, angles);
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        Logger::Write("Experimental viewmodel: native local pose set after bob/offset calculation; model pivot still requires VR calibration");
+    }
+}
+
+void __cdecl Hooks::dFormatViewModelAttachment(void *owner, Vector &origin, bool inverse)
+{
+    if (CanAlignViewmodel()) {
+        const auto local = m_Game->GetClientEntity(m_Game->m_EngineClient->GetLocalPlayer());
+        // With identical model/world projection the forward and inverse FOV
+        // conversions are identities. The native helper uses the cached player
+        // view, so it cannot be used for either conversion in this mode.
+        if (local && (!owner || owner == local))
+            return;
+    }
+    hkFormatViewModelAttachment.fOriginal(owner, origin, inverse);
 }
 
 Hooks::~Hooks()
@@ -781,7 +894,11 @@ void __fastcall Hooks::dCalcViewModelView(void *ecx, void *edx, const Vector &ey
 	}
 
 
-	return hkCalcViewModelView.fOriginal(ecx, vecNewOrigin, vecNewAngles);
+    const bool previousControllerUpdate = m_ControllerViewmodelUpdate;
+    m_ControllerViewmodelUpdate = CanAlignViewmodel() && ecx ==
+        m_Game->GetClientEntity(m_Game->m_EngineClient->GetLocalPlayer());
+    hkCalcViewModelView.fOriginal(ecx, vecNewOrigin, vecNewAngles);
+    m_ControllerViewmodelUpdate = previousControllerUpdate;
 }
 
 float __fastcall Hooks::dProcessUsercmds(void *ecx, void *edx, edict_t *player, void *buf, int numcmds, int totalcmds, int dropped_packets, bool ignore, bool paused)

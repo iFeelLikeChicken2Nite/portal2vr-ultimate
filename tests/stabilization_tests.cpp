@@ -17,6 +17,7 @@
 #include "../L4D2VR/aim_feedback.h"
 #include "../L4D2VR/render_context_abi.h"
 #include "../L4D2VR/reticle_telemetry.h"
+#include "../L4D2VR/viewmodel_alignment.h"
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -90,6 +91,36 @@ static void expectVectorNear(const Vector &actual, const Vector &expected, const
 
 int main()
 {
+    float scopedAspect = 0.0f;
+    expectNear(ViewmodelAlignment::AspectOr(scopedAspect, 16.0f / 9.0f),
+               16.0f / 9.0f, "desktop aspect remains native outside viewmodel draw");
+    {
+        ViewmodelAlignment::ProjectionScope leftEye(scopedAspect, 1.074f);
+        expectNear(ViewmodelAlignment::AspectOr(scopedAspect, 16.0f / 9.0f),
+                   1.074f, "viewmodel projection uses VR eye aspect, not window aspect");
+        {
+            ViewmodelAlignment::ProjectionScope nestedView(scopedAspect, 1.2f);
+            expectNear(scopedAspect, 1.2f, "nested view uses its own projection aspect");
+        }
+        expectNear(scopedAspect, 1.074f, "nested view restores the outer eye projection");
+    }
+    expectNear(scopedAspect, 0.0f, "viewmodel draw restores desktop projection state");
+    expectNear(ViewmodelAlignment::AspectOr(std::numeric_limits<float>::quiet_NaN(),
+                                          16.0f / 9.0f), 16.0f / 9.0f,
+               "nonfinite override cannot corrupt native projection");
+    ViewmodelAlignment::Eligibility modelEligibility{true, true, true, true, true, true, false};
+    expect(modelEligibility.Allowed(), true, "complete local tracking permits viewmodel correction");
+    modelEligibility.ready = false;
+    expect(modelEligibility.Allowed(), false, "missing optional hook group preserves legacy viewmodel");
+    modelEligibility.ready = true;
+    modelEligibility.handValid = false;
+    expect(modelEligibility.Allowed(), false, "lost firing hand cannot override model pose or effects");
+    modelEligibility.handValid = true;
+    modelEligibility.cursorVisible = true;
+    expect(modelEligibility.Allowed(), false, "pause menu cannot apply controller viewmodel correction");
+    modelEligibility.cursorVisible = false;
+    modelEligibility.published = false;
+    expect(modelEligibility.Allowed(), false, "initializing runtime cannot apply viewmodel correction");
     ReticleTelemetry reticleTelemetry;
     using ReticleEye = ReticleTelemetry::Eye;
     using ReticleIcon = ReticleTelemetry::Icon;
@@ -185,9 +216,50 @@ int main()
            "failed menu placement is retried while visible");
     menuPlacement.RecordResult(true);
     expect(menuPlacement.ShouldAttempt(true, true), false,
-           "positioned visible menu does not move on every frame");
+           "positioned visible menu does not recapture heading on every frame");
     expect(menuPlacement.ShouldAttempt(false, true), true,
            "hidden menu is positioned again before returning");
+    const float menuHmd[3][4] = {{1,0,0,1}, {0,1,0,1.7f}, {0,0,1,2}};
+    const auto openedMenu = menuPlacement.UpdatePose(menuHmd, false);
+    expect(openedMenu.has_value(), true, "menu opens from the current tracking pose");
+    if (openedMenu) {
+        expectNear(openedMenu->m[0][3], 1.0f, "menu opens at current HMD x");
+        expectNear(openedMenu->m[1][3], 1.45f, "menu opens slightly below eye height");
+        expectNear(openedMenu->m[2][3], -1.0f, "menu opens three meters ahead in OpenVR space");
+    }
+    menuPlacement.RecordResult(true);
+    // Move two meters and turn the head 90 degrees while the panel is open.
+    const float movedMenuHmd[3][4] = {{0,0,1,3}, {0,1,0,1.7f}, {-1,0,0,2}};
+    const auto followedMenu = menuPlacement.UpdatePose(movedMenuHmd, true);
+    expect(followedMenu.has_value(), true, "visible menu follows physical translation");
+    if (followedMenu) {
+        expectNear(followedMenu->m[0][3], 3.0f, "visible menu follows current HMD x");
+        expectNear(followedMenu->m[2][3], -1.0f, "visible menu keeps its opening heading");
+        expectNear(followedMenu->m[0][0], 1.0f, "visible menu does not rotate with head turns");
+    }
+    menuPlacement.Invalidate();
+    const auto reopenedMenu = menuPlacement.UpdatePose(movedMenuHmd, true);
+    expect(reopenedMenu.has_value(), true, "invalidated visible menu captures a fresh opening pose");
+    if (reopenedMenu) {
+        expectNear(reopenedMenu->m[0][3], 0.0f, "reopening adopts the new facing direction");
+        expectNear(reopenedMenu->m[2][3], 2.0f, "reopening uses the current tracking position");
+    }
+    float badMenuHmd[3][4] = {{1,0,0,0}, {0,1,0,0}, {0,0,1,0}};
+    badMenuHmd[0][3] = std::numeric_limits<float>::quiet_NaN();
+    expect(menuPlacement.UpdatePose(badMenuHmd, true).has_value(), false,
+           "invalid tracking cannot send a nonfinite overlay transform");
+    const auto recoveredMenu = menuPlacement.UpdatePose(movedMenuHmd, true);
+    expect(recoveredMenu.has_value(), true, "menu recovers when finite tracking returns");
+    if (recoveredMenu)
+        expectNear(recoveredMenu->m[0][3], 0.0f, "tracking recovery captures current heading");
+    menuPlacement.Invalidate();
+    const float upwardMenuHmd[3][4] = {{1,0,0,1}, {0,0,1,1.7f}, {0,-1,0,2}};
+    const auto upwardMenu = menuPlacement.UpdatePose(upwardMenuHmd, false);
+    expect(upwardMenu.has_value(), true, "vertical gaze still yields a usable menu pose");
+    if (upwardMenu) {
+        expectNear(upwardMenu->m[0][0], 1.0f, "vertical gaze uses a nondegenerate yaw fallback");
+        expectNear(upwardMenu->m[2][3], -1.0f, "vertical gaze keeps menu in front of tracking origin heading");
+    }
 
     TestViewportEngine viewportEngine;
     TestViewportGame viewportGame;
@@ -1088,6 +1160,16 @@ int main()
     expect(valid.value.turnSpeed == 0.5f, true, "trimmed float accepted");
     expect(valid.value.antiAliasing == 8, true, "valid AA accepted");
     expect(valid.value.viewmodelPosOffset[0] == -2.5f, true, "viewmodel offset accepted");
+    std::istringstream modelOptions("ExperimentalViewmodelAlignment=true\n");
+    const auto modelConfig = ParseConfig(modelOptions, previous);
+    expect(modelConfig.value.experimentalViewmodelAlignment, true,
+           "viewmodel projection and pose correction require explicit opt-in");
+    std::istringstream badModelOptions("ExperimentalViewmodelAlignment=maybe\n");
+    const auto retainedModelConfig = ParseConfig(badModelOptions, modelConfig.value);
+    expect(retainedModelConfig.value.experimentalViewmodelAlignment, true,
+           "invalid viewmodel alignment toggle preserves previous value");
+    expectInt(retainedModelConfig.errors.size(), 1,
+              "invalid viewmodel alignment toggle is diagnosed");
     std::istringstream trailing("TurnSpeed=0.5junk\nRenderWindow=2\n");
     const auto rejected = ParseConfig(trailing, previous);
     expect(rejected.value.turnSpeed == previous.turnSpeed, true, "trailing numeric garbage rejected");

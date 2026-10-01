@@ -40,6 +40,15 @@ public:
     Offset RenderView =                  { "client.dll", 0x1F2120, "55 8B EC 83 EC 2C 53 56 8B F1 6A 00 8D 8E ? ? ? ? E8 ? ? ? ?" };
     Offset g_pClientMode =               { "client.dll", 0x28A600, "8B 0D ? ? ? ? 8B", 2 };
     Offset CalcViewModelView =           { "client.dll", 0x27D750, "55 8B EC 83 EC 34 53 8B D9 80 BB" };
+    // Optional alignment group, identified offline in client.dll timestamp
+    // 0x6AA07473. These are functions, not guessed entity-layout writes.
+    Offset DrawViewModels = { "client.dll", 0x1F2090, "55 8B EC 81 EC 74 05 00 00 53 56 8B 75 08 57 8B F9 8B 0D ? ? ? ? 56 89 7D F4 E8" };
+    Offset ViewmodelCalcView = { "client.dll", 0x51030, "55 8B EC 83 EC 74 8B 45 10 F3 0F 7E 00 53 56 8B F1 8B 48 08 8B 45 0C" };
+    // cdecl: (C_BasePlayer *owner, Vector &origin, bool inverse), not thiscall.
+    Offset FormatViewModelAttachment = { "client.dll", 0x951E0, "55 8B EC 8B 45 08 83 EC 28 53 56 57 33 FF 85 C0 74 20 50 E8" };
+    Offset SetViewmodelLocalOrigin = { "client.dll", 0x6DB60, "55 8B EC 56 57 8B 7D 08 F3 0F 10 07 8B F1 0F 2E 86 A8 00 00 00" };
+    Offset SetViewmodelLocalAngles = { "client.dll", 0x6DC40, "55 8B EC 56 57 8B 7D 08 F3 0F 10 07 8B F1 0F 2E 86 CC 00 00 00" };
+    Offset ViewmodelScreenAspect = { "engine.dll", 0x7AB80, "55 8B EC 8B 45 0C 8B 4D 08 50 51 E8 ? ? ? ? 83 C4 08 5D C2 08 00 CC CC CC CC CC CC CC CC CC 55 8B EC E8" };
     Offset CreateMove =                  { "client.dll", 0x27A440, "55 8B EC A1 ? ? ? ? 83 EC 0C 83 78 30 00 56 8B 75 0C 57 8B F9 74 43" };
 
     //Offset WriteUsercmdDeltaToBuffer =   { "client.dll", 0x134790, "55 8B EC 83 EC 60 0F 57 C0 8B 55 0C" }; //

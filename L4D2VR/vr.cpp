@@ -218,7 +218,8 @@ void VR::CreateExperimentalHUDOverlay()
     Logger::Write("EXPERIMENTAL HUD overlay created: " +
         std::to_string(m_Config.hudWidthMeters) + "m wide, " +
         std::to_string(m_Config.hudDistanceMeters) +
-        "m from HMD; VGUI capture/alpha/subtitles require runtime verification");
+        "m from HMD, vertical=" + std::to_string(m_Config.hudVerticalOffsetMeters) +
+        "m; VGUI capture/alpha/subtitles require runtime verification");
 }
 
 bool VR::SetActionManifest(const char *fileName)
@@ -540,9 +541,9 @@ void VR::SubmitVRTextures()
         if (!m_BlankTexture || !m_VKBlankTexture.m_VRTexture.handle)
             return;
 
-        if (m_MenuOverlayPlacement.ShouldAttempt(
-                vr::VROverlay()->IsOverlayVisible(m_MainMenuHandle), m_HmdPose.valid))
-            RepositionOverlays();
+        // Translation follows the physical HMD even after roomscale walking.
+        // Heading is captured only on opening, not on every head turn.
+        const bool menuPositioned = RepositionOverlays();
 
         vr::VRTextureBounds_t bounds{ 0, 0, 1, 1 };
         const bool inGame = m_Game->m_EngineClient->IsInGame();
@@ -565,7 +566,9 @@ void VR::SubmitVRTextures()
 
         const auto boundsError = vr::VROverlay()->SetOverlayTextureBounds(m_MainMenuHandle, &bounds);
         const auto textureError = vr::VROverlay()->SetOverlayTexture(m_MainMenuHandle, &m_VKBackBuffer.m_VRTexture);
-        const auto showError = vr::VROverlay()->ShowOverlay(m_MainMenuHandle);
+        const auto showError = menuPositioned ?
+            vr::VROverlay()->ShowOverlay(m_MainMenuHandle) :
+            vr::VROverlay()->HideOverlay(m_MainMenuHandle);
 
         //if (!m_Game->m_EngineClient->IsInGame())
         {
@@ -583,6 +586,7 @@ void VR::SubmitVRTextures()
         return;
     }
     vr::VROverlay()->HideOverlay(m_MainMenuHandle);
+    m_MenuOverlayPlacement.Invalidate();
 
     const auto leftError = vr::VRCompositor()->Submit(vr::Eye_Left, &m_VKLeftEye.m_VRTexture, &(m_TextureBounds)[0], vr::Submit_Default);
     const auto rightError = vr::VRCompositor()->Submit(vr::Eye_Right, &m_VKRightEye.m_VRTexture, &(m_TextureBounds)[1], vr::Submit_Default);
@@ -669,55 +673,42 @@ void VR::GetPoseData(vr::TrackedDevicePose_t &poseRaw, TrackedDevicePoseData &po
     }
 }
 
-void VR::RepositionOverlays()
+bool VR::RepositionOverlays()
 {
-    if (!m_HmdPose.valid)
-        return;
-    vr::TrackedDevicePose_t hmdPose = m_Poses[vr::k_unTrackedDeviceIndex_Hmd];
-    vr::HmdMatrix34_t hmdMat = hmdPose.mDeviceToAbsoluteTracking;
-    Vector hmdPosition = { hmdMat.m[0][3], hmdMat.m[1][3], hmdMat.m[2][3] };
-    Vector hmdForward = { -hmdMat.m[0][2], 0, -hmdMat.m[2][2] };
+    if (!m_HmdPose.valid) {
+        m_MenuOverlayPlacement.Invalidate();
+        return false;
+    }
+    const auto &hmdMat = m_Poses[vr::k_unTrackedDeviceIndex_Hmd].mDeviceToAbsoluteTracking;
+    const bool visible = m_Overlay->IsOverlayVisible(m_MainMenuHandle);
+    const bool reanchor = m_MenuOverlayPlacement.ShouldAttempt(visible, true);
+    const auto pose = m_MenuOverlayPlacement.UpdatePose(hmdMat.m, visible);
+    if (!pose)
+        return false;
 
     int windowWidth, windowHeight;
     IMatRenderContext *menuContext = m_Game->m_MaterialSystem->GetRenderContext();
     menuContext->GetWindowSize(windowWidth, windowHeight);
     menuContext->Release();
 
-    vr::HmdMatrix34_t menuTransform = 
-    {
-        1.0f, 0.0f, 0.0f, 0.0f,
-        0.0f, 1.0f, 0.0f, 1.0f,
-        0.0f, 0.0f, 1.0f, 1.0f
-    };
+    vr::HmdMatrix34_t menuTransform{};
+    std::memcpy(menuTransform.m, pose->m, sizeof(menuTransform.m));
 
     vr::ETrackingUniverseOrigin trackingOrigin = vr::VRCompositor()->GetTrackingSpace();
 
     // Reposition main menu overlay
     float renderWidth = m_VKBackBuffer.m_VulkanData.m_nWidth;
     float renderHeight = m_VKBackBuffer.m_VulkanData.m_nHeight;
+    if (windowWidth <= 0 || windowHeight <= 0 || renderWidth <= 0 || renderHeight <= 0) {
+        m_MenuOverlayPlacement.Invalidate();
+        return false;
+    }
 
     float widthRatio = windowWidth / renderWidth;
     float heightRatio = windowHeight / renderHeight;
     menuTransform.m[0][0] *= widthRatio;
+    menuTransform.m[2][0] *= widthRatio;
     menuTransform.m[1][1] *= heightRatio;
-
-    hmdForward[1] = 0;
-    VectorNormalize(hmdForward);
-
-    Vector menuDistance = hmdForward * 3;
-    Vector menuNewPos = menuDistance + hmdPosition;
-
-    menuTransform.m[0][3] = menuNewPos.x;
-    menuTransform.m[1][3] = menuNewPos.y - 0.25;
-    menuTransform.m[2][3] = menuNewPos.z;
-
-    float xScale = menuTransform.m[0][0];
-    float hmdRotationDegrees = atan2f(hmdMat.m[0][2], hmdMat.m[2][2]);
-
-    menuTransform.m[0][0] *= cos(hmdRotationDegrees);
-    menuTransform.m[0][2] = sin(hmdRotationDegrees);
-    menuTransform.m[2][0] = -sin(hmdRotationDegrees) * xScale;
-    menuTransform.m[2][2] *= cos(hmdRotationDegrees);
 
     const auto transformError = vr::VROverlay()->SetOverlayTransformAbsolute(
         m_MainMenuHandle, trackingOrigin, &menuTransform);
@@ -726,33 +717,18 @@ void VR::RepositionOverlays()
     const bool positioned = transformError == vr::VROverlayError_None &&
         widthError == vr::VROverlayError_None;
     m_MenuOverlayPlacement.RecordResult(positioned);
-    if (m_RenderDiagnostics.First(positioned ? RenderDiagnosticEvent::OverlayPlacementSucceeded :
-                                      RenderDiagnosticEvent::OverlayPlacementFailed))
+    const auto now = std::chrono::steady_clock::now();
+    const bool firstResult = m_RenderDiagnostics.First(positioned ?
+        RenderDiagnosticEvent::OverlayPlacementSucceeded : RenderDiagnosticEvent::OverlayPlacementFailed);
+    if (firstResult || (positioned && reanchor && now >= m_NextMenuPlacementLog)) {
         Logger::Write("VR menu placement: transform=" + std::to_string(transformError) +
-            " width=" + std::to_string(widthError));
-
-    // Reposition HUD overlay
-    /*vr::HmdMatrix34_t hudTransform =
-    {
-        1.0f, 0.0f, 0.0f, 0.0f,
-        0.0f, 1.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, 1.0f, 0.0f
-    };
-
-    Vector hudDistance = hmdForward * m_HudDistance;
-    Vector hudNewPos = hudDistance + hmdPosition;
-
-    hudTransform.m[0][3] = hudNewPos.x;
-    hudTransform.m[1][3] = hudNewPos.y - 0.25;
-    hudTransform.m[2][3] = hudNewPos.z;
-
-    hudTransform.m[0][0] *= cos(hmdRotationDegrees);
-    hudTransform.m[0][2] = sin(hmdRotationDegrees);
-    hudTransform.m[2][0] = -sin(hmdRotationDegrees);
-    hudTransform.m[2][2] *= cos(hmdRotationDegrees);
-
-    vr::VROverlay()->SetOverlayTransformAbsolute(m_HUDHandle, trackingOrigin, &hudTransform);
-    vr::VROverlay()->SetOverlayWidthInMeters(m_HUDHandle, m_HudSize);*/
+            " width=" + std::to_string(widthError) +
+            " physicalHmd=" + std::to_string(hmdMat.m[0][3]) + "," +
+            std::to_string(hmdMat.m[1][3]) + "," + std::to_string(hmdMat.m[2][3]) +
+            " (translation follows HMD; heading locked until reopening)");
+        m_NextMenuPlacementLog = now + std::chrono::seconds(5);
+    }
+    return positioned;
 }
 
 void VR::GetPoses() 
@@ -1128,8 +1104,8 @@ void VR::ProcessInput()
 
     if (PressedDigitalAction(m_Pause, true))
     {
+        m_MenuOverlayPlacement.Invalidate();
         m_Game->ClientCmd_Unrestricted("gameui_activate");
-        RepositionOverlays();
     }
 }
 
@@ -2108,6 +2084,10 @@ void VR::ParseConfigFile()
         Logger::Write("Config: TrackingMode change requires restart; keeping active compositor origin");
         parsed.value.trackingMode = m_Playspace.mode;
     }
+    if (m_IsInitialized && parsed.value.experimentalViewmodelAlignment != m_Config.experimentalViewmodelAlignment) {
+        Logger::Write("Config: ExperimentalViewmodelAlignment change requires restart; keeping current hook group");
+        parsed.value.experimentalViewmodelAlignment = m_Config.experimentalViewmodelAlignment;
+    }
     if (m_IsInitialized && parsed.value.portalOrientationMode != m_ActivePortalMode) {
         Logger::Write("Config: PortalOrientationMode change requires restart; keeping active mode");
         parsed.value.portalOrientationMode = m_ActivePortalMode;
@@ -2191,6 +2171,7 @@ void VR::ParseConfigFile()
         std::to_string(m_Config.experimentalWorldAimMarker) +
         " AntiAliasing=" + std::to_string(m_AntiAliasing) +
         " ExperimentalHUDOverlay=" + std::to_string(m_Config.experimentalHudOverlay) +
+        " ExperimentalViewmodelAlignment=" + std::to_string(m_Config.experimentalViewmodelAlignment) +
         " ExperimentalPortalShotHaptics=" +
         std::to_string(m_Config.experimentalPortalShotHaptics) +
         " ViewmodelPosCustomOffset=" +
