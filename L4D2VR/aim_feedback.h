@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -113,31 +112,6 @@ inline bool IsPortalStatusIconName(std::string_view shortName, std::string_view 
            ContainsAsciiInsensitive(textureFile, "portal_crosshair") ||
            ContainsAsciiInsensitive(shortName, "qi_center") ||
            ContainsAsciiInsensitive(textureFile, "qi_center");
-}
-
-struct AtlasTexels
-{
-    float x0, y0, x1, y1;
-};
-
-inline std::optional<AtlasTexels> SourceHudAtlasRect(
-    const std::array<float, 4> &uv, int left, int right, int top, int bottom,
-    int atlasWidth, int atlasHeight, int spriteWidth, int spriteHeight)
-{
-    if (atlasWidth <= 0 || atlasHeight <= 0 || atlasWidth > 4096 || atlasHeight > 4096 ||
-        left < 0 || top < 0 || right <= left || bottom <= top ||
-        right > atlasWidth || bottom > atlasHeight ||
-        right - left != spriteWidth || bottom - top != spriteHeight)
-        return std::nullopt;
-    const std::array<float, 4> expected{
-        (left + 0.5f) / atlasWidth, (top + 0.5f) / atlasHeight,
-        (right - 0.5f) / atlasWidth, (bottom - 0.5f) / atlasHeight};
-    for (size_t i = 0; i < uv.size(); ++i)
-        if (!std::isfinite(uv[i]) || std::abs(uv[i] - expected[i]) > 0.001f)
-            return std::nullopt;
-    // DrawScreenSpaceRectangle takes the first and last source texel centers.
-    return AtlasTexels{static_cast<float>(left), static_cast<float>(top),
-                       static_cast<float>(right - 1), static_cast<float>(bottom - 1)};
 }
 
 inline std::optional<WorldAimGeometry> PrepareWorldAimGeometry(

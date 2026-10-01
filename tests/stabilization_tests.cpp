@@ -684,25 +684,6 @@ int main()
            "QuickInfo center texture is tracked as a possible status route");
     expect(AimFeedback::IsPortalStatusIconName("crosshair", "Crosshairs"), false,
            "ordinary weapon crosshair is not mistaken for portal status");
-    const auto atlasRect = AimFeedback::SourceHudAtlasRect(
-        {0.5f / 256.0f, 0.5f / 256.0f, 43.5f / 256.0f, 63.5f / 256.0f},
-        0, 44, 0, 64, 256, 256, 44, 64);
-    expect(atlasRect.has_value(), true,
-           "original Portal HUD subrectangle is accepted for direct eye rendering");
-    if (atlasRect) {
-        expectNear(atlasRect->x0, 0.0f, "atlas left texel is preserved");
-        expectNear(atlasRect->y0, 0.0f, "atlas top texel is preserved");
-        expectNear(atlasRect->x1, 43.0f, "atlas right texel is preserved");
-        expectNear(atlasRect->y1, 63.0f, "atlas bottom texel is preserved");
-    }
-    expect(AimFeedback::SourceHudAtlasRect(
-        {0.5f / 256.0f, 0.5f / 256.0f, 43.5f / 256.0f, 63.5f / 256.0f},
-        0, 44, 0, 64, 256, 256, 44, 65).has_value(), false,
-        "unexpected HUD sprite dimensions reject an unverified Source layout");
-    expect(AimFeedback::SourceHudAtlasRect(
-        {0.4f, 0.5f / 256.0f, 43.5f / 256.0f, 63.5f / 256.0f},
-        0, 44, 0, 64, 256, 256, 44, 64).has_value(), false,
-        "inconsistent texture coordinates cannot sample the wrong portal icon");
     const auto stereoReticle = AimFeedback::ProjectReticleSpriteToEye(
         Vector{10, 0, 0}, Vector{0, 0.1f, 0}, eyeForward, eyeRight, eyeUp,
         90.0f, 1.0f, 1000, 1000, 612, 318, 56, 84, 1280, 720);

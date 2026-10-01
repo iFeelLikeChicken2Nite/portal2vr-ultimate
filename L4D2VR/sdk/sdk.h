@@ -892,7 +892,7 @@ public:
 	virtual void sub_10028910();
 	virtual void sub_100276D0();
 	virtual void Viewport(int x, int y, int width, int height);
-	virtual void GetViewport(int& x, int& y, int& width, int& height) const;
+	virtual void sub_10016F00();
 	virtual void sub_100173B0();
 	virtual void sub_100173E0();
 	virtual void sub_10027A10();
@@ -958,11 +958,7 @@ public:
 	virtual void sub_1002A400();
 	virtual void sub_10024150();
 	virtual void GetWindowSize(int &, int &);
-	virtual void DrawScreenSpaceRectangle(IMaterial *material,
-		int destX, int destY, int width, int height,
-		float sourceX0, float sourceY0, float sourceX1, float sourceY1,
-		int sourceWidth, int sourceHeight, void *clientRenderable = nullptr,
-		int xDice = 1, int yDice = 1) = 0;
+	virtual void DrawScreenSpaceRectangle() = 0;
 	virtual void sub_10027EA0() = 0;
 	virtual void PushRenderTargetAndViewport() = 0;
 	virtual void PushRenderTargetAndViewport(ITexture*) = 0;
