@@ -40,6 +40,40 @@ struct SourceHudTextureIdentity
     std::array<char, 64> textureFile{};
 };
 
+// Source SDK 2013 CHudTexture fields immediately following the two names.
+// Portal 2 is a different engine build, so validate every field at runtime
+// before using this snapshot to draw the game's own atlas material.
+struct SourceHudTextureAtlas
+{
+    std::uint8_t renderUsingFont;
+    std::uint8_t precached;
+    char characterInFont;
+    std::uint8_t padding;
+    std::uint32_t font;
+    int textureId;
+    std::array<float, 4> uv;
+    int left, right, top, bottom;
+};
+static_assert(sizeof(SourceHudTextureIdentity) == 128);
+static_assert(sizeof(SourceHudTextureAtlas) == 44);
+
+static std::optional<SourceHudTextureAtlas> ReadSourceHudTextureAtlas(const void *texture)
+{
+    if (!texture)
+        return std::nullopt;
+    constexpr std::size_t offset = sizeof(void *) + sizeof(SourceHudTextureIdentity);
+    const auto base = reinterpret_cast<std::uintptr_t>(texture);
+    if (base > UINTPTR_MAX - offset - sizeof(SourceHudTextureAtlas))
+        return std::nullopt;
+    SourceHudTextureAtlas atlas{};
+    SIZE_T bytesRead = 0;
+    if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void *>(base + offset),
+            &atlas, sizeof(atlas), &bytesRead) || bytesRead != sizeof(atlas) ||
+        atlas.renderUsingFont != 0 || atlas.textureId < 0)
+        return std::nullopt;
+    return atlas;
+}
+
 static std::optional<SourceHudTextureIdentity> ReadSourceHudTextureIdentity(const void *texture)
 {
     if (!texture)
@@ -58,6 +92,16 @@ static std::optional<SourceHudTextureIdentity> ReadSourceHudTextureIdentity(cons
         !std::memchr(identity.shortName.data(), '\0', identity.shortName.size()) ||
         !std::memchr(identity.textureFile.data(), '\0', identity.textureFile.size()))
         return std::nullopt;
+    const auto printable = [](const auto &name) {
+        if (name[0] == '\0')
+            return false;
+        for (const char *at = name.data(); *at; ++at)
+            if (*at < 32 || *at > 126)
+                return false;
+        return true;
+    };
+    if (!printable(identity.shortName) || !printable(identity.textureFile))
+        return std::nullopt;
     return identity;
 }
 
@@ -73,6 +117,73 @@ static std::string DescribeHudTexture(const SourceHudTextureIdentity &identity)
         (printable(identity.shortName) ? identity.shortName.data() : "<unreadable>") +
         " material=" +
         (printable(identity.textureFile) ? identity.textureFile.data() : "<unreadable>");
+}
+
+enum class ReticleMaterialDrawResult
+{
+    Drawn,
+    AtlasUnavailable,
+    MaterialUnavailable,
+    EyeTargetUnavailable,
+    ViewportUnavailable,
+    ColorUnavailable
+};
+
+static ReticleMaterialDrawResult DrawSourceReticleInEye(
+    Game *game, const SourceHudTextureIdentity &identity,
+    const SourceHudTextureAtlas &atlas, ITexture *eyeTarget,
+    const AimFeedback::ScreenPoint &position, int width, int height,
+    int eyeWidth, int eyeHeight, const void *sourceColor)
+{
+    IMaterial *material = game->m_MaterialSystem->FindMaterial(
+        identity.textureFile.data(), "VGUI textures", false);
+    if (!material || material->IsErrorMaterial())
+        return ReticleMaterialDrawResult::MaterialUnavailable;
+    const int atlasWidth = material->GetMappingWidth();
+    const int atlasHeight = material->GetMappingHeight();
+    const auto source = AimFeedback::SourceHudAtlasRect(atlas.uv,
+        atlas.left, atlas.right, atlas.top, atlas.bottom,
+        atlasWidth, atlasHeight, width, height);
+    if (!source)
+        return ReticleMaterialDrawResult::AtlasUnavailable;
+    if (!eyeTarget)
+        return ReticleMaterialDrawResult::EyeTargetUnavailable;
+    std::array<std::uint8_t, 4> color{255, 255, 255, 255};
+    SIZE_T bytesRead = 0;
+    if (!sourceColor || !ReadProcessMemory(GetCurrentProcess(), sourceColor,
+            color.data(), color.size(), &bytesRead) || bytesRead != color.size())
+        return ReticleMaterialDrawResult::ColorUnavailable;
+    IMatRenderContext *context = game->m_MaterialSystem->GetRenderContext();
+    if (!context)
+        return ReticleMaterialDrawResult::EyeTargetUnavailable;
+    if (context->GetRenderTarget() != eyeTarget) {
+        context->Release();
+        return ReticleMaterialDrawResult::EyeTargetUnavailable;
+    }
+    int oldX = 0, oldY = 0, oldWidth = 0, oldHeight = 0;
+    context->GetViewport(oldX, oldY, oldWidth, oldHeight);
+    if (oldWidth <= 0 || oldHeight <= 0 || eyeWidth <= 0 || eyeHeight <= 0) {
+        context->Release();
+        return ReticleMaterialDrawResult::ViewportUnavailable;
+    }
+    const bool changeViewport = oldX != 0 || oldY != 0 ||
+        oldWidth != eyeWidth || oldHeight != eyeHeight;
+    if (changeViewport)
+        context->Viewport(0, 0, eyeWidth, eyeHeight);
+    float oldRed = 1.0f, oldGreen = 1.0f, oldBlue = 1.0f;
+    material->GetColorModulation(&oldRed, &oldGreen, &oldBlue);
+    const float oldAlpha = material->GetAlphaModulation();
+    material->ColorModulate(color[0] / 255.0f, color[1] / 255.0f, color[2] / 255.0f);
+    material->AlphaModulate(color[3] / 255.0f);
+    context->DrawScreenSpaceRectangle(material, position.x, position.y,
+        width, height, source->x0, source->y0, source->x1, source->y1,
+        atlasWidth, atlasHeight);
+    material->ColorModulate(oldRed, oldGreen, oldBlue);
+    material->AlphaModulate(oldAlpha);
+    if (changeViewport)
+        context->Viewport(oldX, oldY, oldWidth, oldHeight);
+    context->Release();
+    return ReticleMaterialDrawResult::Drawn;
 }
 
 Hooks::Hooks(Game *game)
@@ -1008,8 +1119,9 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 					"outside both eye passes; dynamic stereo status unavailable on this route");
 		}
 		if (worldReticle && m_ActiveAimEyeView) {
-			// Reposition centered Source HUD texture calls in each eye. Any portal
-			// status encoded in these draws remains Source-owned; other HUD stays put.
+            // Source selects the native icon and color. Its VGUI draw appears clipped
+            // to the desktop canvas, so render the same atlas subrectangle directly
+			// into the active eye instead of passing eye pixels to VGUI DrawSelf.
 			if (!AimFeedback::IsCenteredReticleSprite(x, y, w, h, windowWidth, windowHeight))
 				return hkDrawSelf.fOriginal(ecx, x, y, w, h, clr, flApparentZ);
 			const auto identity = ReadSourceHudTextureIdentity(ecx);
@@ -1023,6 +1135,19 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 				}
 				return hkDrawSelf.fOriginal(ecx, x, y, w, h, clr, flApparentZ);
 			}
+			const bool leftPortalIcon = AimFeedback::ContainsAsciiInsensitive(
+				identity->shortName.data(), "portal_crosshair_left");
+			const bool rightPortalIcon = AimFeedback::ContainsAsciiInsensitive(
+				identity->shortName.data(), "portal_crosshair_right");
+			if (m_ActiveAimEye == 1 && (leftPortalIcon || rightPortalIcon)) {
+				static thread_local std::array<std::string, 2> lastIcon;
+				const auto slot = leftPortalIcon ? 0 : 1;
+				if (lastIcon[slot] != identity->shortName.data()) {
+					lastIcon[slot] = identity->shortName.data();
+					Logger::Write("Source portal reticle selection changed: " +
+						DescribeHudTexture(*identity));
+				}
+			}
 			Vector forward, right, up;
 			const Vector &viewAngles = m_ActiveAimEyeView->angles;
 			const QAngle eyeAngles(viewAngles.x, viewAngles.y, viewAngles.z);
@@ -1035,69 +1160,59 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 			if (!projected) {
 				if (m_VR->m_RenderDiagnostics.First(
 					RenderDiagnosticEvent::CrosshairWorldProjectionSkipped))
-					Logger::Write("Experimental stereo reticle: center sprite outside eye viewport; skipped");
+					Logger::Write("Experimental stereo reticle: Source icon outside eye viewport; skipped");
 				return 0;
 			}
-			if (AimFeedback::IsPortalStatusIconName(
-				identity->shortName.data(), identity->textureFile.data())) {
-				int surfaceWidth = 0, surfaceHeight = 0;
-				m_Game->m_VguiSurface->GetScreenSize(surfaceWidth, surfaceHeight);
-				const auto canvas = AimFeedback::ClassifyReticleCanvas(projected->x,
-					projected->y, w, h, surfaceWidth, surfaceHeight);
-				RenderDiagnosticEvent canvasEvent = RenderDiagnosticEvent::CrosshairCanvasInvalid;
-				const char *canvasLabel = "invalid";
-				switch (canvas) {
-				case AimFeedback::ReticleCanvasPosition::Inside:
-					canvasEvent = RenderDiagnosticEvent::CrosshairCanvasInside;
-					canvasLabel = "inside";
-					break;
-				case AimFeedback::ReticleCanvasPosition::OutsideX:
-					canvasEvent = RenderDiagnosticEvent::CrosshairCanvasOutsideX;
-					canvasLabel = "outside-X";
-					break;
-				case AimFeedback::ReticleCanvasPosition::OutsideY:
-					canvasEvent = RenderDiagnosticEvent::CrosshairCanvasOutsideY;
-					canvasLabel = "outside-Y";
-					break;
-				case AimFeedback::ReticleCanvasPosition::OutsideBoth:
-					canvasEvent = RenderDiagnosticEvent::CrosshairCanvasOutsideBoth;
-					canvasLabel = "outside-both";
-					break;
-				case AimFeedback::ReticleCanvasPosition::Invalid:
-					break;
-				}
-				if (m_VR->m_RenderDiagnostics.First(canvasEvent))
-					Logger::Write(std::string("Experimental reticle canvas: ") + canvasLabel +
-						" reported VGUI bounds (not clip rect); eyePass=" +
-						std::to_string(m_ActiveAimEye) + " vgui=" +
-						std::to_string(surfaceWidth) + "x" + std::to_string(surfaceHeight) +
-						" eyeSetup=" + std::to_string(m_ActiveAimEyeView->width) +
-						"x" + std::to_string(m_ActiveAimEyeView->height) +
-						" window=" + std::to_string(windowWidth) + "x" +
-						std::to_string(windowHeight) + " sprite=" +
-						std::to_string(projected->x) + "," +
-						std::to_string(projected->y) + " " +
-						std::to_string(w) + "x" + std::to_string(h) +
-						" " + DescribeHudTexture(*identity));
-				if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::CrosshairWorldPortalStatus))
-					Logger::Write("Experimental stereo reticle: possible Portal status moved in eye pass; " +
-						DescribeHudTexture(*identity) + " source=" +
-						std::to_string(x) + "," + std::to_string(y) +
-						" eye=" + std::to_string(projected->x) + "," +
-						std::to_string(projected->y));
+			const auto atlas = ReadSourceHudTextureAtlas(ecx);
+			ReticleMaterialDrawResult result = ReticleMaterialDrawResult::AtlasUnavailable;
+			if (atlas) {
+				ITexture *eyeTarget = m_ActiveAimEye == 1 ?
+					m_VR->m_LeftEyeTexture : m_VR->m_RightEyeTexture;
+				result = DrawSourceReticleInEye(m_Game, *identity, *atlas, eyeTarget,
+					*projected, w, h, m_ActiveAimEyeView->width,
+					m_ActiveAimEyeView->height, clr);
 			}
 			const auto event = m_ActiveAimEye == 1 ?
 				RenderDiagnosticEvent::CrosshairWorldLeftEye :
 				RenderDiagnosticEvent::CrosshairWorldRightEye;
-			if (m_VR->m_RenderDiagnostics.First(event))
-				Logger::Write(std::string("Experimental stereo reticle: Portal 2 center sprite ") +
-					(m_ActiveAimEye == 1 ? "left" : "right") + " eye " +
-					std::to_string(x) + "," + std::to_string(y) + " -> " +
-					std::to_string(projected->x) + "," + std::to_string(projected->y) +
-					" " + DescribeHudTexture(*identity) +
-					"; actual status pixels require VR verification");
-			return hkDrawSelf.fOriginal(ecx, projected->x, projected->y,
-				w, h, clr, flApparentZ);
+			if (result == ReticleMaterialDrawResult::Drawn) {
+				if (m_VR->m_RenderDiagnostics.First(event))
+					Logger::Write(std::string("Experimental stereo reticle: original Source atlas rendered directly in ") +
+						(m_ActiveAimEye == 1 ? "left" : "right") + " eye at " +
+						std::to_string(projected->x) + "," + std::to_string(projected->y) +
+						" " + DescribeHudTexture(*identity) +
+						"; actual VR visibility remains unverified");
+				return 0;
+			}
+			RenderDiagnosticEvent failureEvent = RenderDiagnosticEvent::CrosshairDirectAtlasUnavailable;
+			switch (result) {
+			case ReticleMaterialDrawResult::MaterialUnavailable:
+				failureEvent = RenderDiagnosticEvent::CrosshairDirectMaterialUnavailable;
+				break;
+			case ReticleMaterialDrawResult::EyeTargetUnavailable:
+				failureEvent = RenderDiagnosticEvent::CrosshairDirectEyeTargetUnavailable;
+				break;
+			case ReticleMaterialDrawResult::ViewportUnavailable:
+				failureEvent = RenderDiagnosticEvent::CrosshairDirectViewportUnavailable;
+				break;
+			case ReticleMaterialDrawResult::ColorUnavailable:
+				failureEvent = RenderDiagnosticEvent::CrosshairDirectColorUnavailable;
+				break;
+			default:
+				break;
+			}
+            if (m_VR->m_RenderDiagnostics.First(failureEvent)) {
+                std::string details;
+                if (result == ReticleMaterialDrawResult::AtlasUnavailable && atlas)
+                    details = " atlasRect=" + std::to_string(atlas->left) + "," +
+                        std::to_string(atlas->top) + "-" + std::to_string(atlas->right) +
+                        "," + std::to_string(atlas->bottom) + " sprite=" +
+                        std::to_string(w) + "x" + std::to_string(h);
+                Logger::Write("Experimental stereo reticle: direct Source atlas draw unavailable (reason=" +
+                    std::to_string(static_cast<int>(result)) + "); native desktop draw retained; " +
+                    DescribeHudTexture(*identity) + details);
+            }
+			return hkDrawSelf.fOriginal(ecx, x, y, w, h, clr, flApparentZ);
 		}
 
 		Vector screen = { 0, 0, 0 };
