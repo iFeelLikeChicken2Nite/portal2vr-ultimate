@@ -15,6 +15,7 @@
 #include "../L4D2VR/hud_capture.h"
 #include "../L4D2VR/aim_feedback.h"
 #include "../L4D2VR/render_context_abi.h"
+#include "../L4D2VR/reticle_telemetry.h"
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -88,6 +89,34 @@ static void expectVectorNear(const Vector &actual, const Vector &expected, const
 
 int main()
 {
+    ReticleTelemetry reticleTelemetry;
+    using ReticleEye = ReticleTelemetry::Eye;
+    using ReticleIcon = ReticleTelemetry::Icon;
+    using ReticleResult = ReticleTelemetry::Result;
+    expect(reticleTelemetry.Record(ReticleEye::Left, ReticleIcon::LeftInvalid,
+               0, ReticleResult::Drawn, 1000).has_value(), false,
+           "reticle telemetry does not log each icon draw");
+    expect(reticleTelemetry.Record(ReticleEye::Left, ReticleIcon::LeftValid,
+               128, ReticleResult::Drawn, 1500).has_value(), false,
+           "reticle telemetry retains partial alpha until the window closes");
+    expect(reticleTelemetry.Record(ReticleEye::Right, ReticleIcon::RightValid,
+               255, ReticleResult::Drawn, 2000).has_value(), true,
+           "reticle telemetry emits a bounded one-second summary");
+    const auto reticleWindow = reticleTelemetry.LastWindow();
+    expectInt(reticleWindow.eyes[0].icons[0].zeroAlpha, 1,
+              "zero-alpha left portal draw is counted");
+    expectInt(reticleWindow.eyes[0].icons[1].partialAlpha, 1,
+              "partial-alpha left portal draw is counted");
+    expectInt(reticleWindow.eyes[1].icons[3].opaqueAlpha, 1,
+              "opaque right portal draw is counted in the correct eye");
+    expectInt(reticleWindow.eyes[0].drawn, 2,
+              "left eye draw count excludes the right eye");
+    expect(reticleTelemetry.Record(ReticleEye::Right, ReticleIcon::RightInvalid,
+               -1, ReticleResult::ProjectedOutside, 2010).has_value(), false,
+           "reticle telemetry starts a fresh window after emission");
+    expectInt(reticleTelemetry.CurrentWindow().eyes[1].outside, 1,
+              "projection skips are separate from atlas draws");
+
     std::atomic<TestPublishedGame*> publishedGame{nullptr};
     TestPublishedGame initializingGame;
     expect(Portal2VRRuntime::IsPublished(publishedGame, &initializingGame), false,

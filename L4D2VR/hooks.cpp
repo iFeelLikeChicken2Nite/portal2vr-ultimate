@@ -9,8 +9,10 @@
 #include "runtime_publication.h"
 #include "aim_feedback.h"
 #include "render_context_abi.h"
+#include "reticle_telemetry.h"
 #include <Windows.h>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -200,7 +202,7 @@ static ReticleMaterialDrawResult DrawSourceReticleInEye(
     Game *game, const SourceHudTextureIdentity &identity,
     const SourceHudTextureAtlas &atlas, ITexture *eyeTarget,
     const AimFeedback::ScreenPoint &position, int width, int height,
-    int eyeWidth, int eyeHeight, const void *sourceColor)
+    int eyeWidth, int eyeHeight, const void *sourceColor, int *sourceAlpha)
 {
     if (!eyeTarget)
         return ReticleMaterialDrawResult::EyeTargetUnavailable;
@@ -237,6 +239,8 @@ static ReticleMaterialDrawResult DrawSourceReticleInEye(
         context->Release();
         return ReticleMaterialDrawResult::ColorUnavailable;
     }
+    if (sourceAlpha)
+        *sourceAlpha = color[3];
     int oldX = 0, oldY = 0, oldWidth = 0, oldHeight = 0;
     context->GetViewport(oldX, oldY, oldWidth, oldHeight);
     if (oldWidth <= 0 || oldHeight <= 0 || eyeWidth <= 0 || eyeHeight <= 0) {
@@ -261,6 +265,37 @@ static ReticleMaterialDrawResult DrawSourceReticleInEye(
         context->Viewport(oldX, oldY, oldWidth, oldHeight);
     context->Release();
     return ReticleMaterialDrawResult::Drawn;
+}
+
+static std::string DescribeReticleEye(const char *name,
+                                     const ReticleTelemetry::EyeCounts &counts)
+{
+    std::string result = std::string(name) + " drawn=" + std::to_string(counts.drawn) +
+        " outside=" + std::to_string(counts.outside) +
+        " failed=" + std::to_string(counts.failed);
+    constexpr const char *iconNames[] = {"LI", "LV", "RI", "RV"};
+    for (std::size_t index = 0; index < 4; ++index) {
+        const auto &icon = counts.icons[index];
+        result += " " + std::string(iconNames[index]) + "(a0/mid/255)=" +
+            std::to_string(icon.zeroAlpha) + "/" +
+            std::to_string(icon.partialAlpha) + "/" +
+            std::to_string(icon.opaqueAlpha);
+    }
+    return result;
+}
+
+static void RecordReticleDraw(int eye, ReticleTelemetry::Icon icon,
+                              int alpha, ReticleTelemetry::Result result)
+{
+    static thread_local ReticleTelemetry telemetry;
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+    const auto summary = telemetry.Record(eye == 1 ? ReticleTelemetry::Eye::Left :
+        ReticleTelemetry::Eye::Right, icon, alpha, result,
+        static_cast<std::uint64_t>(milliseconds));
+    if (summary)
+        Logger::Write("Stereo reticle 1s: " + DescribeReticleEye("L", summary->eyes[0]) +
+            "; " + DescribeReticleEye("R", summary->eyes[1]));
 }
 
 Hooks::Hooks(Game *game)
@@ -1215,15 +1250,14 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 				identity->shortName.data(), "portal_crosshair_left");
 			const bool rightPortalIcon = AimFeedback::ContainsAsciiInsensitive(
 				identity->shortName.data(), "portal_crosshair_right");
-			if (m_ActiveAimEye == 1 && (leftPortalIcon || rightPortalIcon)) {
-				static thread_local std::array<std::string, 2> lastIcon;
-				const auto slot = leftPortalIcon ? 0 : 1;
-				if (lastIcon[slot] != identity->shortName.data()) {
-					lastIcon[slot] = identity->shortName.data();
-					Logger::Write("Source portal reticle selection changed: " +
-						DescribeHudTexture(*identity));
-				}
-			}
+			const bool invalidPortalIcon = AimFeedback::ContainsAsciiInsensitive(
+				identity->shortName.data(), "_invalid");
+			const auto icon = leftPortalIcon ?
+				(invalidPortalIcon ? ReticleTelemetry::Icon::LeftInvalid :
+				 ReticleTelemetry::Icon::LeftValid) :
+				rightPortalIcon ?
+				(invalidPortalIcon ? ReticleTelemetry::Icon::RightInvalid :
+				 ReticleTelemetry::Icon::RightValid) : ReticleTelemetry::Icon::Other;
 			Vector forward, right, up;
 			const Vector &viewAngles = m_ActiveAimEyeView->angles;
 			const QAngle eyeAngles(viewAngles.x, viewAngles.y, viewAngles.z);
@@ -1234,6 +1268,8 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 				m_ActiveAimEyeView->width, m_ActiveAimEyeView->height,
 				x, y, w, h, windowWidth, windowHeight);
 			if (!projected) {
+				RecordReticleDraw(m_ActiveAimEye, icon, -1,
+					ReticleTelemetry::Result::ProjectedOutside);
 				if (m_VR->m_RenderDiagnostics.First(
 					RenderDiagnosticEvent::CrosshairWorldProjectionSkipped))
 					Logger::Write("Experimental stereo reticle: center sprite outside eye viewport; skipped");
@@ -1241,13 +1277,17 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 			}
 			const auto atlas = ReadSourceHudTextureAtlas(ecx);
 			ReticleMaterialDrawResult result = ReticleMaterialDrawResult::AtlasUnavailable;
+			int sourceAlpha = -1;
 			if (atlas) {
 				ITexture *eyeTarget = m_ActiveAimEye == 1 ?
 					m_VR->m_LeftEyeTexture : m_VR->m_RightEyeTexture;
 				result = DrawSourceReticleInEye(m_Game, *identity, *atlas, eyeTarget,
 					*projected, w, h, m_ActiveAimEyeView->width,
-					m_ActiveAimEyeView->height, clr);
+					m_ActiveAimEyeView->height, clr, &sourceAlpha);
 			}
+			RecordReticleDraw(m_ActiveAimEye, icon, sourceAlpha,
+				result == ReticleMaterialDrawResult::Drawn ?
+					ReticleTelemetry::Result::Drawn : ReticleTelemetry::Result::Failed);
 			const auto event = m_ActiveAimEye == 1 ?
 				RenderDiagnosticEvent::CrosshairWorldLeftEye :
 				RenderDiagnosticEvent::CrosshairWorldRightEye;
