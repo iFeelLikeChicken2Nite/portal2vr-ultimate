@@ -19,6 +19,9 @@ TEMPLATE = (
     "AimMode=2\n"
     "RenderWindow=0\n"
     "TurnSpeed=0.15\n"
+    "ViewmodelPosCustomOffsetX=0.0\n"
+    "ViewmodelPosCustomOffsetY=0.0\n"
+    "ViewmodelPosCustomOffsetZ=0.0\n"
 )
 
 
@@ -53,6 +56,19 @@ class ProfileTests(unittest.TestCase):
         self.assertIn("ExperimentalWorldAimMarker=true\n", aimed)
         self.assertIn("ExperimentalHUDOverlay=false\n", aimed)
         self.assertIn("ExperimentalPortalShotHaptics=false\n", aimed)
+
+    def test_model_alignment_profile_cancels_legacy_offset_without_changing_baseline(self):
+        changed = TEMPLATE.replace("ViewmodelPosCustomOffsetX=0.0", "ViewmodelPosCustomOffsetX=-2.0")
+        baseline = core.render_config(changed, "baseline")
+        aligned = core.render_config(TEMPLATE, "aim_model_alignment")
+        self.assertIn("ViewmodelPosCustomOffsetX=0.0\n", baseline)
+        self.assertIn("ViewmodelPosCustomOffsetY=0.0\n", baseline)
+        self.assertIn("ViewmodelPosCustomOffsetZ=0.0\n", baseline)
+        self.assertIn("ViewmodelPosCustomOffsetX=-4.5\n", aligned)
+        self.assertIn("ViewmodelPosCustomOffsetY=1.0\n", aligned)
+        self.assertIn("ViewmodelPosCustomOffsetZ=-1.5\n", aligned)
+        self.assertIn("ExperimentalWorldAimMarker=true\n", aligned)
+        self.assertIn("ExperimentalHUDOverlay=false\n", aligned)
 
     def test_missing_or_duplicate_required_key_refuses_partial_config(self):
         with self.assertRaisesRegex(ValueError, "Missing config keys: RenderWindow"):

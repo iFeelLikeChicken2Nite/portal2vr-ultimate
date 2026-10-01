@@ -41,6 +41,9 @@ BASE_VALUES = {
     "ExperimentalPortalShotHaptics": "false",
     "AimMode": "2",
     "RenderWindow": "0",
+    "ViewmodelPosCustomOffsetX": "0.0",
+    "ViewmodelPosCustomOffsetY": "0.0",
+    "ViewmodelPosCustomOffsetZ": "0.0",
 }
 
 PROFILES = {
@@ -53,6 +56,11 @@ PROFILES = {
     "hud": Profile("M5 HUD", {"ExperimentalHUDOverlay": "true"}, True),
     "aim_marker": Profile("Controller aim marker (experimental)",
                           {"ExperimentalWorldAimMarker": "true"}, True),
+    "aim_model_alignment": Profile("Aim + portal-gun model alignment (experimental)",
+                                   {"ExperimentalWorldAimMarker": "true",
+                                    "ViewmodelPosCustomOffsetX": "-4.5",
+                                    "ViewmodelPosCustomOffsetY": "1.0",
+                                    "ViewmodelPosCustomOffsetZ": "-1.5"}, True),
     "haptics": Profile("M6 Haptics", {"ExperimentalPortalShotHaptics": "true"}, True),
     "mirror": Profile("M6 Mirror ON", {"RenderWindow": "1"}, True),
 }
@@ -66,6 +74,7 @@ CHECKLIST = (
     Check("M2", "m2_standing", "Standing: level loads; tracked-height anchor and recenter feel correct", "standing"),
     Check("M2", "m2_turn", "Snap/smooth turning and movement direction", "baseline"),
     Check("M2", "m2_aim", "3D line/impact marker matches right-controller shot", "aim_marker"),
+    Check("M2", "m2_model_alignment", "Compare portal-gun body/glow against aim-marker profile", "aim_model_alignment"),
     Check("M3", "m3_observe", "Observe logs steps without moving the player", "observe"),
     Check("M3", "m3_collision", "Active roomscale remains off (expected limitation)", "observe"),
     Check("M4", "m4_legacy", "LegacyYaw: wall-to-wall portal traversal", "baseline"),
