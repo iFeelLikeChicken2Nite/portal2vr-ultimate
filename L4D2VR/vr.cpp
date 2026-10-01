@@ -1320,6 +1320,9 @@ Vector VR::GetMovementForward()
 
 void VR::UpdateTracking()
 {
+    if (!m_HmdPose.valid || !m_RightControllerPose.valid ||
+        !m_Game->m_EngineClient->IsInGame() || m_Game->m_VguiSurface->IsCursorVisible())
+        ResetMuzzleSample();
     m_TrackingOutputValid = false;
     m_LeftControllerOutputValid = false;
     m_LeftControllerPosRel = {0.0f, 0.0f, 0.0f};
@@ -1362,6 +1365,7 @@ void VR::UpdateTracking()
     C_BasePlayer* localPlayer = playerIndex > 0 ?
         (C_BasePlayer*)m_Game->GetClientEntity(playerIndex) : nullptr;
     if (!localPlayer) {
+        ResetMuzzleSample();
         ResetRoomscale(false, true);
         ResetPortalOrientation();
         m_EyeHeightPlayerEntity = nullptr;
@@ -1560,10 +1564,47 @@ void VR::UpdateTracking()
         UpdateAimFeedback(localPlayer);
 }
 
+void VR::ResetMuzzleSample()
+{
+    m_MuzzleSample.Reset();
+}
+
+void VR::CaptureViewmodelMuzzle(const Vector &world, const Vector &modelOrigin, const QAngle &modelAngles)
+{
+    const double now = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (m_MuzzleSample.Capture(world, modelOrigin, modelAngles, now) &&
+        !m_MuzzleSampleLogged.exchange(true)) {
+        Logger::Write("Native viewmodel muzzle sampled: world=" + std::to_string(world.x) + "," +
+            std::to_string(world.y) + "," + std::to_string(world.z) +
+            "; model-local sample rebased each aim update; hardware alignment unverified");
+    }
+}
+
+std::optional<Vector> VR::GetAimBeamOrigin()
+{
+    if (!m_Config.aimFromViewmodelMuzzle)
+        return GetRightControllerAbsPos();
+    std::optional<Vector> origin;
+    if (Hooks::CanAlignViewmodel() && m_Game->m_Hooks->m_MuzzleSamplingReady) {
+        const double now = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        origin = m_MuzzleSample.Origin(GetRecommendedViewmodelAbsPos(), GetRecommendedViewmodelAbsAngle(),
+                                      now);
+    }
+    if (!origin && !m_MuzzleWaitingLogged) {
+        Logger::Write("Aim beam waiting for valid local viewmodel muzzle sample; controller-origin fallback disabled");
+        m_MuzzleWaitingLogged = true;
+    }
+    return origin;
+}
+
 void VR::UpdateAimFeedback(C_BasePlayer *localPlayer)
 {
-    if (!localPlayer || !m_TrackingOutputValid || !m_RightControllerPose.valid)
+    if (!localPlayer || !m_TrackingOutputValid || !m_RightControllerPose.valid) {
+        ResetMuzzleSample();
         return;
+    }
     bool aimTraceHit = false;
     m_AimPos = Trace((uint32_t*)localPlayer, aimTraceHit);
     if (AimFeedback::ShouldInspectActiveWeaponForAim(
@@ -1571,14 +1612,20 @@ void VR::UpdateAimFeedback(C_BasePlayer *localPlayer)
             m_Config.experimentalWorldAimMarker, m_Game->m_DebugOverlay != nullptr)) {
         C_Portal_Player* portalPlayer = (C_Portal_Player*)localPlayer;
         auto activeWeaponAddr = (*(int(__thiscall**)(void*))(*(uintptr_t*)portalPlayer + 968))(portalPlayer);
+        const auto playerKey = reinterpret_cast<std::uintptr_t>(localPlayer);
+        const auto weaponKey = static_cast<std::uintptr_t>(activeWeaponAddr);
+        if (m_Game->m_VguiSurface->IsCursorVisible())
+            m_MuzzleSample.Reset();
+        else
+            m_MuzzleSample.SelectIdentity(playerKey, weaponKey);
+        const auto beamOrigin = GetAimBeamOrigin();
         const bool worldMarker = AimFeedback::ShouldUseWorldAimMarker(
             m_AimMode, m_Config.experimentalWorldAimMarker,
             m_Game->m_DebugOverlay != nullptr, m_RightControllerPose.valid,
             activeWeaponAddr != 0, m_Game->m_VguiSurface->IsCursorVisible());
-        if (worldMarker) {
-            const Vector controllerOrigin = GetRightControllerAbsPos();
+        if (worldMarker && beamOrigin) {
             const auto geometry = AimFeedback::PrepareWorldAimGeometry(
-                controllerOrigin, m_AimPos);
+                *beamOrigin, m_AimPos);
             if (geometry) {
                 // The beam is only a pointing aid. Source owns the reticle
                 // artwork and status; do not draw a competing impact plus.
@@ -1589,7 +1636,7 @@ void VR::UpdateAimFeedback(C_BasePlayer *localPlayer)
                     std::chrono::duration<float>(now - m_LastWorldAimMarkerUpdate).count();
                 const float lifetime = AimFeedback::WorldAimOverlayLifetime(frameInterval);
                 m_LastWorldAimMarkerUpdate = now;
-                m_Game->m_DebugOverlay->AddLineOverlay(controllerOrigin, geometry->beamEnd,
+                m_Game->m_DebugOverlay->AddLineOverlay(*beamOrigin, geometry->beamEnd,
                     r, g, b, false, lifetime);
                 if (!m_WorldAimMarkerLogged) {
                     Logger::Write("Experimental world aim marker submitted to Source debug overlay; "
@@ -1604,41 +1651,46 @@ void VR::UpdateAimFeedback(C_BasePlayer *localPlayer)
                 }
             }
         }
-        const bool requestLaser = !worldMarker && AimFeedback::ShouldRequestLaser(
+        const bool requestLaser = !worldMarker && beamOrigin && AimFeedback::ShouldRequestLaser(
             m_AimMode, m_Game->m_Offsets->m_LaserAvailable,
             m_RightControllerPose.valid, activeWeaponAddr != 0,
             m_Game->m_VguiSurface->IsCursorVisible());
         if (requestLaser) {
             CWeaponPortalBase* activeWeapon = (CWeaponPortalBase*)activeWeaponAddr;
-            if (portalPlayer->m_PointLaser) {
-                if (!m_LaserParticleObserved) {
-                    Logger::Write("Controller laser particle pointer observed; actual visibility unverified");
-                    m_LaserParticleObserved = true;
-                }
-                const int portalColor = std::clamp(activeWeapon->m_iLastFiredPortal, 0, 2);
-                const Vector controllerOrigin = GetRightControllerAbsPos();
-                portalPlayer->m_PointLaser->SetControlPoint(0, controllerOrigin);
-                portalPlayer->m_PointLaser->SetControlPoint(1, m_AimPos);
-                portalPlayer->m_PointLaser->SetControlPoint(2, m_Game->m_singlePlayerPortalColors[portalColor] * 0.5f);
-                if (m_RenderDiagnostics.First(RenderDiagnosticEvent::LaserControlPoints)) {
-                    Logger::Write("Controller laser control points updated: controllerOrigin=" +
-                        std::to_string(controllerOrigin.x) + "," + std::to_string(controllerOrigin.y) +
-                        "," + std::to_string(controllerOrigin.z) + " targetCP1=" +
-                        std::to_string(m_AimPos.x) + "," + std::to_string(m_AimPos.y) +
-                        "," + std::to_string(m_AimPos.z) +
-                        "; originCP0 and targetCP1 updated; actual visibility unverified");
-                }
-            } else {
+            if (!portalPlayer->m_PointLaser) {
                 if (!m_LaserRequestLogged) {
                     Logger::Write("Controller laser creation requested; crosshair paint state is no longer a prerequisite");
                     m_LaserRequestLogged = true;
                 }
                 m_Game->m_Hooks->CreatePingPointer(localPlayer, m_AimPos);
             }
+            // Apply control points on the creation frame too. Source may use a
+            // native muzzle attachment parent; both routes now agree on origin.
+            if (portalPlayer->m_PointLaser) {
+                if (!m_LaserParticleObserved) {
+                    Logger::Write("Controller laser particle pointer observed; actual visibility unverified");
+                    m_LaserParticleObserved = true;
+                }
+                const int portalColor = std::clamp(activeWeapon->m_iLastFiredPortal, 0, 2);
+                portalPlayer->m_PointLaser->SetControlPoint(0, *beamOrigin);
+                portalPlayer->m_PointLaser->SetControlPoint(1, m_AimPos);
+                portalPlayer->m_PointLaser->SetControlPoint(2, m_Game->m_singlePlayerPortalColors[portalColor] * 0.5f);
+                if (m_RenderDiagnostics.First(RenderDiagnosticEvent::LaserControlPoints)) {
+                    Logger::Write(std::string("Controller laser control points updated: originMode=") +
+                        (m_Config.aimFromViewmodelMuzzle ? "viewmodelMuzzle" : "controller") + " originCP0=" +
+                        std::to_string(beamOrigin->x) + "," + std::to_string(beamOrigin->y) +
+                        "," + std::to_string(beamOrigin->z) + " targetCP1=" +
+                        std::to_string(m_AimPos.x) + "," + std::to_string(m_AimPos.y) +
+                        "," + std::to_string(m_AimPos.z) +
+                        "; originCP0 and targetCP1 updated; actual visibility unverified");
+                }
+            }
         } else if (m_Game->m_Offsets->m_LaserAvailable && portalPlayer->m_PointLaser) {
             portalPlayer->m_PointLaser->StopEmission(false, true, false);
             portalPlayer->m_PointLaser = NULL;
         }
+    } else {
+        ResetMuzzleSample();
     }
 }
 
@@ -2088,6 +2140,10 @@ void VR::ParseConfigFile()
         Logger::Write("Config: ExperimentalViewmodelAlignment change requires restart; keeping current hook group");
         parsed.value.experimentalViewmodelAlignment = m_Config.experimentalViewmodelAlignment;
     }
+    if (m_IsInitialized && parsed.value.aimFromViewmodelMuzzle != m_Config.aimFromViewmodelMuzzle) {
+        Logger::Write("Config: AimFromViewmodelMuzzle change requires restart; keeping current sampler");
+        parsed.value.aimFromViewmodelMuzzle = m_Config.aimFromViewmodelMuzzle;
+    }
     if (m_IsInitialized && parsed.value.portalOrientationMode != m_ActivePortalMode) {
         Logger::Write("Config: PortalOrientationMode change requires restart; keeping active mode");
         parsed.value.portalOrientationMode = m_ActivePortalMode;
@@ -2172,6 +2228,7 @@ void VR::ParseConfigFile()
         " AntiAliasing=" + std::to_string(m_AntiAliasing) +
         " ExperimentalHUDOverlay=" + std::to_string(m_Config.experimentalHudOverlay) +
         " ExperimentalViewmodelAlignment=" + std::to_string(m_Config.experimentalViewmodelAlignment) +
+        " AimFromViewmodelMuzzle=" + std::to_string(m_Config.aimFromViewmodelMuzzle) +
         " ExperimentalPortalShotHaptics=" +
         std::to_string(m_Config.experimentalPortalShotHaptics) +
         " ViewmodelPosCustomOffset=" +

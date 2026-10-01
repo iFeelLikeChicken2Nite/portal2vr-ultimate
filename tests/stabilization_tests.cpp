@@ -18,6 +18,7 @@
 #include "../L4D2VR/render_context_abi.h"
 #include "../L4D2VR/reticle_telemetry.h"
 #include "../L4D2VR/viewmodel_alignment.h"
+#include "../L4D2VR/muzzle_origin.h"
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -91,6 +92,61 @@ static void expectVectorNear(const Vector &actual, const Vector &expected, const
 
 int main()
 {
+    MuzzleOrigin::Sample muzzle;
+    expect(muzzle.Origin({200,50,60}, {0,90,0}, 1, 2, 1.0).has_value(), false,
+           "missing muzzle sample cannot fall back to controller origin");
+    expect(muzzle.Capture({110,18,31}, {100,20,30}, {0,0,0}, 1, 2, 1.0), true,
+           "native muzzle is captured relative to actual model pose");
+    const auto rebasedMuzzle = muzzle.Origin({200,50,60}, {0,90,0}, 1, 2, 1.01);
+    expect(rebasedMuzzle.has_value(), true, "fresh muzzle sample follows current model pose");
+    if (rebasedMuzzle) expectVectorNear(*rebasedMuzzle, {202,60,61},
+           "muzzle is rotated and translated, not left at previous world position");
+    expect(muzzle.Origin({200,50,60}, {0,90,0}, 3, 2, 1.01).has_value(), false,
+           "another player cannot use local muzzle sample");
+    expect(muzzle.Origin({200,50,60}, {0,90,0}, 1, 3, 1.01).has_value(), false,
+           "changed weapon cannot use prior muzzle sample");
+    expect(muzzle.Origin({200,50,60}, {0,90,0}, 1, 2, 1.3).has_value(), false,
+           "stale animation sample is rejected");
+    expect(muzzle.Origin({200,50,60}, {0,90,0}, 1, 2, 0.9).has_value(), false,
+           "future sample is rejected");
+    const float invalidMuzzleFloat = std::numeric_limits<float>::quiet_NaN();
+    expect(muzzle.Origin({invalidMuzzleFloat,0,0}, {0,0,0}, 1, 2, 1.01).has_value(), false,
+           "nonfinite current model origin is rejected");
+    expect(muzzle.Origin({0,0,0}, {0,invalidMuzzleFloat,0}, 1, 2, 1.01).has_value(), false,
+           "nonfinite current model rotation is rejected");
+    expect(muzzle.Capture({invalidMuzzleFloat,0,0}, {0,0,0}, {0,0,0}, 1, 2, 1.1), false,
+           "invalid native sample is rejected");
+    expect(muzzle.Origin({0,0,0}, {0,0,0}, 1, 2, 1.11).has_value(), false,
+           "bad capture invalidates previously valid data");
+    expect(muzzle.Capture({257,0,0}, {0,0,0}, {0,0,0}, 1, 2, 1.2), false,
+           "implausible attachment offset is rejected");
+    expect(muzzle.Capture({1,0,0}, {0,0,0}, {0,0,0}, 0, 2, 1.2), false,
+           "missing player identity is rejected");
+    expect(muzzle.Capture({1,0,0}, {0,0,0}, {0,0,0}, 1, 0, 1.2), false,
+           "missing weapon identity is rejected");
+    expect(muzzle.Capture({1,0,0}, {0,0,0}, {0,0,0}, 1, 2, 1.2), true,
+           "sample recovers after validation failure");
+    muzzle.Invalidate();
+    expect(muzzle.Origin({0,0,0}, {0,0,0}, 1, 2, 1.21).has_value(), false,
+           "tracking/menu invalidation clears muzzle sample");
+    MuzzleOrigin::State muzzleState;
+    expect(muzzleState.Capture({1,0,0}, {0,0,0}, {0,0,0}, 2.0), false,
+           "unbound sampling state cannot capture");
+    muzzleState.SelectIdentity(1, 2);
+    expect(muzzleState.Capture({1,0,0}, {0,0,0}, {0,0,0}, 2.0), true,
+           "bound muzzle state captures under one synchronized identity");
+    muzzleState.SelectIdentity(1, 2);
+    expect(muzzleState.Origin({0,0,0}, {0,0,0}, 2.01).has_value(), true,
+           "unchanged identity preserves fresh sample");
+    muzzleState.SelectIdentity(1, 3);
+    expect(muzzleState.Origin({0,0,0}, {0,0,0}, 2.01).has_value(), false,
+           "identity update invalidates sample atomically");
+    expect(muzzleState.Capture({1,0,0}, {0,0,0}, {0,0,0}, 2.02), true,
+           "new weapon can supply fresh sample");
+    muzzleState.Reset();
+    expect(muzzleState.Capture({1,0,0}, {0,0,0}, {0,0,0}, 2.03), false,
+           "reset clears identity as well as sample");
+
     float scopedAspect = 0.0f;
     expectNear(ViewmodelAlignment::AspectOr(scopedAspect, 16.0f / 9.0f),
                16.0f / 9.0f, "desktop aspect remains native outside viewmodel draw");
@@ -1161,6 +1217,15 @@ int main()
     expect(valid.value.antiAliasing == 8, true, "valid AA accepted");
     expect(valid.value.viewmodelPosOffset[0] == -2.5f, true, "viewmodel offset accepted");
     std::istringstream modelOptions("ExperimentalViewmodelAlignment=true\n");
+    expect(ConfigSnapshot{}.aimFromViewmodelMuzzle, false, "muzzle-origin beam is opt-in");
+    std::istringstream muzzleOptions("AimFromViewmodelMuzzle=true\n");
+    const auto muzzleConfig = ParseConfig(muzzleOptions, ConfigSnapshot{});
+    expect(muzzleConfig.value.aimFromViewmodelMuzzle, true, "muzzle-origin config parses");
+    std::istringstream badMuzzleOptions("AimFromViewmodelMuzzle=maybe\n");
+    const auto retainedMuzzleConfig = ParseConfig(badMuzzleOptions, muzzleConfig.value);
+    expect(retainedMuzzleConfig.value.aimFromViewmodelMuzzle, true,
+           "invalid muzzle toggle preserves previous value");
+    expect(retainedMuzzleConfig.errors.size() == 1, true, "invalid muzzle toggle is diagnosed");
     const auto modelConfig = ParseConfig(modelOptions, previous);
     expect(modelConfig.value.experimentalViewmodelAlignment, true,
            "viewmodel projection and pose correction require explicit opt-in");

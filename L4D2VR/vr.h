@@ -2,6 +2,7 @@
 #include "openvr.h"
 #include "vector.h"
 #include <chrono>
+#include <atomic>
 #include "digital_input.h"
 #include "tracked_device.h"
 #include "config.h"
@@ -11,6 +12,7 @@
 #include "render_diagnostics.h"
 #include "render_target_readiness.h"
 #include "menu_overlay_placement.h"
+#include "muzzle_origin.h"
 #include <filesystem>
 
 #define MAX_STR_LEN 256
@@ -111,6 +113,9 @@ public:
 	Vector m_HmdPosRelative = { 0,0,0 };
 
 	Vector m_AimPos = { 0, 0, 0 };
+    MuzzleOrigin::State m_MuzzleSample;
+    std::atomic<bool> m_MuzzleSampleLogged{false};
+    bool m_MuzzleWaitingLogged = false;
 	bool m_Traced = false;
 
 	Vector m_Center = { 0,0,0 };
@@ -317,6 +322,9 @@ public:
 	std::optional<TrackingSpace::MoveAxes> GetRoomscaleCommand(int commandNumber, bool manualMovement);
 	Vector GetHmdViewOffset();
 	void UpdateAimFeedback(C_BasePlayer *localPlayer);
+    void ResetMuzzleSample();
+    void CaptureViewmodelMuzzle(const Vector &, const Vector &, const QAngle &);
+    std::optional<Vector> GetAimBeamOrigin();
 	Vector GetViewAngle();
 	Vector GetViewOrigin(Vector setupOrigin);
 	Vector GetViewOriginLeft(Vector setupOrigin);

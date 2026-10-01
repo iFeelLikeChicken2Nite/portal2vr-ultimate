@@ -12,6 +12,7 @@ class CViewSetup;
 class CUserCmd;
 class QAngle;
 class Vector;
+struct matrix3x4_t;
 struct edict_t;
 struct ModelRenderInfo_t;
 struct trace_tx;
@@ -85,6 +86,11 @@ typedef void(__cdecl *tFormatViewModelAttachment)(void *owner, Vector &, bool);
 typedef void(__thiscall *tSetViewmodelLocalOrigin)(void *, const Vector &);
 typedef void(__thiscall *tSetViewmodelLocalAngles)(void *, const QAngle &);
 typedef float(__thiscall *tViewmodelScreenAspect)(void *, int, int);
+typedef void(__thiscall *tViewmodelFormatAttachment)(void *, int, matrix3x4_t &);
+typedef int(__thiscall *tLookupViewmodelAttachment)(void *, const char *);
+typedef void *(__thiscall *tGetViewmodelOwner)(void *);
+typedef const Vector &(__thiscall *tGetViewmodelAbsOrigin)(void *);
+typedef const QAngle &(__thiscall *tGetViewmodelAbsAngles)(void *);
 typedef float(__thiscall *tProcessUsercmds)(void *thisptr, edict_t *player, void *buf, int numcmds, int totalcmds, int dropped_packets, bool ignore, bool paused);
 typedef int(__cdecl *tReadUsercmd)(void *buf, CUserCmd *move, CUserCmd *from);
 typedef void(__thiscall *tWriteUsercmdDeltaToBuffer)(void *thisptr, int a1, void *buf, int from, int to, bool isnewcommand);
@@ -176,6 +182,12 @@ public:
     static inline thread_local float m_ViewmodelDrawAspect = 0.0f;
     static inline thread_local bool m_ControllerViewmodelUpdate = false;
     bool m_ViewmodelAlignmentReady = false;
+    bool m_MuzzleSamplingReady = false;
+    static inline Hook<tViewmodelFormatAttachment> hkViewmodelFormatAttachment;
+    static inline tLookupViewmodelAttachment LookupViewmodelAttachment = nullptr;
+    static inline tGetViewmodelOwner GetViewmodelOwner = nullptr;
+    static inline tGetViewmodelAbsOrigin GetViewmodelAbsOrigin = nullptr;
+    static inline tGetViewmodelAbsAngles GetViewmodelAbsAngles = nullptr;
 	static inline Hook<tProcessUsercmds> hkProcessUsercmds;
 	static inline Hook<tReadUsercmd> hkReadUsercmd;
 	static inline Hook<tWriteUsercmdDeltaToBuffer> hkWriteUsercmdDeltaToBuffer;
@@ -250,6 +262,7 @@ public:
 
 	int initSourceHooks();
     void InitViewmodelAlignment();
+    void InitMuzzleSampling();
     static bool CanAlignViewmodel();
 
 	// Detour functions
@@ -262,6 +275,7 @@ public:
     static void __fastcall dViewmodelCalcView(void *, void *, void *, const Vector &, const QAngle &);
     static void __cdecl dFormatViewModelAttachment(void *, Vector &, bool);
     static float __fastcall dViewmodelScreenAspect(void *, void *, int, int);
+    static void __fastcall dViewmodelFormatAttachment(void *, void *, int, matrix3x4_t &);
 	static int dServerFireTerrorBullets(int playerId, const Vector &vecOrigin, const QAngle &vecAngles, int a4, int a5, int a6, float a7);
 	static int dClientFireTerrorBullets(int playerId, const Vector &vecOrigin, const QAngle &vecAngles, int a4, int a5, int a6, float a7);
 	static float __fastcall dProcessUsercmds(void *ecx, void *edx, edict_t *player, void *buf, int numcmds, int totalcmds, int dropped_packets, bool ignore, bool paused);

@@ -5,6 +5,7 @@ RoomscaleMode=Off # Off, Observe (no movement), or ActiveExperimental (unverifie
 PortalOrientationMode=LegacyYaw # FullRotation, YawOnly, PreserveHorizon are experimental; restart required
 ExperimentalHUDOverlay=false # Existing HUD capture shown in a noninteractive SteamVR overlay; hardware-unverified, restart required
 ExperimentalWorldAimMarker=false # Experimental Source 3D line plus native portal status reticle in each eye; replaces particle laser when available
+AimFromViewmodelMuzzle=false # Restart-only: both beam paths start at sampled animated muzzle; requires ExperimentalViewmodelAlignment, suppresses beam if sample unavailable
 ExperimentalViewmodelAlignment=false # Controller-locked model and matching model/effect VR projection; experimental, restart required
 ExperimentalPortalShotHaptics=false # Local portal-gun fire callback only; experimental, hardware-unverified
 PortalShotHapticAmplitude=0.35 # 0.0-1.0

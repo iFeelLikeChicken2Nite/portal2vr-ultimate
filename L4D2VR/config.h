@@ -22,6 +22,7 @@ struct ConfigSnapshot {
     bool experimentalHudOverlay = false;
     bool experimentalWorldAimMarker = false;
     bool experimentalViewmodelAlignment = false;
+    bool aimFromViewmodelMuzzle = false;
     bool experimentalPortalShotHaptics = false;
     float portalShotHapticAmplitude = 0.35f;
     float portalShotHapticDurationSeconds = 0.05f;
@@ -150,6 +151,7 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
     }
     readBool("ExperimentalHUDOverlay", result.value.experimentalHudOverlay);
     readBool("ExperimentalWorldAimMarker", result.value.experimentalWorldAimMarker);
+    readBool("AimFromViewmodelMuzzle", result.value.aimFromViewmodelMuzzle);
     readBool("ExperimentalViewmodelAlignment", result.value.experimentalViewmodelAlignment);
     readBool("ExperimentalPortalShotHaptics", result.value.experimentalPortalShotHaptics);
     readFloat("PortalShotHapticAmplitude", result.value.portalShotHapticAmplitude, 0.0f, 1.0f);

@@ -391,6 +391,7 @@ Hooks::Hooks(Game *game)
 			"Experimental HUD capture unavailable; stereo rendering remains enabled");
 	}
     InitViewmodelAlignment();
+    InitMuzzleSampling();
 	m_Ready = true;
 }
 
@@ -449,6 +450,65 @@ bool Hooks::CanAlignViewmodel()
         m_Game->m_Hooks->m_ViewmodelAlignmentReady, m_VR->m_TrackingOutputValid,
         m_VR->m_RightControllerPose.valid, m_Game->m_EngineClient->IsInGame(),
         m_Game->m_VguiSurface->IsCursorVisible()}.Allowed();
+}
+
+void Hooks::InitMuzzleSampling()
+{
+    if (!m_VR->m_Config.aimFromViewmodelMuzzle)
+        return;
+    const auto *offsets = m_Game->m_Offsets;
+    const struct Symbol { const char *name; const Offset *offset; } symbols[] = {
+        {"ViewmodelFormatAttachment", &offsets->ViewmodelFormatAttachment},
+        {"LookupViewmodelAttachment", &offsets->LookupViewmodelAttachment},
+        {"GetViewmodelOwner", &offsets->GetViewmodelOwner},
+        {"GetViewmodelAbsOrigin", &offsets->GetViewmodelAbsOrigin},
+        {"GetViewmodelAbsAngles", &offsets->GetViewmodelAbsAngles}
+    };
+    bool available = m_ViewmodelAlignmentReady;
+    for (const auto &symbol : symbols) {
+        Logger::Write(std::string(symbol.name) + " ........ " +
+            (symbol.offset->address ? "OK" : "MISSING") + " [optional muzzle sampling]");
+        available = available && symbol.offset->address != 0;
+    }
+    if (available && !hkViewmodelFormatAttachment.createHook(
+            reinterpret_cast<LPVOID>(offsets->ViewmodelFormatAttachment.address),
+            &dViewmodelFormatAttachment)) {
+        LookupViewmodelAttachment = reinterpret_cast<tLookupViewmodelAttachment>(offsets->LookupViewmodelAttachment.address);
+        GetViewmodelOwner = reinterpret_cast<tGetViewmodelOwner>(offsets->GetViewmodelOwner.address);
+        GetViewmodelAbsOrigin = reinterpret_cast<tGetViewmodelAbsOrigin>(offsets->GetViewmodelAbsOrigin.address);
+        GetViewmodelAbsAngles = reinterpret_cast<tGetViewmodelAbsAngles>(offsets->GetViewmodelAbsAngles.address);
+        m_MuzzleSamplingReady = !hkViewmodelFormatAttachment.enableHook();
+    }
+    if (!m_MuzzleSamplingReady) {
+        LookupViewmodelAttachment = nullptr;
+        GetViewmodelOwner = nullptr;
+        GetViewmodelAbsOrigin = nullptr;
+        GetViewmodelAbsAngles = nullptr;
+    }
+    Logger::Write(m_MuzzleSamplingReady ?
+        "Muzzle sampling enabled: passive native animated attachment; beam uses current model pose" :
+        "Muzzle sampling unavailable: requested muzzle beam suppressed; existing model alignment unchanged");
+    Logger::Write(m_VR->m_Config.experimentalWorldAimMarker ?
+        "Aim A/B renderer: experimental world line + stereo Source atlas reticle" :
+        "Aim A/B renderer: native robot_point_beam + legacy Source HUD crosshair path (VR visibility unverified)");
+}
+
+void __fastcall Hooks::dViewmodelFormatAttachment(void *ecx, void *, int index, matrix3x4_t &matrix)
+{
+    hkViewmodelFormatAttachment.fOriginal(ecx, index, matrix);
+    if (!CanAlignViewmodel() || !m_Game->m_Hooks->m_MuzzleSamplingReady)
+        return;
+    const auto local = m_Game->GetClientEntity(m_Game->m_EngineClient->GetLocalPlayer());
+    if (!local || GetViewmodelOwner(ecx) != local)
+        return;
+    // Native SetupBones_AttachmentHelper passes zero-based i here and stores
+    // i+1 afterwards (client 0x5D55C). Lookup uses the renderable subobject;
+    // unlike GetAttachment it does not force a recursive bone setup.
+    const int muzzle = LookupViewmodelAttachment(static_cast<char *>(ecx) + 4, "muzzle");
+    if (muzzle <= 0 || index != muzzle - 1)
+        return;
+    m_VR->CaptureViewmodelMuzzle({matrix[0][3], matrix[1][3], matrix[2][3]},
+                                GetViewmodelAbsOrigin(ecx), GetViewmodelAbsAngles(ecx));
 }
 
 void __fastcall Hooks::dDrawViewModels(void *ecx, void *, const CViewSetup &view, bool draw)
