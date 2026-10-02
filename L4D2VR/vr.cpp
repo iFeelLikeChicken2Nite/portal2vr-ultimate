@@ -365,12 +365,13 @@ void VR::Update()
     if (now >= m_NextRoomscaleSummary) {
         m_NextRoomscaleSummary = now + std::chrono::seconds(30);
         const auto summary = m_RoomscaleObserver.TakeSummary();
-        if (summary.steps)
+        if (m_Config.verboseDiagnostics && summary.steps)
             Logger::Write("Roomscale observe: " + std::to_string(summary.steps) +
                 " physical intents, " + std::to_string(summary.distanceUnits) +
                 " requested Source units (not accepted movement)");
         const auto motor = m_RoomscaleMotor.TakeSummary();
-        if (motor.requestedCommands || motor.manualCommands || motor.maximumErrorUnits > 0.5f)
+        if (m_Config.verboseDiagnostics &&
+            (motor.requestedCommands || motor.manualCommands || motor.maximumErrorUnits > 0.5f))
             Logger::Write("Roomscale active experimental: " + std::to_string(motor.requestedCommands) +
                 " movement requests, " + std::to_string(motor.manualCommands) +
                 " manual-input commands suppressed, maxAnchorError=" +
@@ -2218,7 +2219,8 @@ void VR::ParseConfigFile()
     m_RenderWindow = m_Config.renderWindow;
     m_ViewmodelPosCustomOffset = {m_Config.viewmodelPosOffset[0], m_Config.viewmodelPosOffset[1], m_Config.viewmodelPosOffset[2]};
     m_ViewmodelAngCustomOffset = {m_Config.viewmodelAngOffset[0], m_Config.viewmodelAngOffset[1], m_Config.viewmodelAngOffset[2]};
-    Logger::Write("Config applied: TurnSpeed=" + std::to_string(m_TurnSpeed) +
+    Logger::Write("Config applied: VerboseDiagnostics=" + std::to_string(m_Config.verboseDiagnostics) +
+        " TurnSpeed=" + std::to_string(m_TurnSpeed) +
         " SnapTurnAngle=" + std::to_string(m_SnapTurnAngle) +
         " VRScale=" + std::to_string(m_VRScale) +
         " IPDScale=" + std::to_string(m_IpdScale) +

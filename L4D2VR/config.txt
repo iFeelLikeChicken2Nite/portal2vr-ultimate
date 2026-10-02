@@ -1,4 +1,5 @@
 TurnSpeed=0.15
+VerboseDiagnostics=false # Opt in to periodic reticle/roomscale summaries; startup and failures always logged
 TrackingMode=Seated # Standing uses SteamVR floor height; changing this requires a restart
 MovementDirection=HMD # HMD, LeftController, RightController
 RoomscaleMode=Off # Off, Observe (no movement), or ActiveExperimental (unverified CUserCmd movement; LegacyYaw + 6DOF required; restart)

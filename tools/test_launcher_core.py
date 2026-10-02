@@ -33,6 +33,7 @@ class Check:
 
 
 BASE_VALUES = {
+    "VerboseDiagnostics": "false",
     "TrackingMode": "Seated",
     "RoomscaleMode": "Off",
     "PortalOrientationMode": "LegacyYaw",

@@ -15,6 +15,7 @@
 #include <vector>
 
 struct ConfigSnapshot {
+    bool verboseDiagnostics = false;
     TrackingSpace::TrackingMode trackingMode = TrackingSpace::TrackingMode::Seated;
     TrackingSpace::MovementDirection movementDirection = TrackingSpace::MovementDirection::Hmd;
     RoomscaleMotion::Mode roomscaleMode = RoomscaleMotion::Mode::Off;
@@ -149,6 +150,7 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
         else
             result.errors.push_back("PortalOrientationMode is invalid; keeping previous value");
     }
+    readBool("VerboseDiagnostics", result.value.verboseDiagnostics);
     readBool("ExperimentalHUDOverlay", result.value.experimentalHudOverlay);
     readBool("ExperimentalWorldAimMarker", result.value.experimentalWorldAimMarker);
     readBool("AimFromViewmodelMuzzle", result.value.aimFromViewmodelMuzzle);

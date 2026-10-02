@@ -1468,6 +1468,17 @@ int main()
                "invalid controller pitch retains previous");
     expect(m2Rejected.errors.size() == 5, true, "invalid M2 entries and legacy key reported");
 
+    std::istringstream badVerbose("VerboseDiagnostics=maybe\n");
+    expectInt(static_cast<int>(ParseConfig(badVerbose, ConfigSnapshot{}).errors.size()), 1,
+              "malformed verbose diagnostics cannot silently enable continuous logging");
+    expect(ConfigSnapshot{}.verboseDiagnostics, false, "periodic diagnostic spam is off by default");
+    std::istringstream enableVerbose("VerboseDiagnostics=true\n");
+    const auto verbose = ParseConfig(enableVerbose, ConfigSnapshot{});
+    expect(verbose.value.verboseDiagnostics, true, "detailed summaries remain available on explicit request");
+    std::istringstream invalidVerbose("VerboseDiagnostics=1\n");
+    expect(ParseConfig(invalidVerbose, verbose.value).value.verboseDiagnostics, true,
+           "malformed diagnostics reload retains the last valid choice");
+
     if (failures) return 1;
     std::cout << "stabilization tests passed\n";
     return 0;

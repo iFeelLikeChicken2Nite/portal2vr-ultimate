@@ -10,6 +10,7 @@ from tools import test_launcher_core as core
 
 
 TEMPLATE = (
+    "VerboseDiagnostics=false\n"
     "TrackingMode=Seated # tracking\n"
     "RoomscaleMode=Off\n"
     "6DOF=true\n"
@@ -32,6 +33,12 @@ TEMPLATE = (
 
 
 class ProfileTests(unittest.TestCase):
+    def test_normal_profiles_disable_periodic_diagnostics_left_in_template(self):
+        verbose = TEMPLATE.replace("VerboseDiagnostics=false", "VerboseDiagnostics=true")
+        for profile in core.PROFILES:
+            with self.subTest(profile=profile):
+                self.assertIn("VerboseDiagnostics=false\n", core.render_config(verbose, profile))
+
     def test_legacy_and_stereo_aim_profiles_use_muzzle_and_preserve_confirmed_setup(self):
         def settings(profile):
             return dict(line.split("=", 1) for line in

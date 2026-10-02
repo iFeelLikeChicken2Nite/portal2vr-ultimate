@@ -285,9 +285,11 @@ static std::string DescribeReticleEye(const char *name,
     return result;
 }
 
-static void RecordReticleDraw(int eye, ReticleTelemetry::Icon icon,
+static void RecordReticleDraw(bool verbose, int eye, ReticleTelemetry::Icon icon,
                               int alpha, ReticleTelemetry::Result result)
 {
+    if (!verbose)
+        return;
     static thread_local ReticleTelemetry telemetry;
     const auto now = std::chrono::steady_clock::now().time_since_epoch();
     const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
@@ -1461,7 +1463,7 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 				m_ActiveAimEyeView->width, m_ActiveAimEyeView->height,
 				x, y, w, h, windowWidth, windowHeight);
 			if (!projected) {
-				RecordReticleDraw(m_ActiveAimEye, icon, -1,
+                RecordReticleDraw(m_VR->m_Config.verboseDiagnostics, m_ActiveAimEye, icon, -1,
 					ReticleTelemetry::Result::ProjectedOutside);
 				if (m_VR->m_RenderDiagnostics.First(
 					RenderDiagnosticEvent::CrosshairWorldProjectionSkipped))
@@ -1478,7 +1480,7 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 					*projected, w, h, m_ActiveAimEyeView->width,
 					m_ActiveAimEyeView->height, clr, &sourceAlpha);
 			}
-			RecordReticleDraw(m_ActiveAimEye, icon, sourceAlpha,
+            RecordReticleDraw(m_VR->m_Config.verboseDiagnostics, m_ActiveAimEye, icon, sourceAlpha,
 				result == ReticleMaterialDrawResult::Drawn ?
 					ReticleTelemetry::Result::Drawn : ReticleTelemetry::Result::Failed);
 			const auto event = m_ActiveAimEye == 1 ?
