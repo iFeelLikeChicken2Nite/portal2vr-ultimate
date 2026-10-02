@@ -890,8 +890,9 @@ public:
 	virtual void sub_10028850();
 	virtual void sub_100288B0();
 	virtual void sub_10028910();
-	virtual void sub_100276D0();
+	// Portal 2 materialsystem.dll: zero-based slots 38 and 39, including AddRef/Release.
 	virtual void Viewport(int x, int y, int width, int height);
+	virtual void GetViewport(int& x, int& y, int& width, int& height) const;
 	virtual void sub_10016F00();
 	virtual void sub_100173B0();
 	virtual void sub_100173E0();
@@ -958,7 +959,11 @@ public:
 	virtual void sub_1002A400();
 	virtual void sub_10024150();
 	virtual void GetWindowSize(int &, int &);
-	virtual void DrawScreenSpaceRectangle() = 0;
+	virtual void DrawScreenSpaceRectangle(IMaterial *material,
+		int destX, int destY, int width, int height,
+		float sourceX0, float sourceY0, float sourceX1, float sourceY1,
+		int sourceWidth, int sourceHeight, void *clientRenderable = nullptr,
+		int xDice = 1, int yDice = 1) = 0;
 	virtual void sub_10027EA0() = 0;
 	virtual void PushRenderTargetAndViewport() = 0;
 	virtual void PushRenderTargetAndViewport(ITexture*) = 0;
@@ -1105,6 +1110,7 @@ public:
 
 class IClientEntity : public IClientUnknown
 {
+public:
 	virtual Vector &GetAbsOrigin() = 0;
 	virtual QAngle &GetAbsAngles() = 0;
 	virtual void *GetMouth() = 0;

@@ -1,7 +1,0 @@
-[submodule "dxvk"]
-	path = dxvk
-	url = https://github.com/fholger/dxvk_l4d2vr.git
-	branch = msaa
-[submodule "thirdparty/minhook"]
-	path = thirdparty/minhook
-	url = https://github.com/TsudaKageyu/minhook.git

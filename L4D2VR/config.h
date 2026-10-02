@@ -1,5 +1,9 @@
 #pragma once
 
+#include "tracking_space.h"
+#include "roomscale_motion.h"
+#include "portal_orientation.h"
+
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -11,6 +15,25 @@
 #include <vector>
 
 struct ConfigSnapshot {
+    bool verboseDiagnostics = false;
+    TrackingSpace::TrackingMode trackingMode = TrackingSpace::TrackingMode::Seated;
+    TrackingSpace::MovementDirection movementDirection = TrackingSpace::MovementDirection::Hmd;
+    RoomscaleMotion::Mode roomscaleMode = RoomscaleMotion::Mode::Off;
+    PortalOrientation::Mode portalOrientationMode = PortalOrientation::Mode::LegacyYaw;
+    bool experimentalHudOverlay = false;
+    bool experimentalWorldAimMarker = false;
+    bool experimentalStereoReticle = false;
+    bool reticleDistanceScaling = true;
+    bool experimentalViewmodelAlignment = false;
+    bool aimFromViewmodelMuzzle = false;
+    bool experimentalPortalShotHaptics = false;
+    float portalShotHapticAmplitude = 0.35f;
+    float portalShotHapticDurationSeconds = 0.05f;
+    float hudDistanceMeters = 1.3f;
+    float hudWidthMeters = 1.4f;
+    float hudVerticalOffsetMeters = -0.15f;
+    float heightOffsetMeters = 0.0f;
+    float controllerPitchDegrees = -30.0f;
     float turnSpeed = 0.15f;
     bool snapTurning = false;
     float snapTurnAngle = 45.0f;
@@ -85,6 +108,68 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
     };
 
     readFloat("TurnSpeed", result.value.turnSpeed, 0.01f, 2.0f);
+    const auto trackingMode = entries.find("TrackingMode");
+    if (trackingMode != entries.end()) {
+        if (trackingMode->second == "Seated")
+            result.value.trackingMode = TrackingSpace::TrackingMode::Seated;
+        else if (trackingMode->second == "Standing")
+            result.value.trackingMode = TrackingSpace::TrackingMode::Standing;
+        else
+            result.errors.push_back("TrackingMode is invalid; keeping previous value");
+    }
+    const auto movementDirection = entries.find("MovementDirection");
+    if (movementDirection != entries.end()) {
+        if (movementDirection->second == "HMD")
+            result.value.movementDirection = TrackingSpace::MovementDirection::Hmd;
+        else if (movementDirection->second == "LeftController")
+            result.value.movementDirection = TrackingSpace::MovementDirection::LeftController;
+        else if (movementDirection->second == "RightController")
+            result.value.movementDirection = TrackingSpace::MovementDirection::RightController;
+        else
+            result.errors.push_back("MovementDirection is invalid; keeping previous value");
+    }
+    const auto roomscaleMode = entries.find("RoomscaleMode");
+    if (roomscaleMode != entries.end()) {
+        if (roomscaleMode->second == "Off")
+            result.value.roomscaleMode = RoomscaleMotion::Mode::Off;
+        else if (roomscaleMode->second == "Observe")
+            result.value.roomscaleMode = RoomscaleMotion::Mode::Observe;
+        else if (roomscaleMode->second == "ActiveExperimental")
+            result.value.roomscaleMode = RoomscaleMotion::Mode::ActiveExperimental;
+        else
+            result.errors.push_back("RoomscaleMode is invalid; expected Off, Observe or ActiveExperimental");
+    }
+    const auto portalMode = entries.find("PortalOrientationMode");
+    if (portalMode != entries.end()) {
+        if (portalMode->second == "LegacyYaw")
+            result.value.portalOrientationMode = PortalOrientation::Mode::LegacyYaw;
+        else if (portalMode->second == "FullRotation")
+            result.value.portalOrientationMode = PortalOrientation::Mode::FullRotation;
+        else if (portalMode->second == "YawOnly")
+            result.value.portalOrientationMode = PortalOrientation::Mode::YawOnly;
+        else if (portalMode->second == "PreserveHorizon")
+            result.value.portalOrientationMode = PortalOrientation::Mode::PreserveHorizon;
+        else
+            result.errors.push_back("PortalOrientationMode is invalid; keeping previous value");
+    }
+    readBool("VerboseDiagnostics", result.value.verboseDiagnostics);
+    readBool("ExperimentalHUDOverlay", result.value.experimentalHudOverlay);
+    readBool("ExperimentalWorldAimMarker", result.value.experimentalWorldAimMarker);
+    readBool("ExperimentalStereoReticle", result.value.experimentalStereoReticle);
+    readBool("ReticleDistanceScaling", result.value.reticleDistanceScaling);
+    readBool("AimFromViewmodelMuzzle", result.value.aimFromViewmodelMuzzle);
+    readBool("ExperimentalViewmodelAlignment", result.value.experimentalViewmodelAlignment);
+    readBool("ExperimentalPortalShotHaptics", result.value.experimentalPortalShotHaptics);
+    readFloat("PortalShotHapticAmplitude", result.value.portalShotHapticAmplitude, 0.0f, 1.0f);
+    readFloat("PortalShotHapticDurationSeconds", result.value.portalShotHapticDurationSeconds,
+              0.01f, 0.15f);
+    readFloat("HUDDistanceMeters", result.value.hudDistanceMeters, 0.6f, 3.0f);
+    readFloat("HUDWidthMeters", result.value.hudWidthMeters, 0.5f, 2.5f);
+    readFloat("HUDVerticalOffsetMeters", result.value.hudVerticalOffsetMeters, -0.6f, 0.6f);
+    if (entries.find("SeatedMode") != entries.end())
+        result.errors.push_back("SeatedMode is unsupported; use TrackingMode");
+    readFloat("HeightOffsetMeters", result.value.heightOffsetMeters, -0.5f, 0.5f);
+    readFloat("ControllerPitchDegrees", result.value.controllerPitchDegrees, -60.0f, 60.0f);
     readBool("SnapTurning", result.value.snapTurning);
     readFloat("SnapTurnAngle", result.value.snapTurnAngle, 1.0f, 180.0f);
     readBool("LeftHanded", result.value.leftHanded);

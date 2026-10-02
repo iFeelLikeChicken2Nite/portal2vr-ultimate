@@ -2,14 +2,23 @@
 #include "openvr.h"
 #include "vector.h"
 #include <chrono>
+#include <atomic>
 #include "digital_input.h"
 #include "tracked_device.h"
 #include "config.h"
+#include "roomscale_motor.h"
+#include "ui_input.h"
+#include "haptics.h"
+#include "render_diagnostics.h"
+#include "render_target_readiness.h"
+#include "menu_overlay_placement.h"
+#include "muzzle_origin.h"
 #include <filesystem>
 
 #define MAX_STR_LEN 256
 
 class Game;
+class C_BasePlayer;
 struct IDirect3DTexture9;
 struct IDirect3DSurface9;
 class ITexture;
@@ -28,8 +37,8 @@ struct TrackedDevicePoseData
 class SharedTextureHolder
 {
 public:
-	vr::VRVulkanTextureData_t m_VulkanData;
-	vr::Texture_t m_VRTexture;
+	vr::VRVulkanTextureData_t m_VulkanData{};
+	vr::Texture_t m_VRTexture{};
 };
 
 class VR
@@ -43,10 +52,23 @@ public:
 	vr::IVRRenderModels *m_RenderModels = nullptr;
 
 	vr::VROverlayHandle_t m_MainMenuHandle = vr::k_ulOverlayHandleInvalid;
+	vr::VROverlayHandle_t m_HUDHandle = vr::k_ulOverlayHandleInvalid;
+	bool m_HUDBoundsReady = false;
+	bool m_WorldAimMarkerLogged = false;
+	bool m_WorldAimMarkerCadenceLogged = false;
+	std::chrono::steady_clock::time_point m_LastWorldAimMarkerUpdate{};
+	std::chrono::steady_clock::time_point m_NextHUDOverlayErrorLog{};
+	bool m_HUDCaptureLogged = false;
+	unsigned m_HUDMissingCaptureFrames = 0;
+	UiInput::MenuPointerState m_MenuPointerState;
+	std::chrono::steady_clock::time_point m_NextMenuInputErrorLog{};
+	std::chrono::steady_clock::time_point m_NextMenuPlacementLog{};
+	std::chrono::steady_clock::time_point m_NextHapticErrorLog{};
+	Haptics::ShotGate m_PortalShotHapticGate;
+	bool m_HapticOutputsAvailable = false;
 	bool m_OpenVRStarted = false;
 	int m_LastPoseError = 0;
 	int m_LastInputError = 0;
-	//vr::VROverlayHandle_t m_HUDHandle;
 
 	float m_HorizontalOffsetLeft;
 	float m_VerticalOffsetLeft;
@@ -87,21 +109,48 @@ public:
 	QAngle m_HmdAngAbs;
 
 	Vector m_HmdPosRelativeRaw = { 0,0,0 };
-	Vector m_HmdPosRelativeRawPrev = { 0,0,0 };
 
 	Vector m_HmdPosRelative = { 0,0,0 };
-	Vector m_HmdPosRelativePrev = { 0,0,0 };
 
 	Vector m_AimPos = { 0, 0, 0 };
+    MuzzleOrigin::State m_MuzzleSample;
+    std::atomic<bool> m_MuzzleSampleLogged{false};
+    bool m_MuzzleWaitingLogged = false;
 	bool m_Traced = false;
 
 	Vector m_Center = { 0,0,0 };
 	Vector m_SetupOrigin = { 0,0,0 };
+	TrackingSpace::PlayspaceState m_Playspace;
+	RoomscaleMotion::Observer m_RoomscaleObserver;
+	RoomscaleMotion::Motor m_RoomscaleMotor;
+	std::optional<bool> m_LastRoomscaleEligibility;
+	std::chrono::steady_clock::time_point m_NextRoomscaleEligibilityLog{};
+	PortalOrientation::Coordinator m_PortalCoordinator;
+	PortalOrientation::RigAnchor m_PortalRigAnchor;
+	PortalOrientation::Rotation m_PortalEffectiveRotation;
+	PortalOrientation::Mode m_ActivePortalMode = PortalOrientation::Mode::LegacyYaw;
+	std::chrono::steady_clock::time_point m_NextPortalEventLog{};
+	std::uint64_t m_PoseFetchSequence = 0; // increments only after a successful WaitGetPoses
+	std::chrono::steady_clock::time_point m_NextRoomscaleSummary{};
+	std::chrono::steady_clock::time_point m_NextRoomscaleAnomalyLog{};
+	std::chrono::steady_clock::time_point m_NextRoomscaleTrackingLog{};
+	bool m_TrackingOutputValid = false;
+	bool m_HmdLostSinceLastValid = false;
+	bool m_HasLastHmdOffset = false;
+	Vector m_LastHmdOffsetUnits{0.0f, 0.0f, 0.0f};
+	bool m_MovementFallbackActive = false;
+	bool m_StandingHeightInactiveLogged = false;
+	bool m_HasEyeHeight = false;
+	bool m_EyeHeightWasInvalid = false;
+	int m_EyeHeightPlayerIndex = -1;
+	C_BasePlayer* m_EyeHeightPlayerEntity = nullptr;
+	float m_LastEyeHeightUnits = 0.0f;
 
 	float m_HeightOffset = 0.0;
-	bool m_RoomscaleActive = false;
 
 	Vector m_LeftControllerPosAbs;											
+	Vector m_LeftControllerPosRel{0.0f, 0.0f, 0.0f};
+	bool m_LeftControllerOutputValid = false;
 	QAngle m_LeftControllerAngAbs;
 	Vector m_RightControllerPosRel;											
 	QAngle m_RightControllerAngAbs;
@@ -126,15 +175,15 @@ public:
 		Texture_Blank
 	};
 
-	ITexture *m_LeftEyeTexture;
-	ITexture *m_RightEyeTexture;
-	ITexture *m_HUDTexture;
+	ITexture *m_LeftEyeTexture = nullptr;
+	ITexture *m_RightEyeTexture = nullptr;
+	ITexture *m_HUDTexture = nullptr;
 	ITexture *m_BlankTexture = nullptr;
 
-	IDirect3DSurface9 *m_D9LeftEyeSurface;
-	IDirect3DSurface9 *m_D9RightEyeSurface;
-	IDirect3DSurface9 *m_D9HUDSurface;
-	IDirect3DSurface9 *m_D9BlankSurface;
+	IDirect3DSurface9 *m_D9LeftEyeSurface = nullptr;
+	IDirect3DSurface9 *m_D9RightEyeSurface = nullptr;
+	IDirect3DSurface9 *m_D9HUDSurface = nullptr;
+	IDirect3DSurface9 *m_D9BlankSurface = nullptr;
 
 	SharedTextureHolder m_VKLeftEye;
 	SharedTextureHolder m_VKRightEye;
@@ -143,11 +192,15 @@ public:
 	SharedTextureHolder m_VKBlankTexture;
 
 	bool m_IsVREnabled = false;
+	RenderDiagnosticGate m_RenderDiagnostics;
+	MenuOverlayPlacement m_MenuOverlayPlacement;
 	bool m_IsInitialized = false;
 	bool m_RenderedNewFrame = false;
 	bool m_RenderedHud = false;
 	bool m_CreatedVRTextures = false;
-	bool m_DrawCrosshair = false;
+	bool m_RenderTargetsFailed = false;
+	bool m_LaserRequestLogged = false;
+	bool m_LaserParticleObserved = false;
 	TextureID m_CreatingTextureID = Texture_None;
 
 	bool m_PressedTurn = false;
@@ -163,6 +216,10 @@ public:
 	// action set
 	vr::VRActionSetHandle_t m_ActionSet;
 	vr::VRActiveActionSet_t m_ActiveActionSet;
+	vr::VRActionSetHandle_t m_HapticActionSet = vr::k_ulInvalidActionSetHandle;
+	vr::VRActiveActionSet_t m_ActiveHapticActionSet{};
+	vr::VRActionHandle_t m_HapticLeft = vr::k_ulInvalidActionHandle;
+	vr::VRActionHandle_t m_HapticRight = vr::k_ulInvalidActionHandle;
 
 	// actions
 	vr::VRActionHandle_t m_ActionJump;
@@ -223,12 +280,20 @@ public:
 	void SetScreenSizeOverride(bool bState);
 	void CreateVRTextures();
 	void SubmitVRTextures();
-	void RepositionOverlays();
+	bool RepositionOverlays();
+	void CreateExperimentalHUDOverlay();
+	void SubmitExperimentalHUDOverlay();
 	void GetPoses();
 	bool UpdatePosesAndActions();
 	void GetViewParameters();
 	void ProcessMenuInput();
+	void SendMenuMouse(UiInput::MouseTransition transition);
+	void ReleaseMenuMouse();
 	void ProcessInput();
+	void QueuePortalShotHaptic();
+	void DispatchPortalShotHaptic(bool actionsReady);
+	void ProcessViewActions();
+	Vector GetMovementForward();
 	void ProcessHeldAction(vr::VRActionHandle_t actionHandle, DigitalButtonState &state,
 	                       const char *pressCommand, const char *releaseCommand);
 	void ReleaseHeldActions();
@@ -238,11 +303,28 @@ public:
 	bool CheckOverlayIntersectionForController(vr::VROverlayHandle_t overlayHandle, vr::ETrackedControllerRole controllerRole);
 	QAngle GetRightControllerAbsAngle();
 	QAngle& GetRightControllerAbsAngleConst();
-	Vector GetRightControllerAbsPos(Vector eyePosition = {0, 0, 0});
-	Vector GetRecommendedViewmodelAbsPos(Vector eyePosition);
+	Vector GetRightControllerAbsPos();
+	Vector GetRecommendedViewmodelAbsPos();
 	QAngle GetRecommendedViewmodelAbsAngle();
 	void UpdateHMDAngles();
 	void UpdateTracking();
+	bool ExperimentalPortalOrientation() const;
+	void QueuePortalTraversal(std::uintptr_t playerKey, std::uintptr_t portalKey,
+	                          const std::optional<PortalOrientation::Rotation> &rotation);
+	void ApplyPendingPortalOrientation(const Vector &renderOrigin);
+	void ApplyPortalRigToDerivedPose();
+	void ResetPortalOrientation();
+	void ObserveRoomscaleCommand(int commandNumber);
+	bool RoomscaleEnabled() const;
+	bool RoomscaleEligible() const;
+	void ResetRoomscale(bool recenter = false, bool newCommandStream = false);
+	void UpdateRoomscaleRenderAnchor(const Vector &sourceAnchor);
+	std::optional<TrackingSpace::MoveAxes> GetRoomscaleCommand(int commandNumber, bool manualMovement);
+	Vector GetHmdViewOffset();
+	void UpdateAimFeedback(C_BasePlayer *localPlayer);
+    void ResetMuzzleSample();
+    void CaptureViewmodelMuzzle(const Vector &, const Vector &, const QAngle &);
+    std::optional<Vector> GetAimBeamOrigin();
 	Vector GetViewAngle();
 	Vector GetViewOrigin(Vector setupOrigin);
 	Vector GetViewOriginLeft(Vector setupOrigin);
@@ -252,6 +334,6 @@ public:
 	void ResetPosition();
 	void GetPoseData(vr::TrackedDevicePose_t &poseRaw, TrackedDevicePoseData &poseOut);
 	void ParseConfigFile();
-	Vector Trace(uint32_t* localPlayer);
+	Vector Trace(uint32_t* localPlayer, bool &didHit);
 	Vector TraceEye(uint32_t* localPlayer, Vector cameraPos, Vector eyePos, QAngle& eyeAngle);
 };

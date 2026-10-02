@@ -3,6 +3,8 @@
 #include "MinHook.h"
 #include "bitbuf.h"
 #include "logger.h"
+#include "hud_capture.h"
+#include "native_beam.h"
 
 class Game;
 class VR;
@@ -11,6 +13,7 @@ class CViewSetup;
 class CUserCmd;
 class QAngle;
 class Vector;
+struct matrix3x4_t;
 struct edict_t;
 struct ModelRenderInfo_t;
 struct trace_tx;
@@ -78,6 +81,17 @@ typedef void(__thiscall *tRenderView)(void *thisptr, CViewSetup &setup, CViewSet
 typedef bool(__thiscall *tCreateMove)(void *thisptr, float flInputSampleTime, CUserCmd *cmd);
 typedef void(__thiscall *tEndFrame)(PVOID);
 typedef void(__thiscall *tCalcViewModelView)(void *thisptr, const Vector &eyePosition, const QAngle &eyeAngles);
+typedef void(__thiscall *tDrawViewModels)(void *, const CViewSetup &, bool);
+typedef void(__thiscall *tViewmodelCalcView)(void *, void *owner, const Vector &, const QAngle &);
+typedef void(__cdecl *tFormatViewModelAttachment)(void *owner, Vector &, bool);
+typedef void(__thiscall *tSetViewmodelLocalOrigin)(void *, const Vector &);
+typedef void(__thiscall *tSetViewmodelLocalAngles)(void *, const QAngle &);
+typedef float(__thiscall *tViewmodelScreenAspect)(void *, int, int);
+typedef void(__thiscall *tViewmodelFormatAttachment)(void *, int, matrix3x4_t &);
+typedef int(__thiscall *tLookupViewmodelAttachment)(void *, const char *);
+typedef void *(__thiscall *tGetViewmodelOwner)(void *);
+typedef const Vector &(__thiscall *tGetViewmodelAbsOrigin)(void *);
+typedef const QAngle &(__thiscall *tGetViewmodelAbsAngles)(void *);
 typedef float(__thiscall *tProcessUsercmds)(void *thisptr, edict_t *player, void *buf, int numcmds, int totalcmds, int dropped_packets, bool ignore, bool paused);
 typedef int(__cdecl *tReadUsercmd)(void *buf, CUserCmd *move, CUserCmd *from);
 typedef void(__thiscall *tWriteUsercmdDeltaToBuffer)(void *thisptr, int a1, void *buf, int from, int to, bool isnewcommand);
@@ -132,6 +146,8 @@ typedef double(__cdecl* tGetFOV)(void*& thisptr);
 typedef double(__cdecl* tGetViewModelFOV)(void*& thisptr);
 
 typedef void(__thiscall* tCreatePingPointer)(void* thisptr, Vector vecDestintaion);
+typedef void *(__thiscall* tCreateBeamParticle)(void*, const char*, int, int, Vector, int);
+typedef int(__thiscall* tDrawBeamParticle)(void*, int, const void*);
 typedef void(__thiscall* tSetDrawOnlyForSplitScreenUser)(void* thisptr, int nSlot);
 typedef void(__thiscall* tClientThink)(void* thisptr);
 typedef void*(__cdecl* tGetPortalPlayer)(int index);
@@ -151,6 +167,7 @@ class Hooks
 public:
 	bool m_Ready = false;
 	bool m_MinHookInitialized = false;
+	bool m_HudCaptureHooksReady = false;
 	static inline Game *m_Game;
 	static inline VR *m_VR;
 
@@ -159,6 +176,28 @@ public:
 	static inline Hook<tCreateMove> hkCreateMove;
 	static inline Hook<tEndFrame> hkEndFrame;
 	static inline Hook<tCalcViewModelView> hkCalcViewModelView;
+    static inline Hook<tDrawViewModels> hkDrawViewModels;
+    static inline Hook<tViewmodelCalcView> hkViewmodelCalcView;
+    static inline Hook<tFormatViewModelAttachment> hkFormatViewModelAttachment;
+    static inline Hook<tViewmodelScreenAspect> hkViewmodelScreenAspect;
+    static inline tSetViewmodelLocalOrigin SetViewmodelLocalOrigin = nullptr;
+    static inline tSetViewmodelLocalAngles SetViewmodelLocalAngles = nullptr;
+    static inline thread_local float m_ViewmodelDrawAspect = 0.0f;
+    static inline thread_local bool m_ControllerViewmodelUpdate = false;
+    bool m_ViewmodelAlignmentReady = false;
+    bool m_MuzzleSamplingReady = false;
+    bool m_NativeBeamManualOriginReady = false;
+    bool m_NativeBeamDiagnosticsReady = false;
+    static inline Hook<tLookupViewmodelAttachment> hkBeamAttachmentLookup;
+    static inline Hook<tCreateBeamParticle> hkCreateBeamParticle;
+    static inline Hook<tDrawBeamParticle> hkDrawBeamParticle;
+    static inline NativeBeam::RenderProbe m_NativeBeamRenderProbe;
+    static inline thread_local std::uintptr_t m_NativeBeamLookupCaller = 0;
+    static inline Hook<tViewmodelFormatAttachment> hkViewmodelFormatAttachment;
+    static inline tLookupViewmodelAttachment LookupViewmodelAttachment = nullptr;
+    static inline tGetViewmodelOwner GetViewmodelOwner = nullptr;
+    static inline tGetViewmodelAbsOrigin GetViewmodelAbsOrigin = nullptr;
+    static inline tGetViewmodelAbsAngles GetViewmodelAbsAngles = nullptr;
 	static inline Hook<tProcessUsercmds> hkProcessUsercmds;
 	static inline Hook<tReadUsercmd> hkReadUsercmd;
 	static inline Hook<tWriteUsercmdDeltaToBuffer> hkWriteUsercmdDeltaToBuffer;
@@ -172,6 +211,17 @@ public:
 	static inline Hook<tPushRenderTargetAndViewport> hkPushRenderTargetAndViewport;
 	static inline Hook<tPopRenderTargetAndViewport> hkPopRenderTargetAndViewport;
 	static inline Hook<tVgui_Paint> hkVgui_Paint;
+	static inline bool m_VguiPaintActive = false;
+	static inline bool m_HudTargetActive = false;
+	static inline bool m_HudPushSeenDuringPaint = false;
+	static inline bool m_HudRedirectSeenDuringPaint = false;
+	static inline bool m_ExplicitHudCaptureActive = false;
+	static inline thread_local const CViewSetup *m_ActiveAimEyeView = nullptr;
+	static inline thread_local int m_ActiveAimEye = 0; // 1=left, 2=right
+	static inline thread_local float m_ActiveReticleScale = 1.0f;
+	static inline bool m_HudUnexpectedPopDuringPaint = false;
+	static inline HudCapture::RouteState m_HudCaptureRoute;
+	static inline unsigned m_HudPushDepth = 0;
 	static inline Hook<tIsSplitScreen> hkIsSplitScreen;
 	static inline Hook<tPrePushRenderTarget> hkPrePushRenderTarget;
 	static inline Hook<tGetFullScreenTexture> hkGetFullScreenTexture;
@@ -180,7 +230,7 @@ public:
 
 	static inline Hook<tGetModeHeight> hkGetModeHeight;
 	static inline Hook<tDrawSelf> hkDrawSelf;
-	static inline Hook<tClipTransform> hkClipTransform;
+	static inline tClipTransform ClipTransform = nullptr;
 	static inline Hook<tPlayerPortalled> hkPlayerPortalled;
 	static inline Hook<tVGui_GetHudBounds> hkVGui_GetHudBounds;
 	static inline Hook<tVGui_GetPanelBounds> hkVGui_GetPanelBounds;
@@ -222,6 +272,9 @@ public:
 	~Hooks();
 
 	int initSourceHooks();
+    void InitViewmodelAlignment();
+    void InitMuzzleSampling();
+    static bool CanAlignViewmodel();
 
 	// Detour functions
 	static ITexture *__fastcall dGetRenderTarget(void *ecx, void *edx);
@@ -229,6 +282,11 @@ public:
 	static bool __fastcall dCreateMove(void *ecx, void *edx, float flInputSampleTime, CUserCmd *cmd);
 	static void __fastcall dEndFrame(void *ecx, void *edx);
 	static void __fastcall dCalcViewModelView(void *ecx, void *edx, const Vector &eyePosition, const QAngle &eyeAngles);
+    static void __fastcall dDrawViewModels(void *, void *, const CViewSetup &, bool);
+    static void __fastcall dViewmodelCalcView(void *, void *, void *, const Vector &, const QAngle &);
+    static void __cdecl dFormatViewModelAttachment(void *, Vector &, bool);
+    static float __fastcall dViewmodelScreenAspect(void *, void *, int, int);
+    static void __fastcall dViewmodelFormatAttachment(void *, void *, int, matrix3x4_t &);
 	static int dServerFireTerrorBullets(int playerId, const Vector &vecOrigin, const QAngle &vecAngles, int a4, int a5, int a6, float a7);
 	static int dClientFireTerrorBullets(int playerId, const Vector &vecOrigin, const QAngle &vecAngles, int a4, int a5, int a6, float a7);
 	static float __fastcall dProcessUsercmds(void *ecx, void *edx, edict_t *player, void *buf, int numcmds, int totalcmds, int dropped_packets, bool ignore, bool paused);
@@ -262,7 +320,6 @@ public:
 	// Crosshair
 	static int __fastcall dGetModeHeight(void* ecx, void* edx);
 	static int __fastcall dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h, const void* clr, float flApparentZ);
-	static bool dClipTransform(const Vector& point, Vector* pScreen);
 	static void __fastcall dSetBounds(void* ecx, void* edx, int x, int y, int w, int h);
 	static void __fastcall dSetSize(void* ecx, void* edx, int wide, int tall);
 	static void __fastcall dGetScreenSize(void* ecx, void* edx, int& wide, int& tall);
@@ -301,6 +358,12 @@ public:
 	static inline bool m_PushedHud;
 
 	static inline tCreatePingPointer CreatePingPointer;
+	void InitNativeBeam();
+	void CreateNativeAimPointer(void *player, const Vector &target);
+	static int __fastcall dBeamAttachmentLookup(void *ecx, void *, const char *name);
+	static void *__fastcall dCreateBeamParticle(void *ecx, void *, const char *name,
+		int attachType, int attachment, Vector offset, int flags);
+	static int __fastcall dDrawBeamParticle(void *ecx, void *, int flags, const void *instance);
 	static inline tGetPortalPlayer GetPortalPlayer;
 	static inline tPrecacheParticleSystem PrecacheParticleSystem;
 

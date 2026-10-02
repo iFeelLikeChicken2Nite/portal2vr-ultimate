@@ -1,0 +1,24 @@
+Vendored third-party sources
+============================
+
+DXVK (VR fork)
+  Upstream: https://github.com/fholger/dxvk_l4d2vr
+  Base branch: msaa
+  Base commit: 75167aa2859fe7118ae683e717b97303ad379efa
+  License: dxvk/LICENSE (zlib/libpng)
+
+  This is an altered source snapshot, not an unmodified upstream release.
+  Relative to the base commit, Portal2VR changes the following files for
+  startup and render-target readiness:
+    dxvk/src/d3d9/d3d9_device.cpp
+    dxvk/src/d3d9/d3d9_interface.cpp
+    dxvk/src/d3d9/d3d9_vr.cpp
+
+MinHook
+  Upstream: https://github.com/TsudaKageyu/minhook
+  Base commit: d94c64d32ea37bc4f5ee47d580709f70c6fb6080
+  License: thirdparty/minhook/LICENSE.txt (BSD-style, including HDE notices)
+  The vendored snapshot is unmodified relative to this commit.
+
+The source snapshots are committed as ordinary files in this repository.
+Neither library requires Git submodule initialization to build Portal2VR.

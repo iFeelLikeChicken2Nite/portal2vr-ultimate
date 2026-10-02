@@ -1,11 +1,13 @@
 #pragma once
 #include <cstdint>
 #include <array>
+#include <atomic>
 #include "vector.h"
 
 class IClientEntityList;
 class IEngineTrace;
 class IEngineClient;
+class IVDebugOverlay;
 class IMaterialSystem;
 class IBaseClientDLL;
 class IViewRender;
@@ -25,7 +27,8 @@ class Offsets;
 class VR;
 class Hooks;
 
-inline Game *g_Game;
+// Published only after initialization succeeds; DXVK reads it on the render thread.
+inline std::atomic<Game *> g_Game{nullptr};
 
 struct Player
 {
@@ -49,9 +52,9 @@ public:
     IClientEntityList* m_ClientEntityList = nullptr;
     IEngineTrace* m_EngineTrace = nullptr;
     IEngineClient* m_EngineClient = nullptr;
+    IVDebugOverlay* m_DebugOverlay = nullptr; // optional VDebugOverlay004
     IMaterialSystem* m_MaterialSystem = nullptr;
     IBaseClientDLL* m_BaseClientDll = nullptr;
-    IViewRender* m_ClientViewRender = nullptr;
     IViewRender* m_EngineViewRender = nullptr;
     IModelInfo* m_ModelInfo = nullptr;
     IModelRender* m_ModelRender = nullptr;

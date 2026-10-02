@@ -6,6 +6,10 @@
 #include "offsets.h"
 #include "logger.h"
 #include "trace.h"
+#include "aim_feedback.h"
+#include "native_beam.h"
+#include "hud_capture.h"
+#include "sdk/ivdebugoverlay.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -13,6 +17,10 @@
 #include <filesystem>
 #include <algorithm>
 #include <d3d9_vr.h>
+
+// Original Portal2VR viewmodel calibration, retained for compatibility.
+// The experimental launcher profile cancels it without changing shot origin.
+static const Vector kLegacyViewmodelPositionOffset{4.5f, -1.0f, 1.5f};
 
 VR::VR(Game *game) 
 {
@@ -91,6 +99,15 @@ VR::VR(Game *game)
         return;
 
     ParseConfigFile();
+    const auto trackingOrigin = m_Playspace.mode == TrackingSpace::TrackingMode::Standing ?
+        vr::TrackingUniverseStanding : vr::TrackingUniverseSeated;
+    vr::VRCompositor()->SetTrackingSpace(trackingOrigin);
+    if (vr::VRCompositor()->GetTrackingSpace() != trackingOrigin) {
+        Game::errorMsg("OpenVR compositor did not accept the configured tracking space.");
+        return;
+    }
+    Logger::Write(std::string("OpenVR tracking space: ") +
+                  (trackingOrigin == vr::TrackingUniverseStanding ? "Standing" : "Seated"));
     std::error_code configTimeError;
     m_ConfigLastModified = std::filesystem::last_write_time("VR\\config.txt", configTimeError);
 
@@ -118,17 +135,16 @@ VR::VR(Game *game)
             m_Overlay->GetOverlayErrorNameFromEnum(overlayError)).c_str());
         return;
     }
-    //m_Overlay->CreateOverlay("HUDOverlayKey", "HUDOverlay", &m_HUDHandle);
     if (m_Overlay->SetOverlayInputMethod(m_MainMenuHandle, vr::VROverlayInputMethod_Mouse) != vr::VROverlayError_None ||
         m_Overlay->SetOverlayFlag(m_MainMenuHandle, vr::VROverlayFlags_SendVRDiscreteScrollEvents, true) != vr::VROverlayError_None) {
         Game::errorMsg("OpenVR menu overlay configuration failed.");
         return;
     }
-   // m_Overlay->SetOverlayInputMethod(m_HUDHandle, vr::VROverlayInputMethod_Mouse);
-    //m_Overlay->SetOverlayFlag(m_HUDHandle, vr::VROverlayFlags_SendVRDiscreteScrollEvents, true);
 
     int windowWidth, windowHeight;
-    m_Game->m_MaterialSystem->GetRenderContext()->GetWindowSize(windowWidth, windowHeight);
+    IMatRenderContext *menuContext = m_Game->m_MaterialSystem->GetRenderContext();
+    menuContext->GetWindowSize(windowWidth, windowHeight);
+    menuContext->Release();
 
     //const vr::HmdVector2_t mouseScaleHUD = {windowWidth, windowHeight};
     //m_Overlay->SetOverlayMouseScale(m_HUDHandle, &mouseScaleHUD);
@@ -140,6 +156,8 @@ VR::VR(Game *game)
         Game::errorMsg("OpenVR menu overlay geometry setup failed.");
         return;
     }
+    if (m_Config.experimentalHudOverlay)
+        CreateExperimentalHUDOverlay();
 
     if (!UpdatePosesAndActions()) {
         Game::errorMsg("Initial OpenVR pose/action update failed.");
@@ -154,6 +172,12 @@ VR::VR(Game *game)
 
 VR::~VR()
 {
+    ReleaseMenuMouse();
+    if (m_Overlay && m_HUDHandle != vr::k_ulOverlayHandleInvalid) {
+        const auto result = m_Overlay->DestroyOverlay(m_HUDHandle);
+        if (result != vr::VROverlayError_None)
+            Logger::Write("HUD overlay cleanup failed: " + std::to_string(result));
+    }
     if (m_Overlay && m_MainMenuHandle != vr::k_ulOverlayHandleInvalid) {
         const auto result = m_Overlay->DestroyOverlay(m_MainMenuHandle);
         if (result != vr::VROverlayError_None)
@@ -163,6 +187,40 @@ VR::~VR()
         vr::VR_Shutdown();
         Logger::Write("OpenVR shutdown complete");
     }
+}
+
+void VR::CreateExperimentalHUDOverlay()
+{
+    const auto created = m_Overlay->CreateOverlay("Portal2VR.HUD.Experimental", "Portal2VR HUD",
+                                                   &m_HUDHandle);
+    if (created != vr::VROverlayError_None) {
+        Logger::Write(std::string("Experimental HUD overlay unavailable: ") +
+            m_Overlay->GetOverlayErrorNameFromEnum(created));
+        m_HUDHandle = vr::k_ulOverlayHandleInvalid;
+        return;
+    }
+    vr::HmdMatrix34_t transform{};
+    transform.m[0][0] = transform.m[1][1] = transform.m[2][2] = 1.0f;
+    transform.m[1][3] = m_Config.hudVerticalOffsetMeters;
+    transform.m[2][3] = -m_Config.hudDistanceMeters; // OpenVR HMD forward is -Z
+    const auto inputError = m_Overlay->SetOverlayInputMethod(m_HUDHandle, vr::VROverlayInputMethod_None);
+    const auto transformError = m_Overlay->SetOverlayTransformTrackedDeviceRelative(
+        m_HUDHandle, vr::k_unTrackedDeviceIndex_Hmd, &transform);
+    const auto widthError = m_Overlay->SetOverlayWidthInMeters(m_HUDHandle, m_Config.hudWidthMeters);
+    if (inputError != vr::VROverlayError_None || transformError != vr::VROverlayError_None ||
+        widthError != vr::VROverlayError_None) {
+        Logger::Write("Experimental HUD overlay geometry/input setup failed: " +
+            std::to_string(inputError) + "," + std::to_string(transformError) + "," +
+            std::to_string(widthError));
+        m_Overlay->DestroyOverlay(m_HUDHandle);
+        m_HUDHandle = vr::k_ulOverlayHandleInvalid;
+        return;
+    }
+    Logger::Write("EXPERIMENTAL HUD overlay created: " +
+        std::to_string(m_Config.hudWidthMeters) + "m wide, " +
+        std::to_string(m_Config.hudDistanceMeters) +
+        "m from HMD, vertical=" + std::to_string(m_Config.hudVerticalOffsetMeters) +
+        "m; VGUI capture/alpha/subtitles require runtime verification");
 }
 
 bool VR::SetActionManifest(const char *fileName)
@@ -225,6 +283,22 @@ bool VR::SetActionManifest(const char *fileName)
     m_ActiveActionSet.ulActionSet = m_ActionSet;
 
     Logger::Write("OpenVR main action set OK");
+    const auto baseError = m_Input->GetActionSetHandle("/actions/base", &m_HapticActionSet);
+    const auto leftError = m_Input->GetActionHandle("/actions/base/out/vibration_left", &m_HapticLeft);
+    const auto rightError = m_Input->GetActionHandle("/actions/base/out/vibration_right", &m_HapticRight);
+    m_HapticOutputsAvailable = baseError == vr::VRInputError_None &&
+        leftError == vr::VRInputError_None && rightError == vr::VRInputError_None &&
+        m_HapticActionSet != vr::k_ulInvalidActionSetHandle &&
+        m_HapticLeft != vr::k_ulInvalidActionHandle &&
+        m_HapticRight != vr::k_ulInvalidActionHandle;
+    if (m_HapticOutputsAvailable) {
+        m_ActiveHapticActionSet.ulActionSet = m_HapticActionSet;
+        Logger::Write("Optional OpenVR haptic output actions available");
+    } else {
+        Logger::Write("Optional OpenVR haptic actions unavailable (set/left/right errors " +
+            std::to_string(baseError) + "/" + std::to_string(leftError) + "/" +
+            std::to_string(rightError) + "); haptics disabled");
+    }
     return true;
 }
 
@@ -289,6 +363,23 @@ void VR::Update()
         }
     }
 
+    if (now >= m_NextRoomscaleSummary) {
+        m_NextRoomscaleSummary = now + std::chrono::seconds(30);
+        const auto summary = m_RoomscaleObserver.TakeSummary();
+        if (m_Config.verboseDiagnostics && summary.steps)
+            Logger::Write("Roomscale observe: " + std::to_string(summary.steps) +
+                " physical intents, " + std::to_string(summary.distanceUnits) +
+                " requested Source units (not accepted movement)");
+        const auto motor = m_RoomscaleMotor.TakeSummary();
+        if (m_Config.verboseDiagnostics &&
+            (motor.requestedCommands || motor.manualCommands || motor.maximumErrorUnits > 0.5f))
+            Logger::Write("Roomscale active experimental: " + std::to_string(motor.requestedCommands) +
+                " movement requests, " + std::to_string(motor.manualCommands) +
+                " manual-input commands suppressed, maxAnchorError=" +
+                std::to_string(motor.maximumErrorUnits) +
+                " units; feedback is Source view origin, accepted hull movement unverified");
+    }
+
     if (m_IsVREnabled && g_D3DVR9)
     {
         bool inGame = m_Game->m_EngineClient->IsInGame();
@@ -308,24 +399,52 @@ void VR::Update()
     }
 
     SubmitVRTextures();
-    if (!UpdatePosesAndActions()) {
+    const bool actionsReady = UpdatePosesAndActions();
+    GetPoses();
+    if (!actionsReady) {
+        m_PrevFrameTime = std::chrono::steady_clock::now();
         UpdateTracking();
         ReleaseHeldActions();
+        ReleaseMenuMouse();
+        m_PortalShotHapticGate.Clear();
         return;
     }
+    if (!m_Game->m_VguiSurface->IsCursorVisible())
+        ProcessViewActions();
     UpdateTracking();
+    DispatchPortalShotHaptic(actionsReady);
 
     if (m_Game->m_VguiSurface->IsCursorVisible()) {
         m_PrevFrameTime = std::chrono::steady_clock::now();
         ReleaseHeldActions();
         ProcessMenuInput();
     } else {
+        ReleaseMenuMouse();
         ProcessInput();
     }
 }
 
 void VR::CreateVRTextures()
 {
+    m_HUDBoundsReady = false;
+    if (m_RenderTargetsFailed)
+        return;
+    m_CreatedVRTextures = false;
+    auto releaseSurface = [](IDirect3DSurface9*& surface) {
+        if (surface) {
+            surface->Release();
+            surface = nullptr;
+        }
+    };
+    releaseSurface(m_D9LeftEyeSurface);
+    releaseSurface(m_D9RightEyeSurface);
+    releaseSurface(m_D9HUDSurface);
+    releaseSurface(m_D9BlankSurface);
+    m_VKLeftEye.m_VRTexture.handle = nullptr;
+    m_VKRightEye.m_VRTexture.handle = nullptr;
+    m_VKHUD.m_VRTexture.handle = nullptr;
+    m_VKBlankTexture.m_VRTexture.handle = nullptr;
+
     int windowWidth, windowHeight;
 
     IMatRenderContext* rndrContext = m_Game->m_MaterialSystem->GetRenderContext();
@@ -334,6 +453,14 @@ void VR::CreateVRTextures()
 
     Logger::Write("Creating VR render targets: " + std::to_string(m_RenderWidth) +
                   "x" + std::to_string(m_RenderHeight));
+    if (windowWidth > 0 && windowHeight > 0)
+        Logger::Write("Projection geometry: Source window=" +
+            std::to_string(windowWidth) + "x" + std::to_string(windowHeight) +
+            " aspect=" + std::to_string(static_cast<float>(windowWidth) / windowHeight) +
+            " VR eye=" + std::to_string(m_RenderWidth) + "x" +
+            std::to_string(m_RenderHeight) + " projectionAspect=" +
+            std::to_string(m_Aspect) + " horizontalFov=" + std::to_string(m_Fov) +
+            "; native viewmodel aspect requires in-game verification");
 
     m_Game->m_MaterialSystem->isGameRunning = false;
     m_Game->m_MaterialSystem->BeginRenderTargetAllocation();
@@ -346,7 +473,9 @@ void VR::CreateVRTextures()
     m_RightEyeTexture = m_Game->m_MaterialSystem->CreateNamedRenderTargetTextureEx("rightEye0", m_RenderWidth, m_RenderHeight, RT_SIZE_NO_CHANGE, m_Game->m_MaterialSystem->GetBackBufferFormat(), MATERIAL_RT_DEPTH_SEPARATE, TEXTUREFLAGS_NOMIP);
 
     m_CreatingTextureID = Texture_HUD;
-    m_HUDTexture = m_Game->m_MaterialSystem->CreateNamedRenderTargetTextureEx("vrHUD", m_RenderWidth, m_RenderHeight, RT_SIZE_NO_CHANGE, m_Game->m_MaterialSystem->GetBackBufferFormat(), MATERIAL_RT_DEPTH_SHARED, TEXTUREFLAGS_NOMIP);
+    const ImageFormat hudFormat = m_Config.experimentalHudOverlay ?
+        IMAGE_FORMAT_BGRA8888 : m_Game->m_MaterialSystem->GetBackBufferFormat();
+    m_HUDTexture = m_Game->m_MaterialSystem->CreateNamedRenderTargetTextureEx("vrHUD", m_RenderWidth, m_RenderHeight, RT_SIZE_NO_CHANGE, hudFormat, MATERIAL_RT_DEPTH_SHARED, TEXTUREFLAGS_NOMIP);
     
     m_CreatingTextureID = Texture_Blank;
     m_BlankTexture = m_Game->m_MaterialSystem->CreateNamedRenderTargetTextureEx("blankTexture", 512, 512, RT_SIZE_NO_CHANGE, m_Game->m_MaterialSystem->GetBackBufferFormat(), MATERIAL_RT_DEPTH_SHARED, TEXTUREFLAGS_NOMIP);
@@ -355,21 +484,73 @@ void VR::CreateVRTextures()
 
     m_Game->m_MaterialSystem->EndRenderTargetAllocation();
 
-    m_CreatedVRTextures = true;
+    if (m_Config.experimentalHudOverlay && m_Overlay &&
+        m_HUDHandle != vr::k_ulOverlayHandleInvalid) {
+        const auto crop = HudCapture::WindowTextureCrop(
+            static_cast<int>(m_RenderWidth), static_cast<int>(m_RenderHeight),
+            windowWidth, windowHeight);
+        if (!crop) {
+            Logger::Write("Experimental HUD: cannot map Source window " +
+                std::to_string(windowWidth) + "x" + std::to_string(windowHeight) +
+                " into HUD target " + std::to_string(m_RenderWidth) + "x" +
+                std::to_string(m_RenderHeight) + "; overlay stays hidden");
+        } else {
+            const vr::VRTextureBounds_t bounds{0.0f, 0.0f, crop->uMax, crop->vMax};
+            const auto boundsError = m_Overlay->SetOverlayTextureBounds(m_HUDHandle, &bounds);
+            m_HUDBoundsReady = boundsError == vr::VROverlayError_None;
+            Logger::Write("Experimental HUD texture bounds: window=" +
+                std::to_string(windowWidth) + "x" + std::to_string(windowHeight) +
+                " target=" + std::to_string(m_RenderWidth) + "x" +
+                std::to_string(m_RenderHeight) + " uMax=" + std::to_string(crop->uMax) +
+                " vMax=" + std::to_string(crop->vMax) +
+                " clamped=" + std::to_string(windowWidth > static_cast<int>(m_RenderWidth) ||
+                    windowHeight > static_cast<int>(m_RenderHeight)) +
+                " error=" + std::to_string(boundsError));
+        }
+    }
+
+    if (m_Config.experimentalHudOverlay &&
+        (!m_HUDTexture || !m_VKHUD.m_VRTexture.handle))
+        Logger::Write("Experimental HUD: render target or Vulkan share unavailable; overlay stays hidden");
+
+    const RenderTargetReadiness readiness{
+        {m_LeftEyeTexture != nullptr, m_D9LeftEyeSurface != nullptr,
+         m_VKLeftEye.m_VRTexture.handle != nullptr},
+        {m_RightEyeTexture != nullptr, m_D9RightEyeSurface != nullptr,
+         m_VKRightEye.m_VRTexture.handle != nullptr},
+        {m_BlankTexture != nullptr, m_D9BlankSurface != nullptr,
+         m_VKBlankTexture.m_VRTexture.handle != nullptr}};
+    m_CreatedVRTextures = readiness.Ready();
+    if (!m_CreatedVRTextures) {
+        m_RenderTargetsFailed = true;
+        Logger::Write("VR render target creation failed: left=" +
+            std::to_string(readiness.left.Ready()) + " right=" +
+            std::to_string(readiness.right.Ready()) + " blank=" +
+            std::to_string(readiness.blank.Ready()) +
+            "; stereo rendering disabled until restart");
+    }
 }
 
 void VR::SubmitVRTextures()
 {
+    SubmitExperimentalHUDOverlay();
+    m_RenderedHud = false;
     if (!m_RenderedNewFrame)
     {
-        if (!m_BlankTexture)
+        if (!m_BlankTexture && !m_RenderTargetsFailed)
             CreateVRTextures();
 
-        if (!vr::VROverlay()->IsOverlayVisible(m_MainMenuHandle))
-            RepositionOverlays();
+        if (!m_BlankTexture || !m_VKBlankTexture.m_VRTexture.handle)
+            return;
+
+        // Translation follows the physical HMD even after roomscale walking.
+        // Heading is captured only on opening, not on every head turn.
+        const bool menuPositioned = RepositionOverlays();
 
         vr::VRTextureBounds_t bounds{ 0, 0, 1, 1 };
-        if (m_Game->m_EngineClient->IsInGame())
+        const bool inGame = m_Game->m_EngineClient->IsInGame();
+        vr::EVROverlayError aspectError = vr::VROverlayError_None;
+        if (inGame)
         {
             // menu only renders to the window portion of the texture. Until we figure out a proper fix,
             // as a workaround only show that portion of the texture
@@ -380,43 +561,89 @@ void VR::SubmitVRTextures()
 
             bounds.uMax = (float)windowWidth / m_RenderWidth;
             bounds.vMax = (float)windowHeight / m_RenderHeight;
-            vr::VROverlay()->SetOverlayTexelAspect(m_MainMenuHandle, bounds.vMax / bounds.uMax);
+            aspectError = vr::VROverlay()->SetOverlayTexelAspect(m_MainMenuHandle, bounds.vMax / bounds.uMax);
         }
         else
-            vr::VROverlay()->SetOverlayTexelAspect(m_MainMenuHandle, 1.0f);
+            aspectError = vr::VROverlay()->SetOverlayTexelAspect(m_MainMenuHandle, 1.0f);
 
-        vr::VROverlay()->SetOverlayTextureBounds(m_MainMenuHandle, &bounds);
-        vr::VROverlay()->SetOverlayTexture(m_MainMenuHandle, &m_VKBackBuffer.m_VRTexture);
-        vr::VROverlay()->ShowOverlay(m_MainMenuHandle);
-        //vr::VROverlay()->HideOverlay(m_HUDHandle);
+        const auto boundsError = vr::VROverlay()->SetOverlayTextureBounds(m_MainMenuHandle, &bounds);
+        const auto textureError = vr::VROverlay()->SetOverlayTexture(m_MainMenuHandle, &m_VKBackBuffer.m_VRTexture);
+        const auto showError = menuPositioned ?
+            vr::VROverlay()->ShowOverlay(m_MainMenuHandle) :
+            vr::VROverlay()->HideOverlay(m_MainMenuHandle);
 
         //if (!m_Game->m_EngineClient->IsInGame())
         {
-            vr::VRCompositor()->Submit(vr::Eye_Left, &m_VKBlankTexture.m_VRTexture, NULL, vr::Submit_Default);
-            vr::VRCompositor()->Submit(vr::Eye_Right, &m_VKBlankTexture.m_VRTexture, NULL, vr::Submit_Default);
+            const auto leftError = vr::VRCompositor()->Submit(vr::Eye_Left, &m_VKBlankTexture.m_VRTexture, NULL, vr::Submit_Default);
+            const auto rightError = vr::VRCompositor()->Submit(vr::Eye_Right, &m_VKBlankTexture.m_VRTexture, NULL, vr::Submit_Default);
+            if (m_RenderDiagnostics.First(RenderDiagnosticEvent::MenuSubmission))
+                Logger::Write("VR menu submit: inGame=" + std::to_string(inGame) +
+                    " backBuffer=" + std::to_string(m_VKBackBuffer.m_VRTexture.handle != nullptr) +
+                    " blank=" + std::to_string(m_VKBlankTexture.m_VRTexture.handle != nullptr) +
+                    " overlay=" + std::to_string(aspectError) + "," + std::to_string(boundsError) +
+                    "," + std::to_string(textureError) + "," + std::to_string(showError) +
+                    " compositor=" + std::to_string(leftError) + "," + std::to_string(rightError));
         }
 
         return;
     }
     vr::VROverlay()->HideOverlay(m_MainMenuHandle);
+    m_MenuOverlayPlacement.Invalidate();
 
-    //vr::VROverlay()->SetOverlayTexture(m_HUDHandle, &m_VKHUD.m_VRTexture);
-
-    if (m_Game->m_VguiSurface->IsCursorVisible())
-    {
-        // We're in the pause menu
-        //vr::VROverlay()->ShowOverlay(m_HUDHandle);
-    }
-
-    vr::VRCompositor()->Submit(vr::Eye_Left, &m_VKLeftEye.m_VRTexture, &(m_TextureBounds)[0], vr::Submit_Default);
-    vr::VRCompositor()->Submit(vr::Eye_Right, &m_VKRightEye.m_VRTexture, &(m_TextureBounds)[1], vr::Submit_Default);
+    const auto leftError = vr::VRCompositor()->Submit(vr::Eye_Left, &m_VKLeftEye.m_VRTexture, &(m_TextureBounds)[0], vr::Submit_Default);
+    const auto rightError = vr::VRCompositor()->Submit(vr::Eye_Right, &m_VKRightEye.m_VRTexture, &(m_TextureBounds)[1], vr::Submit_Default);
+    if (m_RenderDiagnostics.First(RenderDiagnosticEvent::StereoSubmission))
+        Logger::Write("VR stereo submit: left=" + std::to_string(m_VKLeftEye.m_VRTexture.handle != nullptr) +
+            " right=" + std::to_string(m_VKRightEye.m_VRTexture.handle != nullptr) +
+            " compositor=" + std::to_string(leftError) + "," + std::to_string(rightError));
 
     m_RenderedNewFrame = false;
 }
 
+void VR::SubmitExperimentalHUDOverlay()
+{
+    if (!m_Overlay || m_HUDHandle == vr::k_ulOverlayHandleInvalid)
+        return;
+    if (m_RenderedHud && !m_HUDCaptureLogged) {
+        Logger::Write("Experimental HUD: first capture target ready for overlay submission (painted contents unverified)");
+        m_HUDCaptureLogged = true;
+    }
+    if (m_RenderedHud)
+        m_HUDMissingCaptureFrames = 0;
+    else if (m_RenderedNewFrame && m_CreatedVRTextures &&
+             m_Game->m_Hooks->m_HudCaptureHooksReady &&
+             ++m_HUDMissingCaptureFrames == 120)
+        Logger::Write("Experimental HUD: no HUD capture target after 120 stereo frames; overlay remains hidden");
+    const bool canShow = m_Config.experimentalHudOverlay && m_HUDBoundsReady &&
+        m_RenderedNewFrame && m_RenderedHud && m_CreatedVRTextures &&
+        m_HmdPose.valid && !m_Game->m_VguiSurface->IsCursorVisible() && m_HUDTexture &&
+        m_VKHUD.m_VRTexture.handle;
+    if (!canShow) {
+        if (m_Overlay->IsOverlayVisible(m_HUDHandle))
+            m_Overlay->HideOverlay(m_HUDHandle);
+        return;
+    }
+    const auto textureError = m_Overlay->SetOverlayTexture(m_HUDHandle, &m_VKHUD.m_VRTexture);
+    const auto showError = textureError == vr::VROverlayError_None ?
+        m_Overlay->ShowOverlay(m_HUDHandle) : textureError;
+    if (textureError != vr::VROverlayError_None || showError != vr::VROverlayError_None) {
+        m_Overlay->HideOverlay(m_HUDHandle);
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= m_NextHUDOverlayErrorLog) {
+            Logger::Write("Experimental HUD overlay submission failed: " +
+                std::to_string(textureError) + "," + std::to_string(showError));
+            m_NextHUDOverlayErrorLog = now + std::chrono::seconds(5);
+        }
+    } else if (m_RenderDiagnostics.First(RenderDiagnosticEvent::HudOverlayShown)) {
+        Logger::Write("Experimental HUD overlay submitted successfully (pixels/alpha/subtitles unverified)");
+    }
+}
+
 void VR::GetPoseData(vr::TrackedDevicePose_t &poseRaw, TrackedDevicePoseData &poseOut)
 {
-    poseOut.valid = poseRaw.bPoseIsValid;
+    poseOut.valid = poseRaw.bPoseIsValid &&
+        IsUsableTrackedPose(poseRaw.mDeviceToAbsoluteTracking.m,
+                            poseRaw.vVelocity.v, poseRaw.vAngularVelocity.v);
     if (!poseOut.valid) {
         poseOut.TrackedDevicePos = { 0, 0, 0 };
         poseOut.TrackedDeviceVel = { 0, 0, 0 };
@@ -431,15 +658,12 @@ void VR::GetPoseData(vr::TrackedDevicePose_t &poseRaw, TrackedDevicePoseData &po
         Vector vel;
         QAngle ang;
         QAngle angvel;
-        pos.x = -mat.m[2][3];
-        pos.y = -mat.m[0][3];
-        pos.z = mat.m[1][3];
-        ang.x = asin(mat.m[1][2]) * (180.0 / 3.141592654);
+        pos = TrackingSpace::OpenVrToSourceMeters({mat.m[0][3], mat.m[1][3], mat.m[2][3]});
+        ang.x = asin(std::clamp(mat.m[1][2], -1.0f, 1.0f)) * (180.0 / 3.141592654);
         ang.y = atan2f(mat.m[0][2], mat.m[2][2]) * (180.0 / 3.141592654);
         ang.z = atan2f(-mat.m[1][0], mat.m[1][1]) * (180.0 / 3.141592654);
-        vel.x = -poseRaw.vVelocity.v[2];
-        vel.y = -poseRaw.vVelocity.v[0];
-        vel.z = poseRaw.vVelocity.v[1];
+        vel = TrackingSpace::OpenVrToSourceMeters({poseRaw.vVelocity.v[0],
+            poseRaw.vVelocity.v[1], poseRaw.vVelocity.v[2]});
         angvel.x = -poseRaw.vAngularVelocity.v[2] * (180.0 / 3.141592654);
         angvel.y = -poseRaw.vAngularVelocity.v[0] * (180.0 / 3.141592654);
         angvel.z = poseRaw.vAngularVelocity.v[1] * (180.0 / 3.141592654);
@@ -451,79 +675,62 @@ void VR::GetPoseData(vr::TrackedDevicePose_t &poseRaw, TrackedDevicePoseData &po
     }
 }
 
-void VR::RepositionOverlays()
+bool VR::RepositionOverlays()
 {
-    if (!m_HmdPose.valid)
-        return;
-    vr::TrackedDevicePose_t hmdPose = m_Poses[vr::k_unTrackedDeviceIndex_Hmd];
-    vr::HmdMatrix34_t hmdMat = hmdPose.mDeviceToAbsoluteTracking;
-    Vector hmdPosition = { hmdMat.m[0][3], hmdMat.m[1][3], hmdMat.m[2][3] };
-    Vector hmdForward = { -hmdMat.m[0][2], 0, -hmdMat.m[2][2] };
+    if (!m_HmdPose.valid) {
+        m_MenuOverlayPlacement.Invalidate();
+        return false;
+    }
+    const auto &hmdMat = m_Poses[vr::k_unTrackedDeviceIndex_Hmd].mDeviceToAbsoluteTracking;
+    const bool visible = m_Overlay->IsOverlayVisible(m_MainMenuHandle);
+    const bool reanchor = m_MenuOverlayPlacement.ShouldAttempt(visible, true);
+    const auto pose = m_MenuOverlayPlacement.UpdatePose(hmdMat.m, visible);
+    if (!pose)
+        return false;
 
     int windowWidth, windowHeight;
-    m_Game->m_MaterialSystem->GetRenderContext()->GetWindowSize(windowWidth, windowHeight);
+    IMatRenderContext *menuContext = m_Game->m_MaterialSystem->GetRenderContext();
+    menuContext->GetWindowSize(windowWidth, windowHeight);
+    menuContext->Release();
 
-    vr::HmdMatrix34_t menuTransform = 
-    {
-        1.0f, 0.0f, 0.0f, 0.0f,
-        0.0f, 1.0f, 0.0f, 1.0f,
-        0.0f, 0.0f, 1.0f, 1.0f
-    };
+    vr::HmdMatrix34_t menuTransform{};
+    std::memcpy(menuTransform.m, pose->m, sizeof(menuTransform.m));
 
     vr::ETrackingUniverseOrigin trackingOrigin = vr::VRCompositor()->GetTrackingSpace();
 
     // Reposition main menu overlay
     float renderWidth = m_VKBackBuffer.m_VulkanData.m_nWidth;
     float renderHeight = m_VKBackBuffer.m_VulkanData.m_nHeight;
+    if (windowWidth <= 0 || windowHeight <= 0 || renderWidth <= 0 || renderHeight <= 0) {
+        m_MenuOverlayPlacement.Invalidate();
+        return false;
+    }
 
     float widthRatio = windowWidth / renderWidth;
     float heightRatio = windowHeight / renderHeight;
     menuTransform.m[0][0] *= widthRatio;
+    menuTransform.m[2][0] *= widthRatio;
     menuTransform.m[1][1] *= heightRatio;
 
-    hmdForward[1] = 0;
-    VectorNormalize(hmdForward);
-
-    Vector menuDistance = hmdForward * 3;
-    Vector menuNewPos = menuDistance + hmdPosition;
-
-    menuTransform.m[0][3] = menuNewPos.x;
-    menuTransform.m[1][3] = menuNewPos.y - 0.25;
-    menuTransform.m[2][3] = menuNewPos.z;
-
-    float xScale = menuTransform.m[0][0];
-    float hmdRotationDegrees = atan2f(hmdMat.m[0][2], hmdMat.m[2][2]);
-
-    menuTransform.m[0][0] *= cos(hmdRotationDegrees);
-    menuTransform.m[0][2] = sin(hmdRotationDegrees);
-    menuTransform.m[2][0] = -sin(hmdRotationDegrees) * xScale;
-    menuTransform.m[2][2] *= cos(hmdRotationDegrees);
-
-    vr::VROverlay()->SetOverlayTransformAbsolute(m_MainMenuHandle, trackingOrigin, &menuTransform);
-    vr::VROverlay()->SetOverlayWidthInMeters(m_MainMenuHandle, 1.5 * (1.0 / heightRatio));
-
-    // Reposition HUD overlay
-    /*vr::HmdMatrix34_t hudTransform =
-    {
-        1.0f, 0.0f, 0.0f, 0.0f,
-        0.0f, 1.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, 1.0f, 0.0f
-    };
-
-    Vector hudDistance = hmdForward * m_HudDistance;
-    Vector hudNewPos = hudDistance + hmdPosition;
-
-    hudTransform.m[0][3] = hudNewPos.x;
-    hudTransform.m[1][3] = hudNewPos.y - 0.25;
-    hudTransform.m[2][3] = hudNewPos.z;
-
-    hudTransform.m[0][0] *= cos(hmdRotationDegrees);
-    hudTransform.m[0][2] = sin(hmdRotationDegrees);
-    hudTransform.m[2][0] = -sin(hmdRotationDegrees);
-    hudTransform.m[2][2] *= cos(hmdRotationDegrees);
-
-    vr::VROverlay()->SetOverlayTransformAbsolute(m_HUDHandle, trackingOrigin, &hudTransform);
-    vr::VROverlay()->SetOverlayWidthInMeters(m_HUDHandle, m_HudSize);*/
+    const auto transformError = vr::VROverlay()->SetOverlayTransformAbsolute(
+        m_MainMenuHandle, trackingOrigin, &menuTransform);
+    const auto widthError = vr::VROverlay()->SetOverlayWidthInMeters(
+        m_MainMenuHandle, 1.5 * (1.0 / heightRatio));
+    const bool positioned = transformError == vr::VROverlayError_None &&
+        widthError == vr::VROverlayError_None;
+    m_MenuOverlayPlacement.RecordResult(positioned);
+    const auto now = std::chrono::steady_clock::now();
+    const bool firstResult = m_RenderDiagnostics.First(positioned ?
+        RenderDiagnosticEvent::OverlayPlacementSucceeded : RenderDiagnosticEvent::OverlayPlacementFailed);
+    if (firstResult || (positioned && reanchor && now >= m_NextMenuPlacementLog)) {
+        Logger::Write("VR menu placement: transform=" + std::to_string(transformError) +
+            " width=" + std::to_string(widthError) +
+            " physicalHmd=" + std::to_string(hmdMat.m[0][3]) + "," +
+            std::to_string(hmdMat.m[1][3]) + "," + std::to_string(hmdMat.m[2][3]) +
+            " (translation follows HMD; heading locked until reopening)");
+        m_NextMenuPlacementLog = now + std::chrono::seconds(5);
+    }
+    return positioned;
 }
 
 void VR::GetPoses() 
@@ -576,9 +783,19 @@ bool VR::UpdatePosesAndActions()
         m_HmdPose.valid = m_LeftControllerPose.valid = m_RightControllerPose.valid = false;
     } else {
         m_LastPoseError = 0;
+        ++m_PoseFetchSequence;
     }
-    const auto inputError = m_Input->UpdateActionState(&m_ActiveActionSet,
-        sizeof(vr::VRActiveActionSet_t), 1);
+    const bool useHaptics = m_Config.experimentalPortalShotHaptics && m_HapticOutputsAvailable;
+    vr::VRActiveActionSet_t activeSets[] = { m_ActiveActionSet, m_ActiveHapticActionSet };
+    auto inputError = m_Input->UpdateActionState(activeSets,
+        sizeof(vr::VRActiveActionSet_t), useHaptics ? 2 : 1);
+    if (inputError != vr::VRInputError_None && useHaptics) {
+        Logger::Write("OpenVR haptic action set update failed (error " +
+            std::to_string(inputError) + "); disabling optional haptics");
+        m_HapticOutputsAvailable = false;
+        inputError = m_Input->UpdateActionState(&m_ActiveActionSet,
+            sizeof(vr::VRActiveActionSet_t), 1);
+    }
     if (inputError != vr::VRInputError_None) {
         if (m_LastInputError != inputError)
             Logger::Write("UpdateActionState failed: " + std::to_string(inputError));
@@ -587,6 +804,38 @@ bool VR::UpdatePosesAndActions()
         m_LastInputError = 0;
     }
     return poseError == vr::VRCompositorError_None && inputError == vr::VRInputError_None;
+}
+
+void VR::QueuePortalShotHaptic()
+{
+    m_PortalShotHapticGate.Queue(std::chrono::steady_clock::now());
+}
+
+void VR::DispatchPortalShotHaptic(bool actionsReady)
+{
+    const bool gameplay = m_IsVREnabled && m_Game->m_EngineClient->IsInGame() &&
+        !m_Game->m_VguiSurface->IsCursorVisible();
+    if (!Haptics::CanDeliverShot(m_Config.experimentalPortalShotHaptics, actionsReady,
+            gameplay, m_TrackingOutputValid, m_RightControllerPose.valid,
+            m_HapticOutputsAvailable)) {
+        m_PortalShotHapticGate.Clear();
+        return;
+    }
+    // Only an eligible attempt starts the pulse-spacing window.
+    if (!m_PortalShotHapticGate.Consume())
+        return;
+    const auto hand = Haptics::OutputHand(m_LeftHanded);
+    const auto action = hand == Haptics::Hand::Left ? m_HapticLeft : m_HapticRight;
+    const auto result = m_Input->TriggerHapticVibrationAction(action, 0.0f,
+        m_Config.portalShotHapticDurationSeconds, 150.0f,
+        m_Config.portalShotHapticAmplitude, vr::k_ulInvalidInputValueHandle);
+    if (result != vr::VRInputError_None) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= m_NextHapticErrorLog) {
+            Logger::Write("OpenVR portal-shot haptic failed (error " + std::to_string(result) + ")");
+            m_NextHapticErrorLog = now + std::chrono::seconds(5);
+        }
+    }
 }
 
 void VR::GetViewParameters() 
@@ -655,137 +904,147 @@ bool VR::GetAnalogActionData(vr::VRActionHandle_t &actionHandle, vr::InputAnalog
     return false;
 }
 
-void VR::ProcessMenuInput()
+void VR::SendMenuMouse(UiInput::MouseTransition transition)
 {
-    //vr::VROverlayHandle_t currentOverlay = m_Game->m_EngineClient->IsInGame() ? m_HUDHandle : m_MainMenuHandle;
-    vr::VROverlayHandle_t currentOverlay = m_MainMenuHandle;
-
-    // Check if left or right hand controller is pointing at the overlay
-    const bool isHoveringOverlay = CheckOverlayIntersectionForController(currentOverlay, vr::TrackedControllerRole_LeftHand) ||
-                                   CheckOverlayIntersectionForController(currentOverlay, vr::TrackedControllerRole_RightHand);
-
-    // Overlays can't process action inputs if the laser is active, so
-    // only activate laser if a controller is pointing at the overlay
-    if (isHoveringOverlay)
-    {
-        vr::VROverlay()->SetOverlayFlag(currentOverlay, vr::VROverlayFlags_MakeOverlaysInteractiveIfVisible, true);
-
-        int windowWidth, windowHeight;
-        m_Game->m_MaterialSystem->GetRenderContext()->GetWindowSize(windowWidth, windowHeight);
-
-        vr::VREvent_t vrEvent;
-        while (vr::VROverlay()->PollNextOverlayEvent(currentOverlay, &vrEvent, sizeof(vrEvent)))
-        {
-            INPUT input;
-            switch (vrEvent.eventType)
-            {
-            case vr::VREvent_MouseMove:
-            {
-                float laserX = vrEvent.data.mouse.x;
-                float laserY = vrEvent.data.mouse.y;
-
-                if (m_Game->m_EngineClient->IsInGame())
-                {
-                    laserY -= (m_RenderHeight - windowHeight);
-                    laserY = windowHeight - laserY;
-                }
-                else // main menu (uses render sized texture)
-                {
-                    laserX = (laserX / m_RenderWidth) * windowWidth;
-                    laserY = ((-laserY + m_RenderHeight) / m_RenderHeight) * windowHeight;
-                }
-
-                m_Game->m_VguiInput->SetCursorPos(laserX, laserY);
-                break;
-            }
-
-            case vr::VREvent_MouseButtonDown:
-                // Don't allow holding down the mouse down in the pause menu. The resume button can be clicked before
-                // the MouseButtonUp event is polled, which causes issues with the overlay.
-                if (currentOverlay == m_MainMenuHandle)
-                {
-                    input.type = INPUT_MOUSE;
-                    input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-                    SendInput(1, &input, sizeof(INPUT));
-                }
-                break;
-
-            case vr::VREvent_MouseButtonUp:
-                /*if (currentOverlay == m_HUDHandle)
-                {
-                    input.type = INPUT_MOUSE;
-                    input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-                    SendInput(1, &input, sizeof(INPUT));
-                }*/
-                input.type = INPUT_MOUSE;
-                input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
-                SendInput(1, &input, sizeof(INPUT));
-                break;
-
-            case vr::VREvent_ScrollDiscrete:
-                m_Game->m_VguiInput->InternalMouseWheeled((int)vrEvent.data.scroll.ydelta);
-                break;
-            }
+    if (transition == UiInput::MouseTransition::None)
+        return;
+    INPUT input{};
+    input.type = INPUT_MOUSE;
+    input.mi.dwFlags = transition == UiInput::MouseTransition::Press ?
+        MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
+    const bool sent = SendInput(1, &input, sizeof(input)) == 1;
+    m_MenuPointerState.ConfirmSent(transition, sent);
+    if (!sent) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= m_NextMenuInputErrorLog) {
+            Logger::Write("Menu mouse SendInput failed: " + std::to_string(GetLastError()));
+            m_NextMenuInputErrorLog = now + std::chrono::seconds(5);
         }
     }
-    else
-    {
-        vr::VROverlay()->SetOverlayFlag(currentOverlay, vr::VROverlayFlags_MakeOverlaysInteractiveIfVisible, false);
-        
-        if (PressedDigitalAction(m_MenuSelect, true))
-        {
-            INPUT input {};
-            input.type = INPUT_KEYBOARD;
-            input.ki.wVk = VK_RETURN;
-            SendInput(1, &input, sizeof(INPUT));
-            input.ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(1, &input, sizeof(INPUT));
+}
+
+void VR::ReleaseMenuMouse()
+{
+    SendMenuMouse(m_MenuPointerState.LoseFocus());
+}
+
+void VR::ProcessMenuInput()
+{
+    // An overlay mouse-up event is delivered only once. Retry a failed synthetic
+    // release even if the controller is still hovering and no new event arrives.
+    SendMenuMouse(m_MenuPointerState.PendingRelease());
+    const auto overlay = m_MainMenuHandle;
+    const bool hovering = m_Overlay->IsOverlayVisible(overlay) &&
+        (CheckOverlayIntersectionForController(overlay, vr::TrackedControllerRole_LeftHand) ||
+         CheckOverlayIntersectionForController(overlay, vr::TrackedControllerRole_RightHand));
+    m_Overlay->SetOverlayFlag(overlay, vr::VROverlayFlags_MakeOverlaysInteractiveIfVisible, hovering);
+    if (!hovering)
+        ReleaseMenuMouse();
+
+    int windowWidth = 0, windowHeight = 0;
+    IMatRenderContext *context = m_Game->m_MaterialSystem->GetRenderContext();
+    context->GetWindowSize(windowWidth, windowHeight);
+    context->Release();
+    const bool inGame = m_Game->m_EngineClient->IsInGame();
+    vr::VREvent_t event{};
+    // Drain releases even when a controller leaves the overlay after a press.
+    while (m_Overlay->PollNextOverlayEvent(overlay, &event, sizeof(event))) {
+        switch (event.eventType) {
+        case vr::VREvent_MouseMove:
+            if (hovering) {
+                const auto point = UiInput::MapMenuPointer(event.data.mouse.x, event.data.mouse.y,
+                    m_RenderWidth, m_RenderHeight, windowWidth, windowHeight, inGame);
+                if (point)
+                    m_Game->m_VguiInput->SetCursorPos(point->x, point->y);
+            }
+            break;
+        case vr::VREvent_MouseButtonDown:
+            if (hovering)
+                SendMenuMouse(m_MenuPointerState.Press());
+            break;
+        case vr::VREvent_MouseButtonUp:
+            SendMenuMouse(m_MenuPointerState.Release());
+            break;
+        case vr::VREvent_ScrollDiscrete:
+            if (hovering)
+                m_Game->m_VguiInput->InternalMouseWheeled((int)event.data.scroll.ydelta);
+            break;
         }
-        if (PressedDigitalAction(m_MenuBack, true) || PressedDigitalAction(m_Pause, true))
-        {
-            INPUT input {};
-            input.type = INPUT_KEYBOARD;
-            input.ki.wVk = VK_ESCAPE;
-            SendInput(1, &input, sizeof(INPUT));
-            input.ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(1, &input, sizeof(INPUT));
+    }
+    if (hovering)
+        return;
+
+    const auto sendKey = [this](WORD key) {
+        INPUT inputs[2]{};
+        inputs[0].type = inputs[1].type = INPUT_KEYBOARD;
+        inputs[0].ki.wVk = inputs[1].ki.wVk = key;
+        inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+        const UINT sent = SendInput(2, inputs, sizeof(INPUT));
+        if (sent == 1)
+            SendInput(1, &inputs[1], sizeof(INPUT)); // best-effort key release
+        if (sent != 2) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= m_NextMenuInputErrorLog) {
+                Logger::Write("Menu keyboard SendInput failed: " + std::to_string(GetLastError()));
+                m_NextMenuInputErrorLog = now + std::chrono::seconds(5);
+            }
         }
-        if (PressedDigitalAction(m_MenuUp, true))
-        {
-            INPUT input {};
-            input.type = INPUT_KEYBOARD;
-            input.ki.wVk = VK_UP;
-            SendInput(1, &input, sizeof(INPUT));
-            input.ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(1, &input, sizeof(INPUT));
+    };
+    if (PressedDigitalAction(m_MenuSelect, true)) sendKey(VK_RETURN);
+    const bool back = PressedDigitalAction(m_MenuBack, true);
+    const bool pause = PressedDigitalAction(m_Pause, true);
+    if (back || pause) sendKey(VK_ESCAPE);
+    if (PressedDigitalAction(m_MenuUp, true)) sendKey(VK_UP);
+    if (PressedDigitalAction(m_MenuDown, true)) sendKey(VK_DOWN);
+    if (PressedDigitalAction(m_MenuLeft, true)) sendKey(VK_LEFT);
+    if (PressedDigitalAction(m_MenuRight, true)) sendKey(VK_RIGHT);
+}
+
+void VR::ProcessViewActions()
+{
+    if (!m_IsVREnabled) {
+        m_PrevFrameTime = std::chrono::steady_clock::now();
+        return;
+    }
+    using duration = std::chrono::duration<float, std::milli>;
+    const auto currentTime = std::chrono::steady_clock::now();
+    const float deltaTime = duration(currentTime - m_PrevFrameTime).count();
+    m_PrevFrameTime = currentTime;
+
+    if (PressedDigitalAction(m_ActionResetPosition, true))
+        ResetPosition();
+    if (!m_HmdPose.valid)
+        return;
+
+    vr::InputAnalogActionData_t analogActionData{};
+    if (!GetAnalogActionData(m_ActionTurn, analogActionData))
+        return;
+
+    float deltaYaw = 0.0f;
+    if (m_SnapTurning) {
+        if (!m_PressedTurn && analogActionData.x > 0.5f) {
+            deltaYaw = -m_SnapTurnAngle;
+            m_PressedTurn = true;
+        } else if (!m_PressedTurn && analogActionData.x < -0.5f) {
+            deltaYaw = m_SnapTurnAngle;
+            m_PressedTurn = true;
+        } else if (analogActionData.x > -0.3f && analogActionData.x < 0.3f) {
+            m_PressedTurn = false;
         }
-        if (PressedDigitalAction(m_MenuDown, true))
-        {
-            INPUT input {};
-            input.type = INPUT_KEYBOARD;
-            input.ki.wVk = VK_DOWN;
-            SendInput(1, &input, sizeof(INPUT));
-            input.ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(1, &input, sizeof(INPUT));
+    } else {
+        constexpr float deadzone = 0.2f;
+        if (std::fabs(analogActionData.x) > deadzone) {
+            const float normalized = (std::fabs(analogActionData.x) - deadzone) / (1.0f - deadzone);
+            deltaYaw = -std::copysign(m_TurnSpeed * deltaTime * normalized, analogActionData.x);
         }
-        if (PressedDigitalAction(m_MenuLeft, true))
-        {
-            INPUT input {};
-            input.type = INPUT_KEYBOARD;
-            input.ki.wVk = VK_LEFT;
-            SendInput(1, &input, sizeof(INPUT));
-            input.ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(1, &input, sizeof(INPUT));
-        }
-        if (PressedDigitalAction(m_MenuRight, true))
-        {
-            INPUT input {};
-            input.type = INPUT_KEYBOARD;
-            input.ki.wVk = VK_RIGHT;
-            SendInput(1, &input, sizeof(INPUT));
-            input.ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(1, &input, sizeof(INPUT));
-        }
+    }
+
+    if (deltaYaw != 0.0f) {
+        m_Playspace.yawDegrees = m_RotationOffset.y;
+        m_Playspace.TurnAboutHmd(deltaYaw, m_HmdPose.TrackedDevicePos, m_LastEyeHeightUnits);
+        m_RotationOffset.y = m_Playspace.yawDegrees;
+        m_RotationOffset.y -= 360.0f * std::floor(m_RotationOffset.y / 360.0f);
+        m_Playspace.yawDegrees = m_RotationOffset.y;
     }
 }
 
@@ -797,51 +1056,6 @@ void VR::ProcessInput()
     }
 
     //vr::VROverlay()->SetOverlayFlag(m_HUDHandle, vr::VROverlayFlags_MakeOverlaysInteractiveIfVisible, false);
-
-    typedef std::chrono::duration<float, std::milli> duration;
-    auto currentTime = std::chrono::steady_clock::now();
-    duration elapsed = currentTime - m_PrevFrameTime;
-    float deltaTime = elapsed.count();
-    m_PrevFrameTime = currentTime;
-
-    vr::InputAnalogActionData_t analogActionData;
-
-    if (GetAnalogActionData(m_ActionTurn, analogActionData))
-    {
-        if (m_SnapTurning)
-        {
-            if (!m_PressedTurn && analogActionData.x > 0.5)
-            {
-                m_RotationOffset.y -= m_SnapTurnAngle;
-                m_PressedTurn = true;
-            }
-            else if (!m_PressedTurn && analogActionData.x < -0.5)
-            {
-                m_RotationOffset.y += m_SnapTurnAngle;
-                m_PressedTurn = true;
-            }
-            else if (analogActionData.x < 0.3 && analogActionData.x > -0.3)
-                m_PressedTurn = false;
-        }
-        // Smooth turning
-        else
-        {
-            float deadzone = 0.2;
-            // smoother turning
-            float xNormalized = (abs(analogActionData.x) - deadzone) / (1 - deadzone);
-            if (analogActionData.x > deadzone)
-            {
-                m_RotationOffset.y -= m_TurnSpeed * deltaTime * xNormalized;
-            }
-            if (analogActionData.x < -deadzone)
-            {
-                m_RotationOffset.y += m_TurnSpeed * deltaTime * xNormalized;
-            }
-        }
-
-        // Wrap from 0 to 360
-        m_RotationOffset.y -= 360 * std::floor(m_RotationOffset.y / 360);
-    }
 
     ProcessHeldAction(m_ActionPrimaryAttack, m_PrimaryAttackState, "+attack", "-attack");
     ProcessHeldAction(m_ActionSecondaryAttack, m_SecondaryAttackState, "+attack2", "-attack2");
@@ -857,11 +1071,6 @@ void VR::ProcessInput()
     else if (PressedDigitalAction(m_ActionNextItem, true))
     {
         m_Game->ClientCmd_Unrestricted("invnext");
-    }
-
-    if (PressedDigitalAction(m_ActionResetPosition, true))
-    {
-        ResetPosition();
     }
 
     if (PressedDigitalAction(m_ActionFlashlight, true))
@@ -897,8 +1106,8 @@ void VR::ProcessInput()
 
     if (PressedDigitalAction(m_Pause, true))
     {
+        m_MenuOverlayPlacement.Invalidate();
         m_Game->ClientCmd_Unrestricted("gameui_activate");
-        RepositionOverlays();
     }
 }
 
@@ -1018,32 +1227,15 @@ QAngle& VR::GetRightControllerAbsAngleConst()
     return m_RightControllerAngAbs;
 }
 
-Vector VR::GetRightControllerAbsPos(Vector eyePosition)
+Vector VR::GetRightControllerAbsPos()
 {
-    Vector offset = eyePosition;
-
-    if (offset.x == 0 && offset.y == 0 && offset.z == 0) {
-        /*int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
-        C_BasePlayer* localPlayer = (C_BasePlayer*)m_Game->GetClientEntity(playerIndex);
-        if (!localPlayer)
-            return {0, 0, 0};
-
-        offset = localPlayer->EyePosition();*/
-
-        offset = m_SetupOrigin;
-    }
-
-    Vector position = offset + m_RightControllerPosRel;
-
-    if (m_6DOF)
-        position += m_HmdPosRelative;
-
-    return position;
+    return TrackingSpace::ControllerWorldOrigin(m_SetupOrigin, m_RightControllerPosRel,
+        GetHmdViewOffset(), m_6DOF);
 }
 
-Vector VR::GetRecommendedViewmodelAbsPos(Vector eyePosition)
+Vector VR::GetRecommendedViewmodelAbsPos()
 {
-    Vector viewmodelPos = GetRightControllerAbsPos(eyePosition);
+    Vector viewmodelPos = GetRightControllerAbsPos();
     viewmodelPos -= m_ViewmodelForward * m_ViewmodelPosOffset.x;
     viewmodelPos -= m_ViewmodelRight * m_ViewmodelPosOffset.y;
     viewmodelPos -= m_ViewmodelUp * m_ViewmodelPosOffset.z;
@@ -1080,15 +1272,86 @@ void VR::UpdateHMDAngles() {
 
 void VR::ResetPosition()
 {
-    if (m_HmdPose.valid)
+    if (m_HmdPose.valid) {
+        if (m_VRScale != m_Config.vrScale ||
+            m_Playspace.heightOffsetMeters != m_Config.heightOffsetMeters) {
+            m_VRScale = m_Config.vrScale;
+            m_Playspace.scale = m_VRScale;
+            m_Playspace.heightOffsetMeters = m_Config.heightOffsetMeters;
+            Logger::Write("Applied staged VRScale/HeightOffsetMeters at recenter");
+        }
+        m_Playspace.Recenter(m_HmdPose.TrackedDevicePos);
         m_Center = m_HmdPose.TrackedDevicePos;
+        if (m_Playspace.mode == TrackingSpace::TrackingMode::Standing && m_6DOF) {
+            if (const auto anchor = TrackingSpace::StandingEyeAnchorUnits(
+                    m_HmdPose.TrackedDevicePos.z, m_VRScale)) {
+                m_LastEyeHeightUnits = *anchor;
+                m_HasEyeHeight = true;
+                m_EyeHeightWasInvalid = false;
+                Logger::Write("Standing height reanchored to tracked HMD; Source avatar eye offset unverified");
+            }
+        }
+        m_HmdLostSinceLastValid = false;
+        ResetRoomscale(true);
+        if (ExperimentalPortalOrientation()) {
+            const Vector baseOffset = m_Playspace.HmdOffsetUnits(
+                m_HmdPose.TrackedDevicePos, m_LastEyeHeightUnits);
+            m_PortalRigAnchor.Reanchor(baseOffset, baseOffset);
+            m_PortalCoordinator.CancelPending();
+        }
+    }
+}
+
+Vector VR::GetMovementForward()
+{
+    const TrackingSpace::DeviceDirection hmd{m_TrackingOutputValid, m_HmdForward};
+    const TrackingSpace::DeviceDirection left{m_LeftControllerOutputValid, m_LeftControllerForward};
+    const TrackingSpace::DeviceDirection right{m_RightControllerPose.valid, m_RightControllerForward};
+    bool fallback = false;
+    if (m_Config.movementDirection == TrackingSpace::MovementDirection::LeftController)
+        fallback = !TrackingSpace::HorizontalDirection(left).has_value();
+    else if (m_Config.movementDirection == TrackingSpace::MovementDirection::RightController)
+        fallback = !TrackingSpace::HorizontalDirection(right).has_value();
+    if (fallback != m_MovementFallbackActive) {
+        Logger::Write(fallback ? "Movement direction: controller unavailable; using HMD" :
+                                 "Movement direction: configured controller available");
+        m_MovementFallbackActive = fallback;
+    }
+    return TrackingSpace::SelectMovementForward(m_Config.movementDirection, hmd, left, right);
 }
 
 void VR::UpdateTracking()
 {
-    GetPoses();
+    if (!m_HmdPose.valid || !m_RightControllerPose.valid ||
+        !m_Game->m_EngineClient->IsInGame() || m_Game->m_VguiSurface->IsCursorVisible())
+        ResetMuzzleSample();
+    m_TrackingOutputValid = false;
+    m_LeftControllerOutputValid = false;
+    m_LeftControllerPosRel = {0.0f, 0.0f, 0.0f};
+    m_RightControllerPosRel = {0.0f, 0.0f, 0.0f};
+
+    if (m_Config.roomscaleMode == RoomscaleMotion::Mode::ActiveExperimental) {
+        if (!m_Game->m_EngineClient->IsInGame())
+            ResetRoomscale(false, true);
+        else if (m_Game->m_VguiSurface->IsCursorVisible())
+            m_RoomscaleMotor.Reset();
+    }
+
+    if (ExperimentalPortalOrientation() && !m_Game->m_EngineClient->IsInGame())
+        ResetPortalOrientation();
 
     if (!m_HmdPose.valid) {
+        m_RoomscaleMotor.Reset();
+        m_PortalCoordinator.CancelPending();
+        if (m_RoomscaleObserver.OnPose(false, {}, m_PoseFetchSequence, 0.0f, 1.0f, true) ==
+            RoomscaleMotion::Observation::TrackingLost) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= m_NextRoomscaleTrackingLog) {
+                Logger::Write("Roomscale observe: HMD tracking lost; pending physical intent discarded");
+                m_NextRoomscaleTrackingLog = now + std::chrono::seconds(5);
+            }
+        }
+        m_HmdLostSinceLastValid = true;
         if (m_Game->m_Offsets->m_LaserAvailable) {
             const int index = m_Game->m_EngineClient->GetLocalPlayer();
             C_Portal_Player* player = (C_Portal_Player*)m_Game->GetClientEntity(index);
@@ -1100,40 +1363,93 @@ void VR::UpdateTracking()
         return;
     }
 
-    int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
-    C_BasePlayer* localPlayer = (C_BasePlayer*)m_Game->GetClientEntity(playerIndex);
-    if (!localPlayer)
+    const int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
+    C_BasePlayer* localPlayer = playerIndex > 0 ?
+        (C_BasePlayer*)m_Game->GetClientEntity(playerIndex) : nullptr;
+    if (!localPlayer) {
+        ResetMuzzleSample();
+        ResetRoomscale(false, true);
+        ResetPortalOrientation();
+        m_EyeHeightPlayerEntity = nullptr;
+        m_HasEyeHeight = false;
+        m_HasLastHmdOffset = false;
         return;
+    }
+
+    if (playerIndex != m_EyeHeightPlayerIndex || localPlayer != m_EyeHeightPlayerEntity) {
+        ResetRoomscale(false, true);
+        ResetPortalOrientation();
+        m_EyeHeightPlayerIndex = playerIndex;
+        m_EyeHeightPlayerEntity = localPlayer;
+        m_HasEyeHeight = false;
+        m_EyeHeightWasInvalid = false;
+        m_HasLastHmdOffset = false;
+    }
+    if (m_Playspace.mode == TrackingSpace::TrackingMode::Standing && m_6DOF && !m_HasEyeHeight) {
+        const auto anchor = TrackingSpace::StandingEyeAnchorUnits(
+            m_HmdPose.TrackedDevicePos.z, m_VRScale);
+        if (anchor) {
+            m_LastEyeHeightUnits = *anchor;
+            m_HasEyeHeight = true;
+            Logger::Write("Standing height anchored to tracked HMD at player entry; Source avatar eye offset unverified");
+            m_EyeHeightWasInvalid = false;
+        } else {
+            if (!m_EyeHeightWasInvalid)
+                Logger::Write("Standing height unavailable: invalid HMD floor height; deferring standing view");
+            m_EyeHeightWasInvalid = true;
+            ResetRoomscale();
+            return;
+        }
+    }
 
     // HMD tracking
     Vector hmdPosLocal = m_HmdPose.TrackedDevicePos;
-    Vector hmdPosCentered = hmdPosLocal - m_Center;
+    Vector hmdPosCentered = hmdPosLocal - m_Playspace.centerMeters;
 
     m_HmdPosRelativeRaw = hmdPosCentered;
 
     //std::cout << "HMD - X: " << hmdWorldPos.x << ", Y: " << hmdWorldPos.y << ", Z: " << hmdWorldPos.z << "\n";
 
-    Vector hmdPosCorrected = hmdPosCentered;
-    VectorPivotXY(hmdPosCorrected, { 0, 0, 0 }, m_RotationOffset.y);
-    
+    m_Playspace.yawDegrees = m_RotationOffset.y;
+    m_Playspace.scale = m_VRScale;
+    if (m_HmdLostSinceLastValid) {
+        if (m_HasLastHmdOffset) {
+            m_Playspace.PreserveOffsetOnRecovery(hmdPosLocal, m_LastHmdOffsetUnits,
+                                                  m_LastEyeHeightUnits);
+            Logger::Write("HMD tracking recovered; preserving previous view offset until recenter");
+        }
+        m_HmdLostSinceLastValid = false;
+    }
     UpdateHMDAngles();
 
-    m_HmdPosRelative = hmdPosCorrected * m_VRScale;
-
-    // Roomscale setup
-    /*Vector cameraMovingDirection = m_Center - m_SetupOriginPrev;
-    Vector cameraToPlayer = m_HmdPosAbsPrev - m_SetupOriginPrev;
-    cameraMovingDirection.z = 0;
-    cameraToPlayer.z = 0;
-    float cameraFollowing = DotProduct(cameraMovingDirection, cameraToPlayer);
-    float cameraDistance = VectorLength(cameraToPlayer);
-
-    if (localPlayer->m_hGroundEntity != -1 && localPlayer->m_vecVelocity.IsZero())
-        m_RoomscaleActive = true;
-
-    // TODO: Get roomscale to work while using thumbstick
-    if ((cameraFollowing < 0 && cameraDistance > 1) || (m_PushingThumbstick))
-        m_RoomscaleActive = false;*/
+    m_HmdPosRelative = m_Playspace.HmdOffsetUnits(hmdPosLocal, m_LastEyeHeightUnits);
+    m_LastHmdOffsetUnits = m_HmdPosRelative;
+    m_HasLastHmdOffset = true;
+    m_TrackingOutputValid = true;
+    const auto roomscaleStatus = m_RoomscaleObserver.OnPose(
+        true, hmdPosLocal, m_PoseFetchSequence, m_Playspace.yawDegrees, m_Playspace.scale,
+        m_Game->m_EngineClient->IsInGame() && !m_Game->m_VguiSurface->IsCursorVisible());
+    if (roomscaleStatus == RoomscaleMotion::Observation::MappingChanged ||
+        roomscaleStatus == RoomscaleMotion::Observation::Discontinuity ||
+        roomscaleStatus == RoomscaleMotion::Observation::InvalidSample)
+        m_RoomscaleMotor.Reset();
+    if (roomscaleStatus == RoomscaleMotion::Observation::TrackingRecovered) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= m_NextRoomscaleTrackingLog) {
+            Logger::Write("Roomscale observe: HMD tracking recovered; using fresh movement baseline");
+            m_NextRoomscaleTrackingLog = now + std::chrono::seconds(5);
+        }
+    }
+    else if (roomscaleStatus == RoomscaleMotion::Observation::Discontinuity ||
+             roomscaleStatus == RoomscaleMotion::Observation::InvalidSample) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= m_NextRoomscaleAnomalyLog) {
+            Logger::Write(roomscaleStatus == RoomscaleMotion::Observation::Discontinuity ?
+                "Roomscale observe: pose discontinuity; pending physical intent discarded" :
+                "Roomscale observe: invalid pose/mapping; physical intent discarded");
+            m_NextRoomscaleAnomalyLog = now + std::chrono::seconds(5);
+        }
+    }
 
     if ((!m_RightControllerPose.valid || m_AimMode != 2) &&
         m_Game->m_Offsets->m_LaserAvailable) {
@@ -1174,25 +1490,36 @@ void VR::UpdateTracking()
     m_Ipd = m_EyeToHeadTransformPosRight.x * 2;
     m_EyeZ = m_EyeToHeadTransformPosRight.z;
 
-    if (!m_RightControllerPose.valid)
-        return;
-
     // Hand tracking
-    Vector leftControllerPosLocal = m_LeftControllerPose.TrackedDevicePos;
-    QAngle leftControllerAngLocal = m_LeftControllerPose.TrackedDeviceAng;
+    if (const auto leftOffset = m_Playspace.ControllerRelativeOffsetUnits(
+            m_LeftControllerPose.valid, m_LeftControllerPose.TrackedDevicePos,
+            hmdPosLocal, m_LastEyeHeightUnits)) {
+        m_LeftControllerPosRel = *leftOffset;
+        m_LeftControllerOutputValid = true;
+        QAngle leftControllerAng = m_LeftControllerPose.TrackedDeviceAng;
+        leftControllerAng.x += m_RotationOffset.x;
+        leftControllerAng.y += m_RotationOffset.y;
+        leftControllerAng.z += m_RotationOffset.z;
+        QAngle::AngleVectors(leftControllerAng, &m_LeftControllerForward,
+                             &m_LeftControllerRight, &m_LeftControllerUp);
+        m_LeftControllerForward = VectorRotate(m_LeftControllerForward, m_LeftControllerRight,
+                                                m_Config.controllerPitchDegrees);
+        m_LeftControllerUp = VectorRotate(m_LeftControllerUp, m_LeftControllerRight,
+                                           m_Config.controllerPitchDegrees);
+        QAngle::VectorAngles(m_LeftControllerForward, m_LeftControllerUp, m_LeftControllerAngAbs);
+    }
 
-    Vector rightControllerPosLocal = m_RightControllerPose.TrackedDevicePos;
+    const auto rightOffset = m_Playspace.ControllerRelativeOffsetUnits(
+        m_RightControllerPose.valid, m_RightControllerPose.TrackedDevicePos,
+        hmdPosLocal, m_LastEyeHeightUnits);
+    if (!rightOffset) {
+        ApplyPortalRigToDerivedPose();
+        return;
+    }
+
     QAngle rightControllerAngLocal = m_RightControllerPose.TrackedDeviceAng;
 
-    //std::cout << "Right Controller - X: " << rightControllerPosLocal.x << "Y: " << rightControllerPosLocal.y << "Z: " << rightControllerPosLocal.z << "\n";
-
-    Vector hmdToController = rightControllerPosLocal - hmdPosLocal;
-    //Vector rightControllerPosCorrected = hmdPosCorrected + hmdToController;
-
-    // When using stick turning, pivot the controllers around the HMD
-    VectorPivotXY(hmdToController, { 0, 0, 0 }, m_RotationOffset.y);
-
-    m_RightControllerPosRel = hmdToController * m_VRScale;
+    m_RightControllerPosRel = *rightOffset;
 
     //rightControllerAngLocal += m_RotationOffset;
     rightControllerAngLocal.x += m_RotationOffset.x;
@@ -1202,19 +1529,11 @@ void VR::UpdateTracking()
     // Wrap angle from -180 to 180
     //rightControllerAngLocal.Normalize();
 
-    if (m_LeftControllerPose.valid)
-        QAngle::AngleVectors(leftControllerAngLocal, &m_LeftControllerForward, &m_LeftControllerRight, &m_LeftControllerUp);
     QAngle::AngleVectors(rightControllerAngLocal, &m_RightControllerForward, &m_RightControllerRight, &m_RightControllerUp);
 
-    const float offset = -30;
+    const float offset = m_Config.controllerPitchDegrees;
 
     // Adjust controller angle downward
-    if (m_LeftControllerPose.valid) {
-        m_LeftControllerForward = VectorRotate(m_LeftControllerForward, m_LeftControllerRight, offset);
-        m_LeftControllerUp = VectorRotate(m_LeftControllerUp, m_LeftControllerRight, offset);
-        QAngle::VectorAngles(m_LeftControllerForward, m_LeftControllerUp, m_LeftControllerAngAbs);
-    }
-
     m_RightControllerForward = VectorRotate(m_RightControllerForward, m_RightControllerRight, offset);
     m_RightControllerUp = VectorRotate(m_RightControllerUp, m_RightControllerRight, offset);
 
@@ -1222,11 +1541,9 @@ void VR::UpdateTracking()
     QAngle::VectorAngles(m_RightControllerForward, m_RightControllerUp, m_RightControllerAngAbs);
     m_RightControllerAngAbs.Normalize();
 
-    PositionAngle viewmodelOffset = PositionAngle{ {4.5, -1, 1.5}, {0,0,0} };
-
     // Apply both hardcoded and custom (from config) viewmodel offsets here:
-    m_ViewmodelPosOffset = viewmodelOffset.position + m_ViewmodelPosCustomOffset;
-    m_ViewmodelAngOffset = viewmodelOffset.angle + m_ViewmodelAngCustomOffset;
+    m_ViewmodelPosOffset = kLegacyViewmodelPositionOffset + m_ViewmodelPosCustomOffset;
+    m_ViewmodelAngOffset = m_ViewmodelAngCustomOffset;
 
     m_ViewmodelForward = m_RightControllerForward;
     m_ViewmodelUp = m_RightControllerUp;
@@ -1244,23 +1561,347 @@ void VR::UpdateTracking()
     m_ViewmodelRight = VectorRotate(m_ViewmodelRight, m_ViewmodelForward, m_ViewmodelAngOffset.z);
     m_ViewmodelUp = VectorRotate(m_ViewmodelUp, m_ViewmodelForward, m_ViewmodelAngOffset.z);
 
-    m_AimPos = Trace((uint32_t*)localPlayer);
-    if (m_AimMode == 2 && m_Game->m_Offsets->m_LaserAvailable) {
+    ApplyPortalRigToDerivedPose();
+    if (!RoomscaleEnabled() || !RoomscaleEligible())
+        UpdateAimFeedback(localPlayer);
+}
+
+void VR::ResetMuzzleSample()
+{
+    m_MuzzleSample.Reset();
+    Hooks::m_NativeBeamRenderProbe.SetEffect(0);
+}
+
+void VR::CaptureViewmodelMuzzle(const Vector &world, const Vector &modelOrigin, const QAngle &modelAngles)
+{
+    const double now = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (m_MuzzleSample.Capture(world, modelOrigin, modelAngles, now) &&
+        !m_MuzzleSampleLogged.exchange(true)) {
+        Logger::Write("Native viewmodel muzzle sampled: world=" + std::to_string(world.x) + "," +
+            std::to_string(world.y) + "," + std::to_string(world.z) +
+            "; model-local sample rebased each aim update; hardware alignment unverified");
+    }
+}
+
+std::optional<Vector> VR::GetAimBeamOrigin()
+{
+    if (!m_Config.aimFromViewmodelMuzzle)
+        return GetRightControllerAbsPos();
+    std::optional<Vector> origin;
+    if (Hooks::CanAlignViewmodel() && m_Game->m_Hooks->m_MuzzleSamplingReady) {
+        const double now = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        origin = m_MuzzleSample.Origin(GetRecommendedViewmodelAbsPos(), GetRecommendedViewmodelAbsAngle(),
+                                      now);
+    }
+    if (!origin && !m_MuzzleWaitingLogged) {
+        Logger::Write("Aim beam waiting for valid local viewmodel muzzle sample; controller-origin fallback disabled");
+        m_MuzzleWaitingLogged = true;
+    }
+    return origin;
+}
+
+void VR::UpdateAimFeedback(C_BasePlayer *localPlayer)
+{
+    Hooks::m_NativeBeamRenderProbe.SetEffect(0);
+    if (!localPlayer || !m_TrackingOutputValid || !m_RightControllerPose.valid) {
+        ResetMuzzleSample();
+        return;
+    }
+    bool aimTraceHit = false;
+    m_AimPos = Trace((uint32_t*)localPlayer, aimTraceHit);
+    if (AimFeedback::ShouldInspectActiveWeaponForAim(
+            m_AimMode, m_Game->m_Offsets->m_LaserAvailable,
+            m_Config.experimentalWorldAimMarker, m_Game->m_DebugOverlay != nullptr)) {
         C_Portal_Player* portalPlayer = (C_Portal_Player*)localPlayer;
         auto activeWeaponAddr = (*(int(__thiscall**)(void*))(*(uintptr_t*)portalPlayer + 968))(portalPlayer);
-        if (activeWeaponAddr && m_DrawCrosshair) {
-            CWeaponPortalBase* activeWeapon = (CWeaponPortalBase*)activeWeaponAddr;
-            if (portalPlayer->m_PointLaser) {
-                const int portalColor = std::clamp(activeWeapon->m_iLastFiredPortal, 0, 2);
-                portalPlayer->m_PointLaser->SetControlPoint(1, m_AimPos);
-                portalPlayer->m_PointLaser->SetControlPoint(2, m_Game->m_singlePlayerPortalColors[portalColor] * 0.5f);
-            } else {
-                m_Game->m_Hooks->CreatePingPointer(localPlayer, m_AimPos);
+        const auto playerKey = reinterpret_cast<std::uintptr_t>(localPlayer);
+        const auto weaponKey = static_cast<std::uintptr_t>(activeWeaponAddr);
+        if (m_Game->m_VguiSurface->IsCursorVisible())
+            m_MuzzleSample.Reset();
+        else
+            m_MuzzleSample.SelectIdentity(playerKey, weaponKey);
+        const auto beamOrigin = GetAimBeamOrigin();
+        const bool worldMarker = AimFeedback::ShouldUseWorldAimMarker(
+            m_AimMode, m_Config.experimentalWorldAimMarker,
+            m_Game->m_DebugOverlay != nullptr, m_RightControllerPose.valid,
+            activeWeaponAddr != 0, m_Game->m_VguiSurface->IsCursorVisible());
+        if (worldMarker && beamOrigin) {
+            const auto geometry = AimFeedback::PrepareWorldAimGeometry(
+                *beamOrigin, m_AimPos);
+            if (geometry) {
+                // The beam is only a pointing aid. Source owns the reticle
+                // artwork and status; do not draw a competing impact plus.
+                constexpr int r = 64, g = 200, b = 255;
+                const auto now = std::chrono::steady_clock::now();
+                const float frameInterval = m_LastWorldAimMarkerUpdate ==
+                    std::chrono::steady_clock::time_point{} ? 0.0f :
+                    std::chrono::duration<float>(now - m_LastWorldAimMarkerUpdate).count();
+                const float lifetime = AimFeedback::WorldAimOverlayLifetime(frameInterval);
+                m_LastWorldAimMarkerUpdate = now;
+                m_Game->m_DebugOverlay->AddLineOverlay(*beamOrigin, geometry->beamEnd,
+                    r, g, b, false, lifetime);
+                if (!m_WorldAimMarkerLogged) {
+                    Logger::Write("Experimental world aim marker submitted to Source debug overlay; "
+                        "actual stereo visibility and shot alignment require VR testing");
+                    m_WorldAimMarkerLogged = true;
+                }
+                if (!m_WorldAimMarkerCadenceLogged && frameInterval >= 0.005f) {
+                    Logger::Write("Experimental world aim marker cadence: updateInterval=" +
+                        std::to_string(frameInterval) + "s overlayLifetime=" +
+                        std::to_string(lifetime) + "s (not HMD refresh rate)");
+                    m_WorldAimMarkerCadenceLogged = true;
+                }
             }
-        } else if (portalPlayer->m_PointLaser) {
+        }
+        const bool requestLaser = !worldMarker && beamOrigin && AimFeedback::ShouldRequestLaser(
+            m_AimMode, m_Game->m_Offsets->m_LaserAvailable,
+            m_RightControllerPose.valid, activeWeaponAddr != 0,
+            m_Game->m_VguiSurface->IsCursorVisible());
+        if (requestLaser) {
+            CWeaponPortalBase* activeWeapon = (CWeaponPortalBase*)activeWeaponAddr;
+            if (!portalPlayer->m_PointLaser) {
+                if (!m_LaserRequestLogged) {
+                    Logger::Write("Controller laser creation requested; crosshair paint state is no longer a prerequisite");
+                    m_LaserRequestLogged = true;
+                }
+                m_Game->m_Hooks->CreateNativeAimPointer(localPlayer, m_AimPos);
+            }
+            // Apply control points on the creation frame too. Source may use a
+            // player-owned ABSORIGIN branch: the native updater skips CP0 after
+            // initialization instead of replacing it with EyePosition each frame.
+            if (portalPlayer->m_PointLaser) {
+                Hooks::m_NativeBeamRenderProbe.SetEffect(
+                    reinterpret_cast<std::uintptr_t>(portalPlayer->m_PointLaser));
+                if (!m_LaserParticleObserved) {
+                    Logger::Write("Controller laser particle pointer observed; actual visibility unverified");
+                    m_LaserParticleObserved = true;
+                }
+                const auto portalColor = NativeBeam::ControlPointColor(activeWeapon->m_iLastFiredPortal,
+                    m_Game->m_singlePlayerPortalColors);
+                portalPlayer->m_PointLaser->SetControlPoint(0, *beamOrigin);
+                portalPlayer->m_PointLaser->SetControlPoint(1, m_AimPos);
+                portalPlayer->m_PointLaser->SetControlPoint(2, portalColor);
+                if (m_RenderDiagnostics.First(RenderDiagnosticEvent::LaserControlPoints)) {
+                    Logger::Write(std::string("Controller laser control points updated: originMode=") +
+                        (m_Config.aimFromViewmodelMuzzle ? "viewmodelMuzzle" : "controller") + " originCP0=" +
+                        std::to_string(beamOrigin->x) + "," + std::to_string(beamOrigin->y) +
+                        "," + std::to_string(beamOrigin->z) + " targetCP1=" +
+                        std::to_string(m_AimPos.x) + "," + std::to_string(m_AimPos.y) +
+                        "," + std::to_string(m_AimPos.z) +
+                        " colorCP2=" + std::to_string(portalColor.x) + "," +
+                        std::to_string(portalColor.y) + "," + std::to_string(portalColor.z) +
+                        "; originCP0 and targetCP1 updated; actual visibility unverified");
+                }
+            }
+        } else if (m_Game->m_Offsets->m_LaserAvailable && portalPlayer->m_PointLaser) {
             portalPlayer->m_PointLaser->StopEmission(false, true, false);
             portalPlayer->m_PointLaser = NULL;
         }
+    } else {
+        ResetMuzzleSample();
+    }
+}
+
+void VR::ObserveRoomscaleCommand(int commandNumber)
+{
+    if (m_Config.roomscaleMode == RoomscaleMotion::Mode::Off)
+        return;
+    if (!m_Game->m_EngineClient->IsInGame()) {
+        m_RoomscaleObserver.Reset(true);
+        return;
+    }
+    const int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
+    const bool gameplayEligible = m_IsVREnabled && m_HmdPose.valid &&
+        m_Game->m_EngineClient->IsInGame() && !m_Game->m_VguiSurface->IsCursorVisible() &&
+        playerIndex > 0 && m_Game->GetClientEntity(playerIndex) != nullptr;
+    (void)m_RoomscaleObserver.OnCommand(commandNumber, gameplayEligible);
+}
+
+bool VR::RoomscaleEnabled() const
+{
+    return m_Config.roomscaleMode == RoomscaleMotion::Mode::ActiveExperimental &&
+        m_6DOF && !ExperimentalPortalOrientation();
+}
+
+bool VR::RoomscaleEligible() const
+{
+    const int index = m_Game->m_EngineClient->GetLocalPlayer();
+    return RoomscaleMotion::Eligibility{
+        m_6DOF, m_IsVREnabled && m_TrackingOutputValid && m_HmdPose.valid,
+        !ExperimentalPortalOrientation(), m_Game->m_EngineClient->IsInGame(),
+        m_Game->m_VguiSurface->IsCursorVisible(),
+        index > 0 && m_Game->GetClientEntity(index) != nullptr}.Allowed();
+}
+
+void VR::ResetRoomscale(bool recenter, bool newCommandStream)
+{
+    m_RoomscaleObserver.Reset(newCommandStream);
+    m_RoomscaleMotor.Reset(recenter, newCommandStream);
+}
+
+Vector VR::GetHmdViewOffset()
+{
+    return RoomscaleEnabled() ? m_RoomscaleMotor.ViewOffset(m_HmdPosRelative) : m_HmdPosRelative;
+}
+
+void VR::UpdateRoomscaleRenderAnchor(const Vector &sourceAnchor)
+{
+    if (m_Config.roomscaleMode != RoomscaleMotion::Mode::ActiveExperimental)
+        return;
+    const bool eligible = RoomscaleEligible();
+    const auto now = std::chrono::steady_clock::now();
+    if (!m_LastRoomscaleEligibility || *m_LastRoomscaleEligibility != eligible) {
+        if (now >= m_NextRoomscaleEligibilityLog) {
+            Logger::Write(eligible ?
+                "Roomscale active experimental: render feedback ready; view-anchor proxy, collision behavior unverified" :
+                "Roomscale active experimental suspended: requires 6DOF, LegacyYaw, valid HMD and local gameplay without cursor");
+            m_NextRoomscaleEligibilityLog = now + std::chrono::seconds(5);
+        }
+        m_LastRoomscaleEligibility = eligible;
+    }
+    if (!eligible) {
+        m_RoomscaleMotor.Reset(false, !m_Game->m_EngineClient->IsInGame());
+        return;
+    }
+    const int index = m_Game->m_EngineClient->GetLocalPlayer();
+    auto *player = (C_BasePlayer*)m_Game->GetClientEntity(index);
+    m_SetupOrigin = sourceAnchor;
+    (void)m_RoomscaleMotor.OnRender(sourceAnchor, m_HmdPosRelative,
+        m_PoseFetchSequence, reinterpret_cast<std::uintptr_t>(player), m_VRScale, now);
+    // Rebuild the beam/trace after compensation, before either eye uses it.
+    UpdateAimFeedback(player);
+}
+
+std::optional<TrackingSpace::MoveAxes> VR::GetRoomscaleCommand(int commandNumber, bool manualMovement)
+{
+    if (m_Config.roomscaleMode != RoomscaleMotion::Mode::ActiveExperimental)
+        return std::nullopt;
+    if (!RoomscaleEligible()) {
+        m_RoomscaleMotor.Reset(false, !m_Game->m_EngineClient->IsInGame());
+        return std::nullopt;
+    }
+    return m_RoomscaleMotor.OnCommand(commandNumber, m_HmdForward, manualMovement,
+                                     std::chrono::steady_clock::now());
+}
+
+bool VR::ExperimentalPortalOrientation() const
+{
+    return m_ActivePortalMode != PortalOrientation::Mode::LegacyYaw;
+}
+
+void VR::QueuePortalTraversal(std::uintptr_t playerKey, std::uintptr_t portalKey,
+                              const std::optional<PortalOrientation::Rotation> &rotation)
+{
+    if (!ExperimentalPortalOrientation())
+        return;
+    if (!rotation) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= m_NextPortalEventLog) {
+            Logger::Write("Experimental portal orientation: invalid portal transform; event ignored");
+            m_NextPortalEventLog = now + std::chrono::seconds(5);
+        }
+        return;
+    }
+    const auto queued = m_PortalCoordinator.Queue(playerKey, portalKey, *rotation);
+    if (queued == PortalOrientation::QueueResult::Queued)
+        Logger::Write("Experimental portal orientation: local crossing queued");
+    else if (queued == PortalOrientation::QueueResult::Full) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= m_NextPortalEventLog) {
+            Logger::Write("Experimental portal orientation: event queue full; crossing ignored");
+            m_NextPortalEventLog = now + std::chrono::seconds(5);
+        }
+    }
+}
+
+void VR::ResetPortalOrientation()
+{
+    m_PortalCoordinator.Reset();
+    m_PortalRigAnchor.Reset();
+    m_PortalEffectiveRotation = PortalOrientation::Rotation::Identity();
+}
+
+void VR::ApplyPendingPortalOrientation(const Vector &renderOrigin)
+{
+    if (!ExperimentalPortalOrientation())
+        return;
+    if (!m_Game->m_EngineClient->IsInGame()) {
+        ResetPortalOrientation();
+        m_TrackingOutputValid = false;
+        return;
+    }
+    const int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
+    C_BasePlayer* player = playerIndex > 0 ?
+        (C_BasePlayer*)m_Game->GetClientEntity(playerIndex) : nullptr;
+    if (!player) {
+        ResetPortalOrientation();
+        m_TrackingOutputValid = false;
+        return;
+    }
+    if (playerIndex != m_EyeHeightPlayerIndex || player != m_EyeHeightPlayerEntity) {
+        ResetPortalOrientation();
+        m_SetupOrigin = renderOrigin;
+        UpdateTracking();
+        return;
+    }
+    if (!m_HmdPose.valid || !m_TrackingOutputValid ||
+        m_Game->m_VguiSurface->IsCursorVisible()) {
+        m_PortalCoordinator.CancelPending();
+        return;
+    }
+    const auto frame = m_PortalCoordinator.Drain(reinterpret_cast<std::uintptr_t>(player));
+    if (frame.playerChanged) {
+        ResetPortalOrientation();
+        m_SetupOrigin = renderOrigin;
+        UpdateTracking();
+        return;
+    }
+    if (!frame.applied)
+        return;
+    const Vector baseOffset = m_Playspace.HmdOffsetUnits(
+        m_HmdPose.TrackedDevicePos, m_LastEyeHeightUnits);
+    m_PortalRigAnchor.Reanchor(baseOffset, m_HmdPosRelative);
+    m_PortalEffectiveRotation = frame.effective;
+    ResetRoomscale();
+    m_SetupOrigin = renderOrigin; // traces rebuilt below must use the teleported render origin
+    UpdateTracking(); // rebuild head and hands from the same pose before either eye is rendered
+    Logger::Write("Experimental portal orientation: applied " +
+        std::to_string(frame.applied) + " crossing(s) before stereo render");
+}
+
+void VR::ApplyPortalRigToDerivedPose()
+{
+    if (!ExperimentalPortalOrientation() || !m_TrackingOutputValid)
+        return;
+    const auto &rotation = m_PortalEffectiveRotation;
+    m_HmdPosRelative = m_PortalRigAnchor.MapHmd(m_HmdPosRelative, rotation);
+    m_HmdForward = rotation.Rotate(m_HmdForward);
+    m_HmdRight = rotation.Rotate(m_HmdRight);
+    m_HmdUp = rotation.Rotate(m_HmdUp);
+    QAngle::VectorAngles(m_HmdForward, m_HmdUp, m_HmdAngAbs);
+    m_HmdAngAbs.Normalize();
+    if (m_LeftControllerOutputValid) {
+        m_LeftControllerPosRel = m_PortalRigAnchor.MapRelative(m_LeftControllerPosRel, rotation);
+        m_LeftControllerForward = rotation.Rotate(m_LeftControllerForward);
+        m_LeftControllerRight = rotation.Rotate(m_LeftControllerRight);
+        m_LeftControllerUp = rotation.Rotate(m_LeftControllerUp);
+        QAngle::VectorAngles(m_LeftControllerForward, m_LeftControllerUp,
+                             m_LeftControllerAngAbs);
+        m_LeftControllerAngAbs.Normalize();
+    }
+    if (m_RightControllerPose.valid) {
+        m_RightControllerPosRel = m_PortalRigAnchor.MapRelative(m_RightControllerPosRel, rotation);
+        m_RightControllerForward = rotation.Rotate(m_RightControllerForward);
+        m_RightControllerRight = rotation.Rotate(m_RightControllerRight);
+        m_RightControllerUp = rotation.Rotate(m_RightControllerUp);
+        QAngle::VectorAngles(m_RightControllerForward, m_RightControllerUp,
+                             m_RightControllerAngAbs);
+        m_RightControllerAngAbs.Normalize();
+        m_ViewmodelForward = rotation.Rotate(m_ViewmodelForward);
+        m_ViewmodelRight = rotation.Rotate(m_ViewmodelRight);
+        m_ViewmodelUp = rotation.Rotate(m_ViewmodelUp);
     }
 }
 
@@ -1274,7 +1915,7 @@ Vector VR::GetViewOrigin(Vector setupOrigin)
     Vector center = setupOrigin;
 
     if (m_6DOF)
-        center += m_HmdPosRelative;
+        center += GetHmdViewOffset();
 
     return center + (m_HmdForward * -(m_EyeZ * m_VRScale));
 }
@@ -1295,7 +1936,7 @@ Vector VR::GetViewOriginRight(Vector setupOrigin)
     return viewOriginRight;
 }
 
-Vector VR::Trace(uint32_t* localPlayer) {
+Vector VR::Trace(uint32_t* localPlayer, bool &didHit) {
     Vector vecStart = GetRightControllerAbsPos();
     Vector vecEnd = vecStart + m_RightControllerForward * MAX_TRACE_LENGTH;
 
@@ -1307,6 +1948,7 @@ Vector VR::Trace(uint32_t* localPlayer) {
 
     m_Game->m_EngineTrace->TraceRay(ray, MASK_SHOT | MASK_SHOT_HULL, &tracefilter, &trace);
 
+    didHit = trace.DidHit();
     return trace.endpos;
 }
 
@@ -1500,23 +2142,114 @@ void VR::ParseConfigFile()
         Logger::Write("Config: AntiAliasing change requires a restart; keeping current value");
         parsed.value.antiAliasing = m_AntiAliasing;
     }
+    if (m_IsInitialized && parsed.value.trackingMode != m_Playspace.mode) {
+        Logger::Write("Config: TrackingMode change requires restart; keeping active compositor origin");
+        parsed.value.trackingMode = m_Playspace.mode;
+    }
+    if (m_IsInitialized && parsed.value.experimentalViewmodelAlignment != m_Config.experimentalViewmodelAlignment) {
+        Logger::Write("Config: ExperimentalViewmodelAlignment change requires restart; keeping current hook group");
+        parsed.value.experimentalViewmodelAlignment = m_Config.experimentalViewmodelAlignment;
+    }
+    if (m_IsInitialized && parsed.value.aimFromViewmodelMuzzle != m_Config.aimFromViewmodelMuzzle) {
+        Logger::Write("Config: AimFromViewmodelMuzzle change requires restart; keeping current sampler");
+        parsed.value.aimFromViewmodelMuzzle = m_Config.aimFromViewmodelMuzzle;
+    }
+    if (m_IsInitialized && parsed.value.portalOrientationMode != m_ActivePortalMode) {
+        Logger::Write("Config: PortalOrientationMode change requires restart; keeping active mode");
+        parsed.value.portalOrientationMode = m_ActivePortalMode;
+    }
+    if (m_IsInitialized && parsed.value.roomscaleMode != m_Config.roomscaleMode &&
+        (parsed.value.roomscaleMode == RoomscaleMotion::Mode::ActiveExperimental ||
+         m_Config.roomscaleMode == RoomscaleMotion::Mode::ActiveExperimental)) {
+        Logger::Write("Config: entering/leaving ActiveExperimental roomscale requires restart; keeping active mode");
+        parsed.value.roomscaleMode = m_Config.roomscaleMode;
+    }
+    if (m_IsInitialized &&
+        (parsed.value.experimentalHudOverlay != m_Config.experimentalHudOverlay ||
+         parsed.value.hudDistanceMeters != m_Config.hudDistanceMeters ||
+         parsed.value.hudWidthMeters != m_Config.hudWidthMeters ||
+         parsed.value.hudVerticalOffsetMeters != m_Config.hudVerticalOffsetMeters)) {
+        Logger::Write("Config: HUD overlay settings require restart; keeping active geometry");
+        parsed.value.experimentalHudOverlay = m_Config.experimentalHudOverlay;
+        parsed.value.hudDistanceMeters = m_Config.hudDistanceMeters;
+        parsed.value.hudWidthMeters = m_Config.hudWidthMeters;
+        parsed.value.hudVerticalOffsetMeters = m_Config.hudVerticalOffsetMeters;
+    }
+    if (m_IsInitialized && m_VRScale != parsed.value.vrScale)
+        Logger::Write("Config: VRScale change staged until recenter");
+    if (m_IsInitialized && m_Playspace.heightOffsetMeters != parsed.value.heightOffsetMeters)
+        Logger::Write("Config: HeightOffsetMeters change staged until recenter");
     m_Config = parsed.value;
+    if (!m_Config.experimentalPortalShotHaptics)
+        m_PortalShotHapticGate.Clear();
+    if (!m_IsInitialized) {
+        m_ActivePortalMode = m_Config.portalOrientationMode;
+        m_PortalCoordinator.SetMode(m_ActivePortalMode);
+        if (ExperimentalPortalOrientation())
+            Logger::Write("EXPERIMENTAL portal orientation enabled; hardware alignment is unverified");
+    }
+    if (m_RoomscaleObserver.SetMode(m_Config.roomscaleMode)) {
+        m_RoomscaleMotor.Reset(true);
+        Logger::Write(m_Config.roomscaleMode == RoomscaleMotion::Mode::ActiveExperimental ?
+            "RoomscaleMode=ActiveExperimental: CUserCmd movement prototype; LegacyYaw + 6DOF required; hardware/collision unverified" :
+            m_Config.roomscaleMode == RoomscaleMotion::Mode::Observe ?
+            "RoomscaleMode=Observe: diagnostics only; physical movement is disabled" :
+            "RoomscaleMode=Off: roomscale diagnostics disabled");
+    }
     m_SnapTurning = m_Config.snapTurning;
     m_SnapTurnAngle = m_Config.snapTurnAngle;
     m_TurnSpeed = m_Config.turnSpeed;
     m_LeftHanded = m_Config.leftHanded;
-    m_VRScale = m_Config.vrScale;
+    if (!m_IsInitialized)
+        m_VRScale = m_Config.vrScale;
+    if (!m_IsInitialized) {
+        m_Playspace.mode = m_Config.trackingMode;
+        m_Playspace.heightOffsetMeters = m_Config.heightOffsetMeters;
+        m_Playspace.scale = m_VRScale;
+    }
     m_IpdScale = m_Config.ipdScale;
+    const bool wasSixDof = m_6DOF;
     m_6DOF = m_Config.sixDof;
+    if (m_Playspace.mode == TrackingSpace::TrackingMode::Standing &&
+        m_6DOF && !wasSixDof)
+        m_HasEyeHeight = false;
+    const bool standingHeightInactive =
+        m_Playspace.mode == TrackingSpace::TrackingMode::Standing && !m_6DOF;
+    if (standingHeightInactive != m_StandingHeightInactiveLogged) {
+        Logger::Write(standingHeightInactive ?
+            "Config: Standing height and HeightOffsetMeters are inactive while 6DOF=false" :
+            "Config: Standing height placement active again");
+        m_StandingHeightInactiveLogged = standingHeightInactive;
+    }
     m_AimMode = m_Config.aimMode;
+    if (m_Config.experimentalWorldAimMarker && !m_Game->m_DebugOverlay)
+        Logger::Write("Experimental world aim marker unavailable: VDebugOverlay004 missing; legacy particle retained");
     m_AntiAliasing = m_Config.antiAliasing;
     m_RenderWindow = m_Config.renderWindow;
     m_ViewmodelPosCustomOffset = {m_Config.viewmodelPosOffset[0], m_Config.viewmodelPosOffset[1], m_Config.viewmodelPosOffset[2]};
     m_ViewmodelAngCustomOffset = {m_Config.viewmodelAngOffset[0], m_Config.viewmodelAngOffset[1], m_Config.viewmodelAngOffset[2]};
-    Logger::Write("Config applied: TurnSpeed=" + std::to_string(m_TurnSpeed) +
+    Logger::Write("Config applied: VerboseDiagnostics=" + std::to_string(m_Config.verboseDiagnostics) +
+        " TurnSpeed=" + std::to_string(m_TurnSpeed) +
         " SnapTurnAngle=" + std::to_string(m_SnapTurnAngle) +
         " VRScale=" + std::to_string(m_VRScale) +
         " IPDScale=" + std::to_string(m_IpdScale) +
         " AimMode=" + std::to_string(m_AimMode) +
-        " AntiAliasing=" + std::to_string(m_AntiAliasing));
+        " ExperimentalWorldAimMarker=" +
+        std::to_string(m_Config.experimentalWorldAimMarker) +
+        " ExperimentalStereoReticle=" + std::to_string(m_Config.experimentalStereoReticle) +
+        " ReticleDistanceScaling=" + std::to_string(m_Config.reticleDistanceScaling) +
+        " AntiAliasing=" + std::to_string(m_AntiAliasing) +
+        " ExperimentalHUDOverlay=" + std::to_string(m_Config.experimentalHudOverlay) +
+        " ExperimentalViewmodelAlignment=" + std::to_string(m_Config.experimentalViewmodelAlignment) +
+        " AimFromViewmodelMuzzle=" + std::to_string(m_Config.aimFromViewmodelMuzzle) +
+        " ExperimentalPortalShotHaptics=" +
+        std::to_string(m_Config.experimentalPortalShotHaptics) +
+        " ViewmodelPosCustomOffset=" +
+        std::to_string(m_ViewmodelPosCustomOffset.x) + "," +
+        std::to_string(m_ViewmodelPosCustomOffset.y) + "," +
+        std::to_string(m_ViewmodelPosCustomOffset.z) +
+        " EffectiveViewmodelPosOffset=" +
+        std::to_string(kLegacyViewmodelPositionOffset.x + m_ViewmodelPosCustomOffset.x) + "," +
+        std::to_string(kLegacyViewmodelPositionOffset.y + m_ViewmodelPosCustomOffset.y) + "," +
+        std::to_string(kLegacyViewmodelPositionOffset.z + m_ViewmodelPosCustomOffset.z));
 }

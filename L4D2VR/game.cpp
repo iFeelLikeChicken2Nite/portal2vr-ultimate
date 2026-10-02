@@ -75,8 +75,8 @@ bool Game::Initialize()
     m_ClientEntityList = (IClientEntityList *)GetInterface("client.dll", "VClientEntityList003");
     m_EngineTrace = (IEngineTrace *)GetInterface("engine.dll", "EngineTraceClient004");
     m_EngineClient = (IEngineClient *)GetInterface("engine.dll", "VEngineClient015");
+    m_DebugOverlay = (IVDebugOverlay *)GetInterface("engine.dll", "VDebugOverlay004");
     m_MaterialSystem = (IMaterialSystem *)GetInterface("MaterialSystem.dll", "VMaterialSystem080");
-    m_ClientViewRender = (IViewRender *)GetInterface("client.dll", "VEngineRenderView013");
     m_EngineViewRender = (IViewRender *)GetInterface("engine.dll", "VEngineRenderView013");
     m_ModelInfo = (IModelInfo *)GetInterface("engine.dll", "VModelInfoClient004");
     m_ModelRender = (IModelRender *)GetInterface("engine.dll", "VEngineModel016");
@@ -84,7 +84,7 @@ bool Game::Initialize()
     m_VguiSurface = (ISurface *)GetInterface("vguimatsurface.dll", "VGUI_Surface031");
 
     if (!m_ClientEntityList || !m_EngineTrace || !m_EngineClient || !m_MaterialSystem ||
-        !m_ClientViewRender || !m_EngineViewRender || !m_ModelInfo || !m_ModelRender ||
+        !m_EngineViewRender || !m_ModelInfo || !m_ModelRender ||
         !m_VguiInput || !m_VguiSurface) {
         errorMsg("A required Portal 2 Source interface is unavailable; see portal2vr.log.");
         return false;

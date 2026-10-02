@@ -6,6 +6,7 @@
 #include "vr.h"
 #include "sdk.h"
 #include "logger.h"
+#include "runtime_publication.h"
 #include <exception>
 #include <string>
 
@@ -43,19 +44,18 @@ DWORD WINAPI InitL4D2VR(HMODULE hModule)
         return 0;
     }
 
+    Game *candidate = nullptr;
     try {
-        g_Game = new Game();
-        if (g_Game->Initialize())
+        candidate = new Game();
+        if (candidate->Initialize() &&
+            Portal2VRRuntime::PublishInitialized(g_Game, candidate))
             return 0;
     } catch (const std::exception &error) {
         Game::errorMsg((std::string("Portal2VR initialization failed: ") + error.what()).c_str());
     } catch (...) {
         Game::errorMsg("Portal2VR initialization failed with an unexpected error.");
     }
-    if (g_Game) {
-        delete g_Game;
-        g_Game = nullptr;
-    }
+    delete candidate;
     Logger::Write("Portal2VR initialization stopped; DXVK proxy remains loaded.");
 
     return 0;

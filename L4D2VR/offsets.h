@@ -40,6 +40,24 @@ public:
     Offset RenderView =                  { "client.dll", 0x1F2120, "55 8B EC 83 EC 2C 53 56 8B F1 6A 00 8D 8E ? ? ? ? E8 ? ? ? ?" };
     Offset g_pClientMode =               { "client.dll", 0x28A600, "8B 0D ? ? ? ? 8B", 2 };
     Offset CalcViewModelView =           { "client.dll", 0x27D750, "55 8B EC 83 EC 34 53 8B D9 80 BB" };
+    // Optional alignment group, identified offline in client.dll timestamp
+    // 0x6AA07473. These are functions, not guessed entity-layout writes.
+    Offset DrawViewModels = { "client.dll", 0x1F2090, "55 8B EC 81 EC 74 05 00 00 53 56 8B 75 08 57 8B F9 8B 0D ? ? ? ? 56 89 7D F4 E8" };
+    Offset ViewmodelCalcView = { "client.dll", 0x51030, "55 8B EC 83 EC 74 8B 45 10 F3 0F 7E 00 53 56 8B F1 8B 48 08 8B 45 0C" };
+    // cdecl: (C_BasePlayer *owner, Vector &origin, bool inverse), not thiscall.
+    Offset FormatViewModelAttachment = { "client.dll", 0x951E0, "55 8B EC 8B 45 08 83 EC 28 53 56 57 33 FF 85 C0 74 20 50 E8" };
+    Offset SetViewmodelLocalOrigin = { "client.dll", 0x6DB60, "55 8B EC 56 57 8B 7D 08 F3 0F 10 07 8B F1 0F 2E 86 A8 00 00 00" };
+    Offset SetViewmodelLocalAngles = { "client.dll", 0x6DC40, "55 8B EC 56 57 8B 7D 08 F3 0F 10 07 8B F1 0F 2E 86 CC 00 00 00" };
+    Offset ViewmodelScreenAspect = { "engine.dll", 0x7AB80, "55 8B EC 8B 45 0C 8B 4D 08 50 51 E8 ? ? ? ? 83 C4 08 5D C2 08 00 CC CC CC CC CC CC CC CC CC 55 8B EC E8" };
+    // Separate optional passive muzzle sampler, verified on the same client.
+    // Model formatter: primary thiscall (zero-based attachment, matrix&), NOT
+    // GetAttachment (which forces SetupBones). Lookup takes IClientRenderable
+    // this = primary+4, as confirmed by native CreatePingPointer at 0x2808A3.
+    Offset ViewmodelFormatAttachment = { "client.dll", 0x95470, "55 8B EC 8B 01 8B 90 94 03 00 00 83 EC 0C 56 FF D2 8B F0 85 F6 74 14" };
+    Offset LookupViewmodelAttachment = { "client.dll", 0x514B0, "55 8B EC 51 8B 55 08 8B 81 C8 0D 00 00 52 E8 ? ? ? ? 8B E5 5D C2 04 00" };
+    Offset GetViewmodelOwner = { "client.dll", 0x51720, "8B 89 D0 0D 00 00 83 F9 FF 74 1E 8B 15 ? ? ? ? 8B C1 25 FF FF 00 00 03 C0" };
+    Offset GetViewmodelAbsOrigin = { "client.dll", 0x741D0, "56 8B F1 E8 ? ? ? ? 8D 86 9C 00 00 00 5E C3" };
+    Offset GetViewmodelAbsAngles = { "client.dll", 0x741E0, "56 8B F1 E8 ? ? ? ? 8D 86 C0 00 00 00 5E C3" };
     Offset CreateMove =                  { "client.dll", 0x27A440, "55 8B EC A1 ? ? ? ? 83 EC 0C 83 78 30 00 56 8B 75 0C 57 8B F9 74 43" };
 
     //Offset WriteUsercmdDeltaToBuffer =   { "client.dll", 0x134790, "55 8B EC 83 EC 60 0F 57 C0 8B 55 0C" }; //
@@ -57,7 +75,9 @@ public:
     /*Offset GetRenderTarget =             { "materialsystem.dll", 0x2CD30, "83 79 4C 00" };
     Offset Viewport =                    { "materialsystem.dll", 0x2E010, "55 8B EC 8B 45 0C 53 8B 5D" };
     Offset GetViewport =                 { "materialsystem.dll", 0x2CAF0, "55 8B EC 8B 41 4C 8B 49 40 8D 04 C0 83 7C 81 ? ?" };*/
-    Offset PushRenderTargetAndViewport = { "materialsystem.dll", 0x2D5F0, "55 8B EC 83 EC 24 8B 45 08 8B 55 10 89" };
+    // Include the six-argument variant's local stores: the shorter prefix also
+    // matches a five-argument overload and can hook the wrong ABI.
+    Offset PushRenderTargetAndViewport = { "materialsystem.dll", 0x2D5F0, "55 8B EC 83 EC 24 8B 45 08 8B 55 10 89 45 DC 33 C0" };
     Offset PopRenderTargetAndViewport =  { "materialsystem.dll", 0x2CE80, "56 8B F1 83 7E 4C 00" };
 
     //Offset TraceFirePortalClient =       { "client.dll", 0x3E0980, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 57 8B F1 6A" };
@@ -152,6 +172,7 @@ public:
             { "EyeAngles", &EyeAngles, true }, { "EyePosition", &EyePosition, true },
             { "Weapon_ShootPosition", &Weapon_ShootPosition, true },
             { "DrawSelf", &DrawSelf, true },
+            { "ClipTransform", &ClipTransform, true },
             { "UpdateObject", &UpdateObject, true }, { "UpdateObjectVM", &UpdateObjectVM, true },
             { "GetDefaultFOV", &GetDefaultFOV, true }, { "GetFOV", &GetFOV, true },
             { "GetViewModelFOV", &GetViewModelFOV, true },
