@@ -1569,6 +1569,7 @@ void VR::UpdateTracking()
 void VR::ResetMuzzleSample()
 {
     m_MuzzleSample.Reset();
+    Hooks::m_NativeBeamRenderProbe.SetEffect(0);
 }
 
 void VR::CaptureViewmodelMuzzle(const Vector &world, const Vector &modelOrigin, const QAngle &modelAngles)
@@ -1603,6 +1604,7 @@ std::optional<Vector> VR::GetAimBeamOrigin()
 
 void VR::UpdateAimFeedback(C_BasePlayer *localPlayer)
 {
+    Hooks::m_NativeBeamRenderProbe.SetEffect(0);
     if (!localPlayer || !m_TrackingOutputValid || !m_RightControllerPose.valid) {
         ResetMuzzleSample();
         return;
@@ -1667,9 +1669,11 @@ void VR::UpdateAimFeedback(C_BasePlayer *localPlayer)
                 m_Game->m_Hooks->CreateNativeAimPointer(localPlayer, m_AimPos);
             }
             // Apply control points on the creation frame too. Source may use a
-            // player-owned world-origin branch, so engine attachment updates
-            // cannot overwrite CP0 with a separately projected viewmodel pose.
+            // player-owned ABSORIGIN branch: the native updater skips CP0 after
+            // initialization instead of replacing it with EyePosition each frame.
             if (portalPlayer->m_PointLaser) {
+                Hooks::m_NativeBeamRenderProbe.SetEffect(
+                    reinterpret_cast<std::uintptr_t>(portalPlayer->m_PointLaser));
                 if (!m_LaserParticleObserved) {
                     Logger::Write("Controller laser particle pointer observed; actual visibility unverified");
                     m_LaserParticleObserved = true;

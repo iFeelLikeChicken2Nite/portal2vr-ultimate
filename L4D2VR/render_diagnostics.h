@@ -51,7 +51,8 @@ enum class RenderDiagnosticEvent : std::size_t
     NativeReticleDraw,
     NativeReticleUnavailable,
     NativeReticleCaptureSuppressed,
-    NativeBeamWorldOrigin,
+    NativeBeamPlayerOwned,
+    NativeBeamManualOrigin,
     Count
 };
 

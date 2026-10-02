@@ -4,6 +4,7 @@
 #include "bitbuf.h"
 #include "logger.h"
 #include "hud_capture.h"
+#include "native_beam.h"
 
 class Game;
 class VR;
@@ -145,6 +146,8 @@ typedef double(__cdecl* tGetFOV)(void*& thisptr);
 typedef double(__cdecl* tGetViewModelFOV)(void*& thisptr);
 
 typedef void(__thiscall* tCreatePingPointer)(void* thisptr, Vector vecDestintaion);
+typedef void *(__thiscall* tCreateBeamParticle)(void*, const char*, int, int, Vector, int);
+typedef int(__thiscall* tDrawBeamParticle)(void*, int, const void*);
 typedef void(__thiscall* tSetDrawOnlyForSplitScreenUser)(void* thisptr, int nSlot);
 typedef void(__thiscall* tClientThink)(void* thisptr);
 typedef void*(__cdecl* tGetPortalPlayer)(int index);
@@ -183,8 +186,12 @@ public:
     static inline thread_local bool m_ControllerViewmodelUpdate = false;
     bool m_ViewmodelAlignmentReady = false;
     bool m_MuzzleSamplingReady = false;
-    bool m_NativeWorldBeamReady = false;
+    bool m_NativeBeamManualOriginReady = false;
+    bool m_NativeBeamDiagnosticsReady = false;
     static inline Hook<tLookupViewmodelAttachment> hkBeamAttachmentLookup;
+    static inline Hook<tCreateBeamParticle> hkCreateBeamParticle;
+    static inline Hook<tDrawBeamParticle> hkDrawBeamParticle;
+    static inline NativeBeam::RenderProbe m_NativeBeamRenderProbe;
     static inline thread_local std::uintptr_t m_NativeBeamLookupCaller = 0;
     static inline Hook<tViewmodelFormatAttachment> hkViewmodelFormatAttachment;
     static inline tLookupViewmodelAttachment LookupViewmodelAttachment = nullptr;
@@ -351,9 +358,12 @@ public:
 	static inline bool m_PushedHud;
 
 	static inline tCreatePingPointer CreatePingPointer;
-	void InitNativeWorldBeam();
+	void InitNativeBeam();
 	void CreateNativeAimPointer(void *player, const Vector &target);
 	static int __fastcall dBeamAttachmentLookup(void *ecx, void *, const char *name);
+	static void *__fastcall dCreateBeamParticle(void *ecx, void *, const char *name,
+		int attachType, int attachment, Vector offset, int flags);
+	static int __fastcall dDrawBeamParticle(void *ecx, void *, int flags, const void *instance);
 	static inline tGetPortalPlayer GetPortalPlayer;
 	static inline tPrecacheParticleSystem PrecacheParticleSystem;
 

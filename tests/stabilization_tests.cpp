@@ -1150,28 +1150,69 @@ int main()
                      "invalid negative portal color cannot index before the palette");
     expectVectorNear(NativeBeam::ControlPointColor(100, nativePortalColors), {255, 160, 32},
                      "invalid positive portal color cannot index past the palette");
-    expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x102808B3, "muzzle"), false,
+    expect(NativeBeam::UsePlayerOwnedFallback(beamLookupCaller, 0x102808B3, "muzzle"), false,
            "normal native attachment lookups are never changed");
     {
         NativeBeam::CreationScope scope(beamLookupCaller, 0x102808B3);
-        expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x102808B3, "muzzle"), true,
-               "only VR beam creation selects Source's player-owned world-origin branch");
-        expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x1028095C, "muzzle"), false,
+        expect(NativeBeam::UsePlayerOwnedFallback(beamLookupCaller, 0x102808B3, "muzzle"), true,
+               "only VR beam creation selects Source's player-owned fallback branch");
+        expect(NativeBeam::UsePlayerOwnedFallback(beamLookupCaller, 0x1028095C, "muzzle"), false,
                "nested model lookups retain normal muzzle attachments");
-        expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x102808B3, "light"), false,
+        expect(NativeBeam::UsePlayerOwnedFallback(beamLookupCaller, 0x102808B3, "light"), false,
                "gun light attachments are never overridden");
-        expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x102808B3, nullptr), false,
+        expect(NativeBeam::UsePlayerOwnedFallback(beamLookupCaller, 0x102808B3, nullptr), false,
                "null attachment names are not dereferenced");
         {
             NativeBeam::CreationScope nested(beamLookupCaller, 0x102908B3);
-            expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x102908B3, "muzzle"), true,
+            expect(NativeBeam::UsePlayerOwnedFallback(beamLookupCaller, 0x102908B3, "muzzle"), true,
                    "nested scope selects its own native caller");
         }
-        expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x102808B3, "muzzle"), true,
+        expect(NativeBeam::UsePlayerOwnedFallback(beamLookupCaller, 0x102808B3, "muzzle"), true,
                "nested creation restores the previous scope");
     }
-    expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x102808B3, "muzzle"), false,
+    expect(NativeBeam::UsePlayerOwnedFallback(beamLookupCaller, 0x102808B3, "muzzle"), false,
            "beam creation immediately restores normal attachment behavior");
+    expectInt(NativeBeam::FactoryAttachment(0x102808B3, 0x10280900, "robot_point_beam", 6, -1), 0,
+              "our beam must not retain the native eyes-follow CP0 binding");
+    expectInt(NativeBeam::FactoryAttachment(0, 0x10280900, "robot_point_beam", 6, -1), 6,
+              "native non-VR creation keeps its eyes-follow binding");
+    expectInt(NativeBeam::FactoryAttachment(0x102808B3, 0x10280901, "robot_point_beam", 6, -1), 6,
+              "unrelated particle creation callers are never changed");
+    expectInt(NativeBeam::FactoryAttachment(0x102808B3, 0x10280900, "portalgun_glow", 6, -1), 6,
+              "portal-gun glow and other systems retain their native attachments");
+    expectInt(NativeBeam::FactoryAttachment(0x102808B3, 0x10280900, nullptr, 6, -1), 6,
+              "null particle name cannot be dereferenced");
+    expectInt(NativeBeam::FactoryAttachment(0x102808B3, 0x10280900, "robot_point_beam", 5, 1), 5,
+              "normal point-follow effects cannot be changed by the CP0 policy");
+    expectInt(NativeBeam::FactoryAttachment(0x102808B3, 0x10280900, "robot_point_beam", 6, 0), 6,
+              "an unexpected attachment index cannot enable the manual CP0 route");
+    expectInt(NativeBeam::FactoryAttachment(UINTPTR_MAX, 0x4C, "robot_point_beam", 6, -1), 6,
+              "wrapped return-address arithmetic cannot admit unrelated creation");
+    NativeBeam::RenderProbe beamProbe;
+    expect(beamProbe.ObserveDraw(0x1008, 1), false, "unknown particle cannot be logged as our beam");
+    beamProbe.SetEffect(0x1000);
+    expect(beamProbe.ObserveDraw(0x1000, 1), false, "particle primary object is not its renderable subobject");
+    expect(beamProbe.ObserveDraw(0x1008, 1), true, "first beam draw in left-eye scope is recorded");
+    expect(beamProbe.ObserveDraw(0x1008, 1), false, "beam render diagnostic never logs every frame");
+    expect(beamProbe.ObserveDraw(0x1008, 2), true, "right-eye draw evidence is independent");
+    expect(beamProbe.ObserveDraw(0x1008, 0), true, "queued/outside-stereo draws are classified separately");
+    for (int i = 0; i < 119; ++i)
+        expect(beamProbe.StereoPairSummary().has_value(), false, "summary waits for a bounded render observation window");
+    const auto beamSummary = beamProbe.StereoPairSummary();
+    expect(beamSummary.has_value(), true, "beam render summary is emitted once after 120 stereo pairs");
+    if (beamSummary) expectInt(*beamSummary, 7, "summary retains left/right/outside-scope evidence");
+    expect(beamProbe.StereoPairSummary().has_value(), false, "beam render summaries are not periodic spam");
+    beamProbe.SetEffect(0);
+    expect(beamProbe.ObserveDraw(0x1008, 2), false, "cleared effect cannot identify reused particle storage");
+    NativeBeam::RenderProbe undrawnBeam;
+    expect(undrawnBeam.StereoPairSummary().has_value(), false, "no observation timeout before an effect exists");
+    undrawnBeam.SetEffect(UINTPTR_MAX);
+    expect(undrawnBeam.ObserveDraw(7, 1), false, "overflowed renderable offset cannot match a particle");
+    undrawnBeam.SetEffect(0x1000);
+    for (int i = 0; i < 119; ++i) (void)undrawnBeam.StereoPairSummary();
+    const auto missingDraw = undrawnBeam.StereoPairSummary();
+    expect(missingDraw.has_value(), true, "missing DrawModel is reported rather than hidden by the creation log");
+    if (missingDraw) expectInt(*missingDraw, 0, "unobserved native rendering is never reported as working");
     expect(AimFeedback::ClassifyReticleCanvas(1078, 1255, 56, 84, 1280, 720) ==
                AimFeedback::ReticleCanvasPosition::OutsideY, true,
            "eye-sized reticle below the reported Source canvas is diagnosed separately");

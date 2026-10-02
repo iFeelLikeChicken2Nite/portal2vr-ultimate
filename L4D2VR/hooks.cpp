@@ -461,11 +461,11 @@ Hooks::Hooks(Game *game)
 	}
     InitViewmodelAlignment();
     InitMuzzleSampling();
-    InitNativeWorldBeam();
+    InitNativeBeam();
 	m_Ready = true;
 }
 
-void Hooks::InitNativeWorldBeam()
+void Hooks::InitNativeBeam()
 {
     if (!m_Game->m_Offsets->m_LaserAvailable)
         return;
@@ -483,6 +483,15 @@ void Hooks::InitNativeWorldBeam()
     // Validate the exact indirect call/branch, not just a plausible prologue.
     constexpr std::array<std::uint8_t, 7> branch{0xFF, 0xD0, 0x6A, 0x00, 0x83, 0xF8, 0xFF};
     std::array<std::uint8_t, branch.size()> actual{};
+    constexpr std::array<std::uint8_t, 5> createCall{0xE8, 0x40, 0x2B, 0xEF, 0xFF};
+    constexpr std::array<std::uint8_t, 10> createEntry{0x55, 0x8B, 0xEC, 0x56, 0x57,
+        0x8B, 0x7D, 0x08, 0x8B, 0xF1};
+    // Exact audited CP updater: ABSORIGIN (0) returns when !initializing.
+    constexpr std::array<std::uint8_t, 17> updateRule{0x80, 0x7D, 0x10, 0x00, 0x75, 0x14,
+        0x8B, 0x46, 0x04, 0x85, 0xC0, 0x0F, 0x84, 0x4F, 0x02, 0x00, 0x00};
+    std::array<std::uint8_t, createCall.size()> actualCall{};
+    std::array<std::uint8_t, createEntry.size()> actualEntry{};
+    std::array<std::uint8_t, updateRule.size()> actualRule{};
     const bool compatible = module && offsets->LookupViewmodelAttachment.address &&
         read(module, &dos, sizeof(dos)) && dos.e_magic == IMAGE_DOS_SIGNATURE &&
         dos.e_lfanew > 0 && dos.e_lfanew <= 4096 &&
@@ -491,39 +500,85 @@ void Hooks::InitNativeWorldBeam()
         nt.FileHeader.TimeDateStamp == 0x6AA07473 && nt.OptionalHeader.SizeOfImage == 0xFF3000 &&
         offsets->CreatePingPointer.address == module + 0x280800 &&
         offsets->LookupViewmodelAttachment.address == module + 0x514B0 &&
-        read(caller - 2, actual.data(), actual.size()) && actual == branch;
+        read(caller - 2, actual.data(), actual.size()) && actual == branch &&
+        read(module + 0x2808FB, actualCall.data(), actualCall.size()) && actualCall == createCall &&
+        read(module + 0x173440, actualEntry.data(), actualEntry.size()) && actualEntry == createEntry &&
+        read(module + 0x172754, actualRule.data(), actualRule.size()) && actualRule == updateRule;
     if (!compatible) {
-        Logger::Write("Native world-origin beam route unavailable: audited client ABI mismatch; existing native creation retained");
+        Logger::Write("Native manual-origin beam route unavailable: audited client ABI mismatch; existing native creation retained");
         return;
     }
-    if (hkBeamAttachmentLookup.createHook(
-            reinterpret_cast<LPVOID>(offsets->LookupViewmodelAttachment.address), &dBeamAttachmentLookup) ||
-        hkBeamAttachmentLookup.enableHook()) {
-        Logger::Write("Native world-origin beam route unavailable: optional hook installation failed; existing native creation retained");
+    const bool lookupCreated = !hkBeamAttachmentLookup.createHook(
+        reinterpret_cast<LPVOID>(offsets->LookupViewmodelAttachment.address), &dBeamAttachmentLookup);
+    const bool createCreated = lookupCreated && !hkCreateBeamParticle.createHook(
+        reinterpret_cast<LPVOID>(module + 0x173440), &dCreateBeamParticle);
+    const bool createEnabled = createCreated && !hkCreateBeamParticle.enableHook();
+    const bool lookupEnabled = createEnabled && !hkBeamAttachmentLookup.enableHook();
+    if (!lookupEnabled) {
+        if (createEnabled) hkCreateBeamParticle.disableHook();
+        Logger::Write("Native manual-origin beam route unavailable: optional hook installation failed; existing native creation retained");
         return;
     }
-    m_NativeWorldBeamReady = true;
-    Logger::Write("Native robot_point_beam: player-owned world-origin creation available; animated muzzle CP0, native render visibility requires VR test");
+    m_NativeBeamManualOriginReady = true;
+    Logger::Write("Native robot_point_beam: player-owned ABSORIGIN creation; eyes-follow CP0 updates disabled for our beam only; visibility requires VR test");
+
+    constexpr std::array<std::uint8_t, 10> drawEntry{0x55, 0x8B, 0xEC, 0x83, 0xEC,
+        0x64, 0x53, 0x56, 0x8B, 0xF1};
+    std::array<std::uint8_t, drawEntry.size()> actualDraw{};
+    std::uintptr_t drawVtableEntry = 0;
+    // CNewParticleEffect renderable = primary+8, slot9, DrawModel(flags, instance).
+    m_NativeBeamDiagnosticsReady = read(module + 0x77E464 + 9 * 4, &drawVtableEntry, 4) &&
+        drawVtableEntry == module + 0x17C950 &&
+        read(drawVtableEntry, actualDraw.data(), actualDraw.size()) && actualDraw == drawEntry &&
+        !hkDrawBeamParticle.createHook(reinterpret_cast<LPVOID>(drawVtableEntry), &dDrawBeamParticle) &&
+        !hkDrawBeamParticle.enableHook();
+    Logger::Write(m_NativeBeamDiagnosticsReady ?
+        "Native beam DrawModel observation enabled (one record per eye scope + one bounded summary; no visibility claim)" :
+        "Native beam DrawModel observation unavailable; beam creation remains enabled");
 }
 
 void Hooks::CreateNativeAimPointer(void *player, const Vector &target)
 {
     if (!player || !CreatePingPointer)
         return;
-    NativeBeam::CreationScope scope(m_NativeBeamLookupCaller, m_NativeWorldBeamReady ?
+    NativeBeam::CreationScope scope(m_NativeBeamLookupCaller, m_NativeBeamManualOriginReady ?
         m_Game->m_Offsets->CreatePingPointer.address + NativeBeam::kMuzzleLookupReturnOffset : 0);
     CreatePingPointer(player, target);
 }
 
 int __fastcall Hooks::dBeamAttachmentLookup(void *ecx, void *, const char *name)
 {
-    if (NativeBeam::UseWorldOrigin(m_NativeBeamLookupCaller,
+    if (NativeBeam::UsePlayerOwnedFallback(m_NativeBeamLookupCaller,
             reinterpret_cast<std::uintptr_t>(_ReturnAddress()), name)) {
-        if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::NativeBeamWorldOrigin))
-            Logger::Write("Native beam creation selected Source's player-owned PATTACH_WORLDORIGIN branch; model/glow attachments unchanged");
+        if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::NativeBeamPlayerOwned))
+            Logger::Write("Native beam creation selected Source's player-owned fallback; model/glow attachments unchanged");
         return -1;
     }
     return hkBeamAttachmentLookup.fOriginal(ecx, name);
+}
+
+void *__fastcall Hooks::dCreateBeamParticle(void *ecx, void *, const char *name,
+    int attachType, int attachment, Vector offset, int flags)
+{
+    const int controlled = NativeBeam::FactoryAttachment(m_NativeBeamLookupCaller,
+        reinterpret_cast<std::uintptr_t>(_ReturnAddress()), name, attachType, attachment);
+    if (controlled != attachType &&
+        m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::NativeBeamManualOrigin))
+        Logger::Write("Native beam CP0 binding changed: EYES_FOLLOW(6) -> ABSORIGIN(0); subsequent native eye-position updates skipped; VR maintains muzzle CP0");
+    return hkCreateBeamParticle.fOriginal(ecx, name, controlled, attachment, offset, flags);
+}
+
+int __fastcall Hooks::dDrawBeamParticle(void *ecx, void *, int flags, const void *instance)
+{
+    // Preserve every native render/cull decision. A nonzero return is still
+    // not proof of pixels reaching the headset (batching/materials may differ).
+    const int result = hkDrawBeamParticle.fOriginal(ecx, flags, instance);
+    if (Portal2VRRuntime::IsPublished(g_Game, m_Game) &&
+        m_NativeBeamRenderProbe.ObserveDraw(reinterpret_cast<std::uintptr_t>(ecx), m_ActiveAimEye))
+        Logger::Write("Native beam DrawModel observed: eyeScope=" + std::to_string(m_ActiveAimEye) +
+            " flags=" + std::to_string(flags) + " nativeReturn=" + std::to_string(result) +
+            " (0=outside stereo scope; native return is not pixel/visibility proof)");
+    return result;
 }
 
 void Hooks::InitViewmodelAlignment()
@@ -976,6 +1031,14 @@ void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CVie
 	m_ActiveAimEyeView = previousAimEyeView;
 	m_ActiveAimEye = previousAimEye;
 	m_ActiveReticleScale = previousReticleScale;
+
+	if (!previousAimEyeView && m_Game->m_Hooks->m_NativeBeamDiagnosticsReady) {
+		if (const auto scopes = m_NativeBeamRenderProbe.StereoPairSummary())
+			Logger::Write("Native beam DrawModel observation after 120 stereo pairs: leftScope=" +
+				std::to_string((*scopes & 1) != 0) + " rightScope=" +
+				std::to_string((*scopes & 2) != 0) + " outsideScope=" +
+				std::to_string((*scopes & 4) != 0) + " (all zero means no draw call observed; not visibility proof)");
+	}
 
 	m_PushedHud = false;
 
