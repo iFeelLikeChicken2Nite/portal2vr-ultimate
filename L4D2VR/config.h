@@ -22,6 +22,8 @@ struct ConfigSnapshot {
     PortalOrientation::Mode portalOrientationMode = PortalOrientation::Mode::LegacyYaw;
     bool experimentalHudOverlay = false;
     bool experimentalWorldAimMarker = false;
+    bool experimentalStereoReticle = false;
+    bool reticleDistanceScaling = true;
     bool experimentalViewmodelAlignment = false;
     bool aimFromViewmodelMuzzle = false;
     bool experimentalPortalShotHaptics = false;
@@ -153,6 +155,8 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
     readBool("VerboseDiagnostics", result.value.verboseDiagnostics);
     readBool("ExperimentalHUDOverlay", result.value.experimentalHudOverlay);
     readBool("ExperimentalWorldAimMarker", result.value.experimentalWorldAimMarker);
+    readBool("ExperimentalStereoReticle", result.value.experimentalStereoReticle);
+    readBool("ReticleDistanceScaling", result.value.reticleDistanceScaling);
     readBool("AimFromViewmodelMuzzle", result.value.aimFromViewmodelMuzzle);
     readBool("ExperimentalViewmodelAlignment", result.value.experimentalViewmodelAlignment);
     readBool("ExperimentalPortalShotHaptics", result.value.experimentalPortalShotHaptics);

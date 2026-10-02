@@ -10,6 +10,41 @@
 // 7A10 sets its orthographic canvas from the active render-context viewport.
 namespace NativeReticle
 {
+inline float DistanceScale(bool enabled, float distanceUnits, float unitsPerMeter)
+{
+    if (!enabled || !std::isfinite(distanceUnits) || distanceUnits < 0.0f ||
+        !std::isfinite(unitsPerMeter) || unitsPerMeter <= 0.0f)
+        return 1.0f;
+    // Keep the HUD readable: smooth, bounded reduction over 1-10 real meters.
+    const double meters = static_cast<double>(distanceUnits) / unitsPerMeter;
+    const double t = std::clamp((meters - 1.0) / 9.0, 0.0, 1.0);
+    return static_cast<float>(1.0 - 0.2 * t * t * (3.0 - 2.0 * t));
+}
+
+struct SpriteLayout
+{
+    AimFeedback::ScreenPoint position;
+    int width, height;
+};
+
+inline std::optional<SpriteLayout> ScaleLayout(const AimFeedback::ScreenPoint &position,
+    const AimFeedback::ProjectedPoint &hit, int width, int height, float scale)
+{
+    if (width <= 0 || height <= 0 || width > 192 || height > 192 ||
+        !std::isfinite(scale) || scale < 0.8f || scale > 1.0f ||
+        !std::isfinite(hit.x) || !std::isfinite(hit.y))
+        return std::nullopt;
+    // Scale all status layers about the shared world hit, not individual
+    // sprite centers. Leave Source's atlas UV, artwork, color and alpha alone.
+    const double x = std::round(hit.x + (static_cast<double>(position.x) - hit.x) * scale);
+    const double y = std::round(hit.y + (static_cast<double>(position.y) - hit.y) * scale);
+    if (x < INT_MIN || x > INT_MAX || y < INT_MIN || y > INT_MAX)
+        return std::nullopt;
+    return SpriteLayout{{static_cast<int>(x), static_cast<int>(y)},
+        (std::max)(1, static_cast<int>(std::lround(width * scale))),
+        (std::max)(1, static_cast<int>(std::lround(height * scale)))};
+}
+
 constexpr std::uintptr_t kClipSetterRva = 0x1010;
 constexpr std::uintptr_t kClipRectRva = 0x13B680;
 constexpr std::uintptr_t kSurfaceTranslationOffset = 0xC;

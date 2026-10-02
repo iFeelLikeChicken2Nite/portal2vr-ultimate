@@ -2232,6 +2232,8 @@ void VR::ParseConfigFile()
         " AimMode=" + std::to_string(m_AimMode) +
         " ExperimentalWorldAimMarker=" +
         std::to_string(m_Config.experimentalWorldAimMarker) +
+        " ExperimentalStereoReticle=" + std::to_string(m_Config.experimentalStereoReticle) +
+        " ReticleDistanceScaling=" + std::to_string(m_Config.reticleDistanceScaling) +
         " AntiAliasing=" + std::to_string(m_AntiAliasing) +
         " ExperimentalHUDOverlay=" + std::to_string(m_Config.experimentalHudOverlay) +
         " ExperimentalViewmodelAlignment=" + std::to_string(m_Config.experimentalViewmodelAlignment) +

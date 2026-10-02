@@ -619,9 +619,10 @@ void Hooks::InitMuzzleSampling()
     Logger::Write(m_MuzzleSamplingReady ?
         "Muzzle sampling enabled: passive native animated attachment; beam uses current model pose" :
         "Muzzle sampling unavailable: requested muzzle beam suppressed; existing model alignment unchanged");
-    Logger::Write(m_VR->m_Config.experimentalWorldAimMarker ?
-        "Aim A/B renderer: experimental world line + stereo Source atlas reticle" :
-        "Aim A/B renderer: native robot_point_beam + original per-eye Source DrawSelf reticle (VR visibility unverified)");
+    Logger::Write(std::string("Aim beam: ") +
+        (m_VR->m_Config.experimentalWorldAimMarker ? "experimental muzzle line" : "native robot_point_beam") +
+        "; reticle: " + (m_VR->m_Config.experimentalStereoReticle ?
+            "rollback stereo Source atlas" : "original per-eye Source DrawSelf"));
 }
 
 void __fastcall Hooks::dViewmodelFormatAttachment(void *ecx, void *, int index, matrix3x4_t &matrix)
@@ -944,11 +945,17 @@ void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CVie
 	rndrContext->Release();
 	const CViewSetup *previousAimEyeView = m_ActiveAimEyeView;
 	const int previousAimEye = m_ActiveAimEye;
+	const float previousReticleScale = m_ActiveReticleScale;
+	// One distance/size for the entire stereo pair and all portal-status layers.
+	const float reticleScale = NativeReticle::DistanceScale(m_VR->m_Config.reticleDistanceScaling,
+		VectorLength(m_VR->m_AimPos - (position + m_VR->GetHmdViewOffset())), m_VR->m_VRScale);
 	m_ActiveAimEyeView = &leftEyeView;
 	m_ActiveAimEye = 1;
+	m_ActiveReticleScale = reticleScale;
 	hkRenderView.fOriginal(ecx, leftEyeView, hudViewSetup, nClearFlags, whatToDraw);
 	m_ActiveAimEyeView = previousAimEyeView;
 	m_ActiveAimEye = previousAimEye;
+	m_ActiveReticleScale = previousReticleScale;
 	
 	// Right eye CViewSetup
 	tempAngle = QAngle(setup.angles.x, setup.angles.y, setup.angles.z);
@@ -964,9 +971,11 @@ void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CVie
 	rndrContext->Release();
 	m_ActiveAimEyeView = &rightEyeView;
 	m_ActiveAimEye = 2;
+	m_ActiveReticleScale = reticleScale;
 	hkRenderView.fOriginal(ecx, rightEyeView, hudViewSetup, nClearFlags, whatToDraw);
 	m_ActiveAimEyeView = previousAimEyeView;
 	m_ActiveAimEye = previousAimEye;
+	m_ActiveReticleScale = previousReticleScale;
 
 	m_PushedHud = false;
 
@@ -1557,11 +1566,7 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 		if (!m_ActiveAimEyeView)
 			return hkDrawSelf.fOriginal(ecx, x, y, w, h, clr, flApparentZ);
 
-		const bool worldReticle = m_VR->m_AimMode == 2 &&
-			m_VR->m_Config.experimentalWorldAimMarker && m_Game->m_DebugOverlay &&
-			m_Game->m_EngineClient->IsInGame() &&
-			!m_Game->m_VguiSurface->IsCursorVisible();
-		if (worldReticle && m_ActiveAimEyeView) {
+		if (m_VR->m_Config.experimentalStereoReticle) {
 			// Source selects the actual portal status icon and color. Draw the same
 			// atlas subrectangle into the active eye only when its engine ABI matches.
 			if (!AimFeedback::IsCenteredReticleSprite(x, y, w, h, windowWidth, windowHeight) &&
@@ -1671,8 +1676,14 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 			eye.width, eye.height, x, y, w, h, windowWidth, windowHeight);
 		if (!projected)
 			return 0;
+		const auto hit = AimFeedback::ProjectWorldToEye(m_VR->m_AimPos, eye.origin, forward, right, up,
+			eye.fov, eye.m_flAspectRatio, eye.width, eye.height);
+		const auto layout = hit ? NativeReticle::ScaleLayout(*projected, *hit, w, h,
+			m_ActiveReticleScale) : std::nullopt;
+		if (!layout)
+			return 0;
 		auto surface = PrepareNativeReticleSurface(m_Game->m_VguiSurface);
-		const auto position = surface ? NativeReticle::SurfacePosition(*projected,
+		const auto position = surface ? NativeReticle::SurfacePosition(layout->position,
 			surface->translation[0], surface->translation[1]) : std::nullopt;
 		ITexture *eyeTarget = m_ActiveAimEye == 1 ? m_VR->m_LeftEyeTexture : m_VR->m_RightEyeTexture;
 		if (!position || currentTarget != eyeTarget || viewportX != 0 || viewportY != 0 ||
@@ -1689,7 +1700,7 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 				"; Source artwork/status/alpha retained");
 		NativeReticle::ClipScope<NativeReticleSurface> clip(*surface, surface->previous,
 			{0, 0, eye.width, eye.height});
-		return hkDrawSelf.fOriginal(ecx, position->x, position->y, w, h, clr, flApparentZ);
+		return hkDrawSelf.fOriginal(ecx, position->x, position->y, layout->width, layout->height, clr, flApparentZ);
 	}
 
 	return hkDrawSelf.fOriginal(ecx, newX, newY, w, h, clr, flApparentZ);

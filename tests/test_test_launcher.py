@@ -11,6 +11,8 @@ from tools import test_launcher_core as core
 
 TEMPLATE = (
     "VerboseDiagnostics=false\n"
+    "ExperimentalStereoReticle=true\n"
+    "ReticleDistanceScaling=false\n"
     "TrackingMode=Seated # tracking\n"
     "RoomscaleMode=Off\n"
     "6DOF=true\n"
@@ -33,6 +35,24 @@ TEMPLATE = (
 
 
 class ProfileTests(unittest.TestCase):
+    def test_atlas_rollback_keeps_line_but_can_restore_prior_unscaled_renderer(self):
+        settings = dict(line.split("=", 1) for line in
+                        core.render_config(TEMPLATE, "roomscale_active_stereo_aim").splitlines()
+                        if "=" in line)
+        self.assertEqual(settings["ExperimentalStereoReticle"], "true")
+        self.assertEqual(settings["ReticleDistanceScaling"], "false")
+        self.assertEqual(settings["ExperimentalWorldAimMarker"], "true")
+        self.assertEqual(settings["AimFromViewmodelMuzzle"], "true")
+        self.assertEqual(settings["RoomscaleMode"], "ActiveExperimental")
+
+    def test_line_fallback_keeps_confirmed_native_reticle_instead_of_inheriting_atlas(self):
+        for profile in ("roomscale_active_native_aim", "roomscale_active_experimental"):
+            settings = dict(line.split("=", 1) for line in
+                            core.render_config(TEMPLATE, profile).splitlines() if "=" in line)
+            with self.subTest(profile=profile):
+                self.assertEqual(settings["ExperimentalStereoReticle"], "false")
+                self.assertEqual(settings["ReticleDistanceScaling"], "true")
+
     def test_normal_profiles_disable_periodic_diagnostics_left_in_template(self):
         verbose = TEMPLATE.replace("VerboseDiagnostics=false", "VerboseDiagnostics=true")
         for profile in core.PROFILES:

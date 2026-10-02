@@ -1078,6 +1078,38 @@ int main()
         expectInt(eyeCanvasReticle->y, 1310, "eye-sized source keeps its original center offset Y");
     }
     TestReticleCanvas nativeCanvas;
+    expectNear(NativeReticle::DistanceScale(true, 43.2f, 43.2f), 1.0f,
+               "near targets retain the original readable reticle size");
+    expectNear(NativeReticle::DistanceScale(true, 237.6f, 43.2f), 0.9f,
+               "mid-distance reticle shrinks gently rather than inverse-distance disappearing");
+    expectNear(NativeReticle::DistanceScale(true, 43200.0f, 43.2f), 0.8f,
+               "distant targets cannot shrink the native portal status below eighty percent");
+    expectNear(NativeReticle::DistanceScale(false, 432.0f, 43.2f), 1.0f,
+               "disabled scaling keeps fixed reticle size");
+    expectNear(NativeReticle::DistanceScale(true, -1.0f, 43.2f), 1.0f,
+               "invalid target distance preserves fixed size");
+    expectNear(NativeReticle::DistanceScale(true, 432.0f, 0.0f), 1.0f,
+               "invalid world scale cannot divide by zero");
+    expectNear(NativeReticle::DistanceScale(true, std::numeric_limits<float>::quiet_NaN(), 43.2f),
+               1.0f, "nonfinite distance cannot corrupt native geometry");
+    const auto scaledReticle = NativeReticle::ScaleLayout({1236, 1310}, {1264.0f, 1352.0f}, 56, 84, 0.8f);
+    expect(scaledReticle.has_value(), true, "native reticle layout supports bounded distance scaling");
+    if (scaledReticle) {
+        expectInt(scaledReticle->position.x, 1242, "reticle scales toward its projected hit, not its own corner");
+        expectInt(scaledReticle->position.y, 1318, "scaled reticle stays at the hit vertically");
+        expectInt(scaledReticle->width, 45, "native sprite width scales without changing atlas UVs");
+        expectInt(scaledReticle->height, 67, "native sprite height scales without changing aspect");
+    }
+    const auto fixedReticle = NativeReticle::ScaleLayout({1236, 1310}, {1264.0f, 1352.0f}, 56, 84, 1.0f);
+    expect(fixedReticle.has_value(), true, "fixed-size rollback keeps original native layout");
+    if (fixedReticle) {
+        expectInt(fixedReticle->position.x, 1236, "fixed-size native sprite position unchanged");
+        expectInt(fixedReticle->width, 56, "fixed-size native sprite dimensions unchanged");
+    }
+    expect(NativeReticle::ScaleLayout({1236, 1310}, {1264, 1352}, 56, 84, 0.0f).has_value(), false,
+           "invalid reticle scale cannot send zero-sized geometry to Source");
+    expect(NativeReticle::ScaleLayout({1236, 1310}, {1264, 1352}, INT_MAX, 84, 0.8f).has_value(), false,
+           "unrelated oversized HUD texture cannot overflow scaled sprite dimensions");
     {
         NativeReticle::ClipScope<TestReticleCanvas> scope(nativeCanvas,
             nativeCanvas.rect, {0, 0, 2528, 2704});
@@ -1547,6 +1579,18 @@ int main()
     expectNear(m2Rejected.value.controllerPitchDegrees, 15.0f,
                "invalid controller pitch retains previous");
     expect(m2Rejected.errors.size() == 5, true, "invalid M2 entries and legacy key reported");
+
+    std::istringstream badReticleOptions("ExperimentalStereoReticle=maybe\nReticleDistanceScaling=0\n");
+    expectInt(static_cast<int>(ParseConfig(badReticleOptions, ConfigSnapshot{}).errors.size()), 2,
+              "invalid reticle renderer/scaling options must not silently change the working native path");
+    std::istringstream fixedAtlasReticle("ExperimentalStereoReticle=true\nReticleDistanceScaling=false\n");
+    const auto oldReticle = ParseConfig(fixedAtlasReticle, ConfigSnapshot{});
+    expect(oldReticle.value.experimentalStereoReticle, true, "atlas rollback can be explicitly selected");
+    expect(oldReticle.value.reticleDistanceScaling, false, "distance scaling can be explicitly disabled");
+    std::istringstream malformedReticleReload("ExperimentalStereoReticle=1\nReticleDistanceScaling=1\n");
+    const auto keptReticle = ParseConfig(malformedReticleReload, oldReticle.value);
+    expect(keptReticle.value.experimentalStereoReticle, true, "malformed renderer reload retains previous choice");
+    expect(keptReticle.value.reticleDistanceScaling, false, "malformed scaling reload retains fixed-size choice");
 
     std::istringstream badVerbose("VerboseDiagnostics=maybe\n");
     expectInt(static_cast<int>(ParseConfig(badVerbose, ConfigSnapshot{}).errors.size()), 1,
