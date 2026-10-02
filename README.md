@@ -8,7 +8,7 @@ Requirements: Portal 2 for Windows, Steam, working SteamVR and a VR headset. The
 
 1. Build the mod as described below. This source checkout does not contain a prebuilt `Release/d3d9.dll`.
 2. Double-click **`Portal2VR Launcher.cmd`** in the repository root. Alternatively run `python -m tools.launcher` or open `Portal2VR Launcher.pyw`.
-3. Select the folder containing `portal2.exe` and your `steam.exe`. Close Portal 2 before installing or changing its files.
+3. Select the folder containing `portal2.exe` and your `steam.exe`. Choose the Portal 2 copy registered in that Steam client: launch requests AppID 620, not the selected executable directly. Paths are checked separately; multiple independent Steam installations are not automatically matched (a library on another drive is fine). Close Portal 2 before installing or changing its files.
 4. Start SteamVR and connect the headset/controllers, then click **Launch Portal 2 in VR**. The launcher applies the config, backs up originals and launches Steam app 620 with `-insecure` and the retained VR-compatible video arguments.
 5. Enable subtitles in Portal 2's own options if you want captions.
 
