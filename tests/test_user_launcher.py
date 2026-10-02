@@ -183,5 +183,116 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(config.read_bytes(), b"user edit")
 
 
+class LauncherTests(unittest.TestCase):
+    def setUp(self):
+        from importlib.util import find_spec
+        self.assertIsNotNone(find_spec("tools.launcher"), "The user launcher is missing")
+        import tkinter as tk
+        from tools import launcher
+        self.launcher = launcher
+        self.temporary = TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.folder = Path(self.temporary.name)
+        self.repo, self.game, self.steam = complete_fixture(self.folder)
+        self.state_path = self.folder / "state.json"
+        self.prefs_path = self.folder / "prefs.json"
+        legacy = core.load_state(self.state_path)
+        legacy.update(game_dir=str(self.game), steam_exe=str(self.steam),
+                      profile="roomscale_active_native_aim")
+        core.save_state(self.state_path, legacy)
+        self.original_state = self.state_path.read_bytes()
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.addCleanup(self.root.destroy)
+        self.app = launcher.Launcher(self.root, self.repo, self.prefs_path, self.state_path)
+        self.addCleanup(patch.stopall)
+        patch.object(launcher, "game_is_running", return_value=False).start()
+        patch.object(launcher.messagebox, "askyesno", return_value=True).start()
+        patch.object(launcher.messagebox, "showerror").start()
+        patch.object(launcher.messagebox, "showinfo").start()
+
+    def test_first_run_and_preview_do_not_deploy_or_save(self):
+        result = config_values(self.app.config_preview())
+        self.assertEqual(result["ExperimentalWorldAimMarker"], "true")
+        self.assertEqual(result["RoomscaleMode"], "ActiveExperimental")
+        self.assertFalse(self.prefs_path.exists())
+        self.assertFalse((self.game / "VR").exists())
+        self.assertEqual(self.state_path.read_bytes(), self.original_state)
+
+    def test_save_and_reset_only_change_local_settings(self):
+        self.app.vars["SnapTurning"].set("true")
+        self.app.save()
+        data = json.loads(self.prefs_path.read_text())
+        self.assertEqual(data["values"]["SnapTurning"], "true")
+        self.app.reset_recommended()
+        self.assertEqual(self.app.game_var.get(), str(self.game))
+        self.assertEqual(self.app.steam_var.get(), str(self.steam))
+        self.assertEqual(self.app.vars["SnapTurning"].get(), "false")
+        self.assertEqual(self.state_path.read_bytes(), self.original_state)
+        self.assertFalse((self.game / "VR").exists())
+        # Reset does not silently replace the previously saved custom preferences.
+        self.assertEqual(json.loads(self.prefs_path.read_text())["values"]["SnapTurning"], "true")
+
+    def test_saved_custom_settings_survive_new_window(self):
+        self.app.vars["HUDWidthMeters"].set("1.8")
+        self.app.save()
+        other = self.launcher.Launcher(self.root, self.repo, self.prefs_path, self.state_path)
+        self.assertEqual(other.vars["HUDWidthMeters"].get(), "1.8")
+        self.assertIn("Custom", other.profile_var.get())
+
+    def test_bad_dependency_blocks_apply_before_any_settings_or_game_write(self):
+        self.app.vars["6DOF"].set("false")
+        self.app.apply()
+        self.assertFalse((self.game / "VR").exists())
+        self.assertFalse(self.prefs_path.exists())
+        self.assertEqual(self.state_path.read_bytes(), self.original_state)
+        self.assertIn("requires", self.app.status_var.get())
+
+    def test_apply_and_restore_use_the_existing_original_backup(self):
+        original = self.game / "bin/d3d9.dll"
+        original.write_bytes(b"original")
+        core.stage_install(self.repo, self.game, self.state_path, "baseline")
+        first_id = core.load_state(self.state_path)["backup_id"]
+        self.app.vars["SnapTurnAngle"].set("30")
+        self.app.apply()
+        self.assertEqual(config_values((self.game / "VR/config.txt").read_text())["SnapTurnAngle"], "30")
+        self.assertEqual(core.load_state(self.state_path)["backup_id"], first_id)
+        self.app.restore()
+        self.assertEqual(original.read_bytes(), b"original")
+        self.assertFalse((self.game / "VR").exists())
+
+    def test_launch_stages_selected_settings_before_external_steam_call(self):
+        observed = []
+
+        def steam_boundary(command, **kwargs):
+            # No process runs. Observe the real config already staged by the callback.
+            observed.append((command, kwargs, config_values((self.game / "VR/config.txt").read_text())))
+
+        self.app.vars["SnapTurning"].set("true")
+        with patch.object(self.launcher.subprocess, "Popen", side_effect=steam_boundary):
+            self.app.launch()
+        self.assertEqual(len(observed), 1)
+        command, kwargs, values = observed[0]
+        self.assertEqual(command, core.build_steam_command(self.steam))
+        self.assertEqual(kwargs["cwd"], str(self.steam.parent))
+        self.assertEqual(values["SnapTurning"], "true")
+        self.assertEqual(values["ExperimentalWorldAimMarker"], "true")
+
+    def test_running_game_blocks_apply_without_writes(self):
+        with patch.object(self.launcher, "game_is_running", return_value=True):
+            self.app.apply()
+        self.assertFalse((self.game / "VR").exists())
+        self.assertFalse(self.prefs_path.exists())
+        self.assertIn("Close Portal 2", self.app.status_var.get())
+
+    def test_steam_failure_keeps_backups_and_explains_recovery(self):
+        with patch.object(self.launcher.subprocess, "Popen", side_effect=OSError("Steam unavailable")):
+            self.app.launch()
+        state = core.load_state(self.state_path)
+        self.assertTrue(state["backup_id"])
+        self.assertTrue(state["managed_files"])
+        self.assertIn("Restore", self.app.status_var.get())
+
+
 if __name__ == "__main__":
     unittest.main()
