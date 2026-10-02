@@ -35,6 +35,15 @@ TEMPLATE = (
 
 
 class ProfileTests(unittest.TestCase):
+    def test_native_hud_check_enables_muzzle_line_with_original_reticle(self):
+        check = next(item for item in core.CHECKLIST if item.id == "aim_native_hud")
+        settings = dict(line.split("=", 1) for line in
+                        core.render_config(TEMPLATE, check.profile).splitlines() if "=" in line)
+        self.assertEqual(settings["ExperimentalWorldAimMarker"], "true")
+        self.assertEqual(settings["ExperimentalStereoReticle"], "false")
+        self.assertEqual(settings["AimFromViewmodelMuzzle"], "true")
+        self.assertEqual(settings["RoomscaleMode"], "ActiveExperimental")
+
     def test_atlas_rollback_keeps_line_but_can_restore_prior_unscaled_renderer(self):
         settings = dict(line.split("=", 1) for line in
                         core.render_config(TEMPLATE, "roomscale_active_stereo_aim").splitlines()

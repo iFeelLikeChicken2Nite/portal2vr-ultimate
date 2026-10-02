@@ -59,9 +59,11 @@ class TestLauncher:
         selector = ttk.Combobox(outer, textvariable=self.profile_var,
                                 values=self.profile_labels, state="readonly")
         selector.grid(row=2, column=1, sticky="ew", padx=8)
-        ttk.Label(outer, text="Aim A/B: test 'Legacy beam + HUD reticle (muzzle test)' first. "
-                  "Use 'Stereo reticle + muzzle line (fallback)' for comparison after restarting. "
-                  "Both preserve the current model, captions and active roomscale settings. "
+        ttk.Label(outer, text="Recommended aim: 'Native reticle + muzzle line (fallback)' "
+                  "keeps the original Portal artwork/status and the line at the gun muzzle. "
+                  "The legacy particle beam remains a diagnostic test; it is not confirmed visible. "
+                  "'Stereo atlas + muzzle line (rollback)' is only the older reticle fallback. "
+                  "All three preserve model, captions and active roomscale settings. "
                   "Active roomscale remains experimental movement; test small steps first. "
                   "M3 Observe remains diagnostic only.",
                   wraplength=850).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 6))
