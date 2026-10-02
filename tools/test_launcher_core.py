@@ -174,7 +174,11 @@ def render_config(template: str, profile: str) -> str:
     """Apply one known test profile to the versioned config template."""
     if profile not in PROFILES:
         raise ValueError(f"Unknown test profile: {profile}")
-    values = {**BASE_VALUES, **PROFILES[profile].changes}
+    return apply_config_values(template, {**BASE_VALUES, **PROFILES[profile].changes})
+
+
+def apply_config_values(template: str, values: dict[str, str]) -> str:
+    """Replace supplied keys, retaining template comments and line endings."""
     seen: set[str] = set()
     result: list[str] = []
     for line in template.splitlines(keepends=True):
@@ -297,8 +301,12 @@ def _safe_target(game: Path, relative: str) -> Path:
     return target
 
 
-def plan_install(repo: Path, game: Path, profile: str) -> dict[Path, bytes]:
+def plan_install(repo: Path, game: Path, profile: str, *,
+                 config_values: dict[str, str] | None = None) -> dict[Path, bytes]:
     """Read exact source payloads without writing to the game."""
+    if config_values is not None:
+        from .launcher_settings import validate_settings
+        config_values = validate_settings(config_values)
     if not (game / "portal2.exe").is_file() or not (game / "bin").is_dir():
         raise FileNotFoundError(f"Not a Portal 2 installation: {game}")
     planned: dict[Path, bytes] = {}
@@ -308,7 +316,9 @@ def plan_install(repo: Path, game: Path, profile: str) -> dict[Path, bytes]:
             raise FileNotFoundError(f"Missing launcher source: {source}")
         payload = source.read_bytes()
         if target_relative == "VR/config.txt":
-            payload = render_config(payload.decode("utf-8"), profile).encode("utf-8")
+            template = payload.decode("utf-8")
+            payload = (render_config(template, profile) if config_values is None else
+                       apply_config_values(template, config_values)).encode("utf-8")
         planned[_safe_target(game, target_relative)] = payload
     return planned
 
@@ -431,9 +441,10 @@ def _copy_backup(backup: Path, target: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _stage_install_unlocked(repo: Path, game: Path, state_path: Path, profile: str) -> list[Path]:
+def _stage_install_unlocked(repo: Path, game: Path, state_path: Path, profile: str, *,
+                            config_values: dict[str, str] | None = None) -> list[Path]:
     """Stage exact mod files after snapshotting originals; roll back failures."""
-    planned = plan_install(repo, game, profile)
+    planned = plan_install(repo, game, profile, config_values=config_values)
     state = load_state(state_path)
     managed = _validate_managed(state, game)
     planned_paths = {target.relative_to(game).as_posix() for target in planned}
@@ -495,9 +506,10 @@ def _stage_install_unlocked(repo: Path, game: Path, state_path: Path, profile: s
     return list(planned)
 
 
-def stage_install(repo: Path, game: Path, state_path: Path, profile: str) -> list[Path]:
+def stage_install(repo: Path, game: Path, state_path: Path, profile: str, *,
+                  config_values: dict[str, str] | None = None) -> list[Path]:
     with _transaction_lock(state_path):
-        return _stage_install_unlocked(repo, game, state_path, profile)
+        return _stage_install_unlocked(repo, game, state_path, profile, config_values=config_values)
 
 
 def _restore_install_unlocked(game: Path, state_path: Path) -> list[Path]:

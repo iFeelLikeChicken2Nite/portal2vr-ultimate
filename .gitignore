@@ -404,6 +404,10 @@ FodyWeavers.xsd
 /tools/.launcher-state.json.tmp
 /tools/.launcher-state.json.lock
 /tools/.launcher-backups/
+/tools/.user-launcher-settings.json
+/tools/.user-launcher-settings.json.lock
+/tools/.user-launcher-settings.json.*.tmp
+/docs/user-launcher-*.png
 
 # Project notes are maintained locally, not published to origin.
 /docs/**/*.md
