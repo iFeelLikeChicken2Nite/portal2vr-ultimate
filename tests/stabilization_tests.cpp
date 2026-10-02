@@ -1109,6 +1109,15 @@ int main()
     expect(NativeReticle::Supported(changedSurface), false,
            "different texture-draw ABI cannot use the native reticle fix");
     std::uintptr_t beamLookupCaller = 0;
+    const Vector nativePortalColors[3] = {{255, 255, 255}, {64, 160, 255}, {255, 160, 32}};
+    expectVectorNear(NativeBeam::ControlPointColor(1, nativePortalColors), {64, 160, 255},
+                     "native beam color must not be silently halved before PCF remapping");
+    expectVectorNear(NativeBeam::ControlPointColor(2, nativePortalColors), {255, 160, 32},
+                     "orange beam retains native full-intensity RGB");
+    expectVectorNear(NativeBeam::ControlPointColor(-1, nativePortalColors), {255, 255, 255},
+                     "invalid negative portal color cannot index before the palette");
+    expectVectorNear(NativeBeam::ControlPointColor(100, nativePortalColors), {255, 160, 32},
+                     "invalid positive portal color cannot index past the palette");
     expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x102808B3, "muzzle"), false,
            "normal native attachment lookups are never changed");
     {

@@ -7,6 +7,7 @@
 #include "logger.h"
 #include "trace.h"
 #include "aim_feedback.h"
+#include "native_beam.h"
 #include "hud_capture.h"
 #include "sdk/ivdebugoverlay.h"
 #include <iostream>
@@ -1673,10 +1674,11 @@ void VR::UpdateAimFeedback(C_BasePlayer *localPlayer)
                     Logger::Write("Controller laser particle pointer observed; actual visibility unverified");
                     m_LaserParticleObserved = true;
                 }
-                const int portalColor = std::clamp(activeWeapon->m_iLastFiredPortal, 0, 2);
+                const auto portalColor = NativeBeam::ControlPointColor(activeWeapon->m_iLastFiredPortal,
+                    m_Game->m_singlePlayerPortalColors);
                 portalPlayer->m_PointLaser->SetControlPoint(0, *beamOrigin);
                 portalPlayer->m_PointLaser->SetControlPoint(1, m_AimPos);
-                portalPlayer->m_PointLaser->SetControlPoint(2, m_Game->m_singlePlayerPortalColors[portalColor] * 0.5f);
+                portalPlayer->m_PointLaser->SetControlPoint(2, portalColor);
                 if (m_RenderDiagnostics.First(RenderDiagnosticEvent::LaserControlPoints)) {
                     Logger::Write(std::string("Controller laser control points updated: originMode=") +
                         (m_Config.aimFromViewmodelMuzzle ? "viewmodelMuzzle" : "controller") + " originCP0=" +
@@ -1684,6 +1686,8 @@ void VR::UpdateAimFeedback(C_BasePlayer *localPlayer)
                         "," + std::to_string(beamOrigin->z) + " targetCP1=" +
                         std::to_string(m_AimPos.x) + "," + std::to_string(m_AimPos.y) +
                         "," + std::to_string(m_AimPos.z) +
+                        " colorCP2=" + std::to_string(portalColor.x) + "," +
+                        std::to_string(portalColor.y) + "," + std::to_string(portalColor.z) +
                         "; originCP0 and targetCP1 updated; actual visibility unverified");
                 }
             }
