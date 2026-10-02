@@ -22,7 +22,8 @@ def game_is_running() -> bool:
     """Fail closed if the Windows process list cannot be checked."""
     result = subprocess.run(
         ["tasklist", "/FI", "IMAGENAME eq portal2.exe", "/FO", "CSV", "/NH"],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, check=False, timeout=5,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if result.returncode:
         raise RuntimeError(f"Cannot check portal2.exe process: {result.stderr.strip()}")

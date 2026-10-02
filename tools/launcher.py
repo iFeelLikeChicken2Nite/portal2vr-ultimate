@@ -37,8 +37,10 @@ class Launcher:
         self.profile_var, self.summary_var = tk.StringVar(root), tk.StringVar(root)
         self.status_var = tk.StringVar(root, "Ready. Save is local; Apply and Launch update the game with backups.")
         self.root.title("Portal2VR Launcher")
-        self.root.geometry("1040x820")
-        self.root.minsize(860, 680)
+        width = max(860, min(1040, root.winfo_screenwidth() - 80))
+        height = max(620, min(820, root.winfo_screenheight() - 120))
+        self.root.geometry(f"{width}x{height}")
+        self.root.minsize(860, 620)
         self.root.configure(bg=BG)
         self._theme()
         self._build()
@@ -80,9 +82,9 @@ class Launcher:
                   style="Muted.TLabel").pack(anchor="w", pady=(2, 16))
         self.notebook = ttk.Notebook(outer)
         self.notebook.pack(fill="both", expand=True)
-        play = ttk.Frame(self.notebook, padding=20)
-        self.notebook.add(play, text="Play")
+        play, canvas = self._scroll_page("Play")
         self._play(play)
+        self._bind_wheel(play, canvas)
         self._settings_page("Settings", advanced=False)
         self._settings_page("Advanced", advanced=True)
         footer = ttk.Frame(outer)
@@ -90,11 +92,18 @@ class Launcher:
         ttk.Button(footer, text="Save settings", command=self.save).pack(side="left")
         ttk.Button(footer, text="Restore recommended", command=self.reset_recommended).pack(side="left", padx=8)
         ttk.Button(footer, text="Preview config", command=self.show_preview).pack(side="right")
-        ttk.Label(outer, textvariable=self.status_var, style="Muted.TLabel", wraplength=940,
-                  justify="left").pack(fill="x", pady=(10, 0))
+        status = ttk.Label(outer, textvariable=self.status_var, style="Muted.TLabel", wraplength=940,
+                           justify="left")
+        status.pack(fill="x", pady=(10, 0))
+        status.bind("<Configure>", lambda event: status.configure(wraplength=max(300, event.width)))
 
     def _play(self, page):
         page.columnconfigure(0, weight=1)
+        def wrap_labels(event):
+            for child in page.winfo_children():
+                if isinstance(child, ttk.Label) and int(child.cget("wraplength") or 0):
+                    child.configure(wraplength=max(300, event.width - 40))
+        page.bind("<Configure>", wrap_labels, add="+")
         ttk.Label(page, textvariable=self.profile_var, style="Section.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(page, textvariable=self.summary_var, wraplength=880, justify="left").grid(
             row=1, column=0, sticky="ew", pady=(12, 18))
@@ -126,7 +135,7 @@ class Launcher:
         ttk.Button(diagnostics, text="Open backups", command=self.open_backups).pack(side="left", padx=10)
         ttk.Button(diagnostics, text="About / limitations", command=self.about).pack(side="left")
 
-    def _settings_page(self, title, advanced):
+    def _scroll_page(self, title):
         page = ttk.Frame(self.notebook)
         self.notebook.add(page, text=title)
         canvas = tk.Canvas(page, bg=BG, highlightthickness=0)
@@ -139,6 +148,24 @@ class Launcher:
         body.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
         body.columnconfigure(0, weight=1)
+        return body, canvas
+
+    @staticmethod
+    def _bind_wheel(body, canvas):
+        # Local bindings avoid stale global handlers after closing the launcher.
+        def wheel(event):
+            canvas.yview_scroll(-int(event.delta / 120), "units")
+            return "break"
+        def bind(widget):
+            if not isinstance(widget, ttk.Combobox):
+                widget.bind("<MouseWheel>", wheel)
+            for child in widget.winfo_children():
+                bind(child)
+        bind(body)
+        canvas.bind("<MouseWheel>", wheel)
+
+    def _settings_page(self, title, advanced):
+        body, canvas = self._scroll_page(title)
         ttk.Label(body, text="Changes take effect on your next Apply or Launch. Save alone does not touch the game.",
                   style="Muted.TLabel", wraplength=760).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 14))
         row, group = 1, None
@@ -171,16 +198,7 @@ class Launcher:
                 ttk.Label(body, text=help_text, style="Muted.TLabel", wraplength=720,
                           justify="left").grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 10))
                 row += 1
-        # Local bindings avoid stale global handlers after closing the launcher.
-        def wheel(event):
-            canvas.yview_scroll(-int(event.delta / 120), "units")
-            return "break"
-        def bind_wheel(widget):
-            if not isinstance(widget, ttk.Combobox):
-                widget.bind("<MouseWheel>", wheel)
-            for child in widget.winfo_children():
-                bind_wheel(child)
-        bind_wheel(page)
+        self._bind_wheel(body, canvas)
 
     def preferences(self):
         return {"version": 1, "game_dir": self.game_var.get().strip(),

@@ -203,7 +203,13 @@ class LauncherTests(unittest.TestCase):
         self.original_state = self.state_path.read_bytes()
         self.root = tk.Tk()
         self.root.withdraw()
-        self.addCleanup(self.root.destroy)
+        self.callback_errors = []
+        self.root.report_callback_exception = lambda *error: self.callback_errors.append(error)
+        def close_root():
+            self.root.update_idletasks()
+            self.root.destroy()
+            self.assertEqual(self.callback_errors, [], "Unexpected Tk callback errors")
+        self.addCleanup(close_root)
         self.app = launcher.Launcher(self.root, self.repo, self.prefs_path, self.state_path)
         self.addCleanup(patch.stopall)
         patch.object(launcher, "game_is_running", return_value=False).start()
@@ -218,6 +224,42 @@ class LauncherTests(unittest.TestCase):
         self.assertFalse(self.prefs_path.exists())
         self.assertFalse((self.game / "VR").exists())
         self.assertEqual(self.state_path.read_bytes(), self.original_state)
+
+    def test_small_window_keeps_play_recovery_actions_accessible(self):
+        import tkinter as tk
+        from tkinter import ttk
+
+        def descendants(widget):
+            for child in widget.winfo_children():
+                yield child
+                yield from descendants(child)
+
+        self.root.geometry("860x680")
+        self.root.deiconify()
+        self.root.update()
+        play = self.app.notebook.winfo_children()[0]
+        button = next(widget for widget in descendants(play)
+                      if isinstance(widget, ttk.Button) and widget.cget("text") == "Open backups")
+        canvas = next((widget for widget in descendants(play) if isinstance(widget, tk.Canvas)), None)
+        if canvas:
+            canvas.yview_moveto(1)
+            self.root.update()
+        self.assertLessEqual(button.winfo_rooty() + button.winfo_height(),
+                             play.winfo_rooty() + play.winfo_height())
+
+    def test_process_query_has_bounded_wait_and_hidden_console(self):
+        import subprocess
+        from tools import test_launcher
+
+        observed = []
+        def query_boundary(command, **kwargs):
+            observed.append(kwargs)
+            return subprocess.CompletedProcess(command, 0, '"portal2.exe","123"', "")
+
+        with patch.object(test_launcher.subprocess, "run", side_effect=query_boundary):
+            self.assertTrue(test_launcher.game_is_running())
+        self.assertEqual(observed[0].get("timeout"), 5)
+        self.assertEqual(observed[0].get("creationflags"), getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
     def test_save_and_reset_only_change_local_settings(self):
         self.app.vars["SnapTurning"].set("true")
