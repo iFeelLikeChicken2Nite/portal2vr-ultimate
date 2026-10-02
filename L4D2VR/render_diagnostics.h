@@ -48,6 +48,10 @@ enum class RenderDiagnosticEvent : std::size_t
     CrosshairDirectColorUnavailable,
     CrosshairDirectAbiUnsupported,
     LaserControlPoints,
+    NativeReticleDraw,
+    NativeReticleUnavailable,
+    NativeReticleCaptureSuppressed,
+    NativeBeamWorldOrigin,
     Count
 };
 

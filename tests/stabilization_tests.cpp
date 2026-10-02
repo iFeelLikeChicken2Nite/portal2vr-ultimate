@@ -19,6 +19,8 @@
 #include "../L4D2VR/reticle_telemetry.h"
 #include "../L4D2VR/viewmodel_alignment.h"
 #include "../L4D2VR/muzzle_origin.h"
+#include "../L4D2VR/native_reticle.h"
+#include "../L4D2VR/native_beam.h"
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -26,6 +28,12 @@
 #include <sstream>
 
 static int failures = 0;
+
+struct TestReticleCanvas
+{
+    NativeReticle::ClipRect rect{0, 0, 1280, 720};
+    void SetClipRect(const NativeReticle::ClipRect &value) { rect = value; }
+};
 
 struct TestViewportEngine
 {
@@ -1060,6 +1068,69 @@ int main()
         expectInt(nativeWindowReticle->y, 1310,
                "eye-center hit moves the native reticle to eye-target center Y");
     }
+    const auto eyeCanvasReticle = AimFeedback::ProjectReticleSpriteToEye(
+        Vector{10, 0, 0}, Vector{0, 0, 0}, eyeForward, eyeRight, eyeUp,
+        90.0f, 1.0f, 2528, 2704, 1236, 1310, 56, 84, 1280, 720);
+    expect(eyeCanvasReticle.has_value(), true,
+           "eye-sized Source HUD layout does not get rejected as an unrelated icon");
+    if (eyeCanvasReticle) {
+        expectInt(eyeCanvasReticle->x, 1236, "eye-sized source keeps its original center offset X");
+        expectInt(eyeCanvasReticle->y, 1310, "eye-sized source keeps its original center offset Y");
+    }
+    TestReticleCanvas nativeCanvas;
+    {
+        NativeReticle::ClipScope<TestReticleCanvas> scope(nativeCanvas,
+            nativeCanvas.rect, {0, 0, 2528, 2704});
+        expect(nativeCanvas.rect.Contains(1236, 1310, 56, 84), true,
+               "native Source reticle is not clipped to the desktop panel");
+    }
+    expect(nativeCanvas.rect.Contains(1236, 1310, 56, 84), false,
+           "reticle scope restores the native clip for captions and other HUD panels");
+    expectInt(nativeCanvas.rect.right, 1280, "original HUD clip width restored");
+    expectInt(nativeCanvas.rect.bottom, 720, "original HUD clip height restored");
+    const auto translatedReticle = NativeReticle::SurfacePosition({1236, 1310}, 15, -7);
+    expect(translatedReticle.has_value(), true, "native panel translation can be removed safely");
+    if (translatedReticle) {
+        expectInt(translatedReticle->x, 1221, "native Surface adds X translation only once");
+        expectInt(translatedReticle->y, 1317, "native Surface adds Y translation only once");
+    }
+    expect(NativeReticle::SurfacePosition({INT_MAX, 0}, -1, 0).has_value(), false,
+           "native Surface coordinate rebasing cannot overflow");
+    const NativeReticle::SurfaceProbe knownSurface{
+        0x50000000, 0x6A4466CE, 0x198000, 0x500C4ED4, 0x5000AA10, 0x5000B8C0};
+    expect(NativeReticle::Supported(knownSurface), true,
+           "installed Source surface ABI allows the scoped native reticle route");
+    auto changedSurface = knownSurface;
+    ++changedSurface.timestamp;
+    expect(NativeReticle::Supported(changedSurface), false,
+           "unknown Source surface build must not use internal clipping calls");
+    changedSurface = knownSurface;
+    changedSurface.drawTexturedSubRect = 0x5000AB40;
+    expect(NativeReticle::Supported(changedSurface), false,
+           "different texture-draw ABI cannot use the native reticle fix");
+    std::uintptr_t beamLookupCaller = 0;
+    expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x102808B3, "muzzle"), false,
+           "normal native attachment lookups are never changed");
+    {
+        NativeBeam::CreationScope scope(beamLookupCaller, 0x102808B3);
+        expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x102808B3, "muzzle"), true,
+               "only VR beam creation selects Source's player-owned world-origin branch");
+        expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x1028095C, "muzzle"), false,
+               "nested model lookups retain normal muzzle attachments");
+        expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x102808B3, "light"), false,
+               "gun light attachments are never overridden");
+        expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x102808B3, nullptr), false,
+               "null attachment names are not dereferenced");
+        {
+            NativeBeam::CreationScope nested(beamLookupCaller, 0x102908B3);
+            expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x102908B3, "muzzle"), true,
+                   "nested scope selects its own native caller");
+        }
+        expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x102808B3, "muzzle"), true,
+               "nested creation restores the previous scope");
+    }
+    expect(NativeBeam::UseWorldOrigin(beamLookupCaller, 0x102808B3, "muzzle"), false,
+           "beam creation immediately restores normal attachment behavior");
     expect(AimFeedback::ClassifyReticleCanvas(1078, 1255, 56, 84, 1280, 720) ==
                AimFeedback::ReticleCanvasPosition::OutsideY, true,
            "eye-sized reticle below the reported Source canvas is diagnosed separately");

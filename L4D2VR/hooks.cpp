@@ -11,7 +11,10 @@
 #include "aim_feedback.h"
 #include "render_context_abi.h"
 #include "reticle_telemetry.h"
+#include "native_reticle.h"
+#include "native_beam.h"
 #include <Windows.h>
+#include <intrin.h>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -120,6 +123,70 @@ static std::string DescribeHudTexture(const SourceHudTextureIdentity &identity)
         (printable(identity.shortName) ? identity.shortName.data() : "<unreadable>") +
         " material=" +
         (printable(identity.textureFile) ? identity.textureFile.data() : "<unreadable>");
+}
+
+struct NativeReticleSurface
+{
+    using ClipSetter = void(__cdecl *)(int, int, int, int);
+    ClipSetter setter = nullptr;
+    NativeReticle::ClipRect previous{};
+    std::array<int, 2> translation{};
+
+    void SetClipRect(const NativeReticle::ClipRect &rect)
+    {
+        setter(rect.left, rect.top, rect.right, rect.bottom);
+    }
+};
+
+static std::optional<NativeReticleSurface> PrepareNativeReticleSurface(ISurface *surface)
+{
+    const auto read = [](std::uintptr_t address, void *output, std::size_t size) {
+        SIZE_T bytesRead = 0;
+        return address && ReadProcessMemory(GetCurrentProcess(),
+            reinterpret_cast<const void *>(address), output, size, &bytesRead) && bytesRead == size;
+    };
+    std::uintptr_t table = 0;
+    if (!read(reinterpret_cast<std::uintptr_t>(surface), &table, sizeof(table)))
+        return std::nullopt;
+    static thread_local std::uintptr_t checkedTable = 0;
+    static thread_local std::uintptr_t checkedModule = 0;
+    if (table != checkedTable) {
+        checkedTable = table;
+        checkedModule = 0;
+        const auto module = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(L"vguimatsurface.dll"));
+        IMAGE_DOS_HEADER dos{};
+        IMAGE_NT_HEADERS32 nt{};
+        if (!read(module, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE ||
+            dos.e_lfanew <= 0 || dos.e_lfanew > 4096 ||
+            !read(module + dos.e_lfanew, &nt, sizeof(nt)) || nt.Signature != IMAGE_NT_SIGNATURE ||
+            nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+            return std::nullopt;
+        NativeReticle::SurfaceProbe probe{module, nt.FileHeader.TimeDateStamp,
+            nt.OptionalHeader.SizeOfImage, table, 0, 0};
+        // Read slots only from the recognized table, not an arbitrary vptr.
+        if (table != module + 0xC4ED4 ||
+            !read(table + NativeReticle::kDrawTexturedSubRectSlot * sizeof(void *),
+                &probe.drawTexturedSubRect, sizeof(probe.drawTexturedSubRect)) ||
+            !read(table + NativeReticle::kGetScreenSizeSlot * sizeof(void *),
+                &probe.getScreenSize, sizeof(probe.getScreenSize)) || !NativeReticle::Supported(probe))
+            return std::nullopt;
+        constexpr std::array<std::uint8_t, 12> clipPrefix{
+            0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x08, 0x8B, 0x4D, 0x14, 0x8B, 0x55, 0x10};
+        std::array<std::uint8_t, clipPrefix.size()> actual{};
+        if (!read(module + NativeReticle::kClipSetterRva, actual.data(), actual.size()) || actual != clipPrefix)
+            return std::nullopt;
+        checkedModule = module;
+    }
+    if (!checkedModule)
+        return std::nullopt;
+    NativeReticleSurface result;
+    if (!read(checkedModule + NativeReticle::kClipRectRva, &result.previous, sizeof(result.previous)) ||
+        !read(reinterpret_cast<std::uintptr_t>(surface) + NativeReticle::kSurfaceTranslationOffset,
+            result.translation.data(), sizeof(result.translation)))
+        return std::nullopt;
+    result.setter = reinterpret_cast<NativeReticleSurface::ClipSetter>(
+        checkedModule + NativeReticle::kClipSetterRva);
+    return result;
 }
 
 static Portal2MaterialAbi::Kind CheckRenderContextAbi(IMatRenderContext *context)
@@ -394,7 +461,69 @@ Hooks::Hooks(Game *game)
 	}
     InitViewmodelAlignment();
     InitMuzzleSampling();
+    InitNativeWorldBeam();
 	m_Ready = true;
+}
+
+void Hooks::InitNativeWorldBeam()
+{
+    if (!m_Game->m_Offsets->m_LaserAvailable)
+        return;
+    const auto module = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(L"client.dll"));
+    const auto read = [](std::uintptr_t address, void *output, std::size_t size) {
+        SIZE_T bytesRead = 0;
+        return address && ReadProcessMemory(GetCurrentProcess(),
+            reinterpret_cast<const void *>(address), output, size, &bytesRead) && bytesRead == size;
+    };
+    IMAGE_DOS_HEADER dos{};
+    IMAGE_NT_HEADERS32 nt{};
+    const auto *offsets = m_Game->m_Offsets;
+    const auto caller = offsets->CreatePingPointer.address + NativeBeam::kMuzzleLookupReturnOffset;
+    // The extra hook only selects an existing branch in this audited build.
+    // Validate the exact indirect call/branch, not just a plausible prologue.
+    constexpr std::array<std::uint8_t, 7> branch{0xFF, 0xD0, 0x6A, 0x00, 0x83, 0xF8, 0xFF};
+    std::array<std::uint8_t, branch.size()> actual{};
+    const bool compatible = module && offsets->LookupViewmodelAttachment.address &&
+        read(module, &dos, sizeof(dos)) && dos.e_magic == IMAGE_DOS_SIGNATURE &&
+        dos.e_lfanew > 0 && dos.e_lfanew <= 4096 &&
+        read(module + dos.e_lfanew, &nt, sizeof(nt)) && nt.Signature == IMAGE_NT_SIGNATURE &&
+        nt.OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC &&
+        nt.FileHeader.TimeDateStamp == 0x6AA07473 && nt.OptionalHeader.SizeOfImage == 0xFF3000 &&
+        offsets->CreatePingPointer.address == module + 0x280800 &&
+        offsets->LookupViewmodelAttachment.address == module + 0x514B0 &&
+        read(caller - 2, actual.data(), actual.size()) && actual == branch;
+    if (!compatible) {
+        Logger::Write("Native world-origin beam route unavailable: audited client ABI mismatch; existing native creation retained");
+        return;
+    }
+    if (hkBeamAttachmentLookup.createHook(
+            reinterpret_cast<LPVOID>(offsets->LookupViewmodelAttachment.address), &dBeamAttachmentLookup) ||
+        hkBeamAttachmentLookup.enableHook()) {
+        Logger::Write("Native world-origin beam route unavailable: optional hook installation failed; existing native creation retained");
+        return;
+    }
+    m_NativeWorldBeamReady = true;
+    Logger::Write("Native robot_point_beam: player-owned world-origin creation available; animated muzzle CP0, native render visibility requires VR test");
+}
+
+void Hooks::CreateNativeAimPointer(void *player, const Vector &target)
+{
+    if (!player || !CreatePingPointer)
+        return;
+    NativeBeam::CreationScope scope(m_NativeBeamLookupCaller, m_NativeWorldBeamReady ?
+        m_Game->m_Offsets->CreatePingPointer.address + NativeBeam::kMuzzleLookupReturnOffset : 0);
+    CreatePingPointer(player, target);
+}
+
+int __fastcall Hooks::dBeamAttachmentLookup(void *ecx, void *, const char *name)
+{
+    if (NativeBeam::UseWorldOrigin(m_NativeBeamLookupCaller,
+            reinterpret_cast<std::uintptr_t>(_ReturnAddress()), name)) {
+        if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::NativeBeamWorldOrigin))
+            Logger::Write("Native beam creation selected Source's player-owned PATTACH_WORLDORIGIN branch; model/glow attachments unchanged");
+        return -1;
+    }
+    return hkBeamAttachmentLookup.fOriginal(ecx, name);
 }
 
 void Hooks::InitViewmodelAlignment()
@@ -492,7 +621,7 @@ void Hooks::InitMuzzleSampling()
         "Muzzle sampling unavailable: requested muzzle beam suppressed; existing model alignment unchanged");
     Logger::Write(m_VR->m_Config.experimentalWorldAimMarker ?
         "Aim A/B renderer: experimental world line + stereo Source atlas reticle" :
-        "Aim A/B renderer: native robot_point_beam + legacy Source HUD crosshair path (VR visibility unverified)");
+        "Aim A/B renderer: native robot_point_beam + original per-eye Source DrawSelf reticle (VR visibility unverified)");
 }
 
 void __fastcall Hooks::dViewmodelFormatAttachment(void *ecx, void *, int index, matrix3x4_t &matrix)
@@ -1398,37 +1527,46 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 	int	newY = y;
 
 	if (m_VR->m_IsVREnabled && m_VR->m_TrackingOutputValid &&
-		m_VR->m_RightControllerPose.valid)
+		m_VR->m_RightControllerPose.valid && m_VR->m_AimMode == 2 &&
+		m_Game->m_EngineClient->IsInGame() && !m_Game->m_VguiSurface->IsCursorVisible())
 	{
 		int windowWidth, windowHeight;
 		IMatRenderContext* context = m_Game->m_MaterialSystem->GetRenderContext();
+		if (!context)
+			return hkDrawSelf.fOriginal(ecx, x, y, w, h, clr, flApparentZ);
+		if (CheckRenderContextAbi(context) == Portal2MaterialAbi::Kind::Unsupported) {
+			context->Release();
+			return hkDrawSelf.fOriginal(ecx, x, y, w, h, clr, flApparentZ);
+		}
 		context->GetWindowSize(windowWidth, windowHeight);
+		int viewportX = 0, viewportY = 0, viewportWidth = 0, viewportHeight = 0;
+		context->GetViewport(viewportX, viewportY, viewportWidth, viewportHeight);
+		ITexture *currentTarget = context->GetRenderTarget();
 		context->Release();
+		const auto sourceIdentity = ReadSourceHudTextureIdentity(ecx);
+		if (!sourceIdentity || !AimFeedback::IsReticleIconName(
+			sourceIdentity->shortName.data(), sourceIdentity->textureFile.data()))
+			return hkDrawSelf.fOriginal(ecx, x, y, w, h, clr, flApparentZ);
+		// Captions are a separate HMD overlay, not the reticle's world-hit plane.
+		// Do not duplicate portal icons into that crop after drawing them per eye.
+		if (m_ExplicitHudCaptureActive || m_HudTargetActive) {
+			if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::NativeReticleCaptureSuppressed))
+				Logger::Write("Portal reticle excluded from caption overlay; native status is drawn per eye");
+			return 0;
+		}
+		if (!m_ActiveAimEyeView)
+			return hkDrawSelf.fOriginal(ecx, x, y, w, h, clr, flApparentZ);
 
 		const bool worldReticle = m_VR->m_AimMode == 2 &&
 			m_VR->m_Config.experimentalWorldAimMarker && m_Game->m_DebugOverlay &&
 			m_Game->m_EngineClient->IsInGame() &&
 			!m_Game->m_VguiSurface->IsCursorVisible();
-		if (worldReticle && !m_ActiveAimEyeView &&
-			AimFeedback::IsCenteredReticleSprite(x, y, w, h, windowWidth, windowHeight)) {
-			const auto identity = ReadSourceHudTextureIdentity(ecx);
-			if (identity && AimFeedback::IsPortalStatusIconName(
-				identity->shortName.data(), identity->textureFile.data()) &&
-				m_VR->m_RenderDiagnostics.First(
-					RenderDiagnosticEvent::CrosshairWorldPortalStatusOutsideStereo))
-				Logger::Write("Experimental stereo reticle: possible Portal status outside eye passes; " +
-					DescribeHudTexture(*identity));
-			if (identity && AimFeedback::IsReticleIconName(
-				identity->shortName.data(), identity->textureFile.data()) &&
-				m_VR->m_RenderDiagnostics.First(
-					RenderDiagnosticEvent::CrosshairWorldOutsideStereo))
-				Logger::Write("Experimental stereo reticle: Portal 2 center sprite rendered "
-					"outside both eye passes; dynamic stereo status unavailable on this route");
-		}
 		if (worldReticle && m_ActiveAimEyeView) {
 			// Source selects the actual portal status icon and color. Draw the same
 			// atlas subrectangle into the active eye only when its engine ABI matches.
-			if (!AimFeedback::IsCenteredReticleSprite(x, y, w, h, windowWidth, windowHeight))
+			if (!AimFeedback::IsCenteredReticleSprite(x, y, w, h, windowWidth, windowHeight) &&
+				!AimFeedback::IsCenteredReticleSprite(x, y, w, h,
+					m_ActiveAimEyeView->width, m_ActiveAimEyeView->height))
 				return hkDrawSelf.fOriginal(ecx, x, y, w, h, clr, flApparentZ);
 			const auto identity = ReadSourceHudTextureIdentity(ecx);
 			const bool isReticle = identity && AimFeedback::IsReticleIconName(
@@ -1522,43 +1660,36 @@ int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h
 			return hkDrawSelf.fOriginal(ecx, x, y, w, h, clr, flApparentZ);
 		}
 
-		Vector screen = { 0, 0, 0 };
-
-		//Vector vec = m_VR->m_AimPos - m_VR->GetRightControllerAbsPos();
-
-		//newZ = 1.0 / sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z);
-
-		const bool clipTransformResult = ScreenTransform(m_VR->m_AimPos, &screen,
-			m_VR->m_RenderWidth, m_VR->m_RenderHeight);
-		const bool drawingToHud = m_ExplicitHudCaptureActive || m_HudTargetActive;
-		const auto projected = AimFeedback::ProjectedCrosshairPosition(
-			clipTransformResult, screen.x, screen.y, x, y, windowWidth, windowHeight,
-			m_VR->m_RenderWidth, m_VR->m_RenderHeight,
-			drawingToHud ? windowWidth : static_cast<int>(m_VR->m_RenderWidth),
-			drawingToHud ? windowHeight : static_cast<int>(m_VR->m_RenderHeight));
-		if (!projected) {
-			if (Portal2VRRuntime::IsPublished(g_Game, m_Game) &&
-				m_Game->m_EngineClient->IsInGame() &&
-				m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::CrosshairTransformTrue))
-				Logger::Write("Crosshair DrawSelf: projection outside VR viewport; draw skipped (clip=" +
-					std::to_string(clipTransformResult) + ")");
+		// Native VGUI StartDrawing uses the active eye's ortho/viewport, but
+		// PushMakeCurrent still clips to the cached desktop HUD panel. Use the
+		// actual eye view, not engine ClipTransform's cached desktop/HUD view.
+		Vector forward, right, up;
+		const auto &eye = *m_ActiveAimEyeView;
+		QAngle::AngleVectors(QAngle(eye.angles.x, eye.angles.y, eye.angles.z), &forward, &right, &up);
+		const auto projected = AimFeedback::ProjectReticleSpriteToEye(
+			m_VR->m_AimPos, eye.origin, forward, right, up, eye.fov, eye.m_flAspectRatio,
+			eye.width, eye.height, x, y, w, h, windowWidth, windowHeight);
+		if (!projected)
 			return 0;
+		auto surface = PrepareNativeReticleSurface(m_Game->m_VguiSurface);
+		const auto position = surface ? NativeReticle::SurfacePosition(*projected,
+			surface->translation[0], surface->translation[1]) : std::nullopt;
+		ITexture *eyeTarget = m_ActiveAimEye == 1 ? m_VR->m_LeftEyeTexture : m_VR->m_RightEyeTexture;
+		if (!position || currentTarget != eyeTarget || viewportX != 0 || viewportY != 0 ||
+			viewportWidth != eye.width || viewportHeight != eye.height) {
+			if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::NativeReticleUnavailable))
+				Logger::Write("Native Portal reticle correction unavailable: surface ABI or active eye viewport mismatch; native draw retained");
+			return hkDrawSelf.fOriginal(ecx, x, y, w, h, clr, flApparentZ);
 		}
-		newX = projected->x;
-		newY = projected->y;
-		if (Portal2VRRuntime::IsPublished(g_Game, m_Game) &&
-			m_Game->m_EngineClient->IsInGame() &&
-			m_VR->m_RenderDiagnostics.First(drawingToHud ?
-				RenderDiagnosticEvent::CrosshairHudDraw :
-				RenderDiagnosticEvent::CrosshairTransformFalse))
-			Logger::Write("Crosshair DrawSelf: ClipTransformResult=" + std::to_string(clipTransformResult) +
-				" hudTarget=" + std::to_string(drawingToHud) +
-				" source=" + std::to_string(x) + "," + std::to_string(y) +
-				" output=" + std::to_string(newX) + "," + std::to_string(newY) +
-				" target=" + std::to_string(screen.x) + "," + std::to_string(screen.y) +
-				" window=" + std::to_string(windowWidth) + "x" + std::to_string(windowHeight) +
-				" vr=" + std::to_string(m_VR->m_RenderWidth) + "x" +
-				std::to_string(m_VR->m_RenderHeight));
+		if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::NativeReticleDraw))
+			Logger::Write("Native Portal reticle: original DrawSelf with explicit eye projection; clip=" +
+				std::to_string(surface->previous.left) + "," + std::to_string(surface->previous.top) + "," +
+				std::to_string(surface->previous.right) + "," + std::to_string(surface->previous.bottom) +
+				" -> " + std::to_string(eye.width) + "x" + std::to_string(eye.height) +
+				"; Source artwork/status/alpha retained");
+		NativeReticle::ClipScope<NativeReticleSurface> clip(*surface, surface->previous,
+			{0, 0, eye.width, eye.height});
+		return hkDrawSelf.fOriginal(ecx, position->x, position->y, w, h, clr, flApparentZ);
 	}
 
 	return hkDrawSelf.fOriginal(ecx, newX, newY, w, h, clr, flApparentZ);

@@ -183,6 +183,9 @@ public:
     static inline thread_local bool m_ControllerViewmodelUpdate = false;
     bool m_ViewmodelAlignmentReady = false;
     bool m_MuzzleSamplingReady = false;
+    bool m_NativeWorldBeamReady = false;
+    static inline Hook<tLookupViewmodelAttachment> hkBeamAttachmentLookup;
+    static inline thread_local std::uintptr_t m_NativeBeamLookupCaller = 0;
     static inline Hook<tViewmodelFormatAttachment> hkViewmodelFormatAttachment;
     static inline tLookupViewmodelAttachment LookupViewmodelAttachment = nullptr;
     static inline tGetViewmodelOwner GetViewmodelOwner = nullptr;
@@ -347,6 +350,9 @@ public:
 	static inline bool m_PushedHud;
 
 	static inline tCreatePingPointer CreatePingPointer;
+	void InitNativeWorldBeam();
+	void CreateNativeAimPointer(void *player, const Vector &target);
+	static int __fastcall dBeamAttachmentLookup(void *ecx, void *, const char *name);
 	static inline tGetPortalPlayer GetPortalPlayer;
 	static inline tPrecacheParticleSystem PrecacheParticleSystem;
 

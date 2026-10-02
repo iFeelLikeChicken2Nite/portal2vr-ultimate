@@ -219,9 +219,17 @@ inline std::optional<ScreenPoint> ProjectReticleSpriteToEye(
     int spriteX, int spriteY, int spriteWidth, int spriteHeight,
     int windowWidth, int windowHeight)
 {
+    // Portal's cached panel can still use desktop dimensions, or already
+    // have been laid out for the active eye. Do not mix the two centers.
+    int sourceWidth = windowWidth, sourceHeight = windowHeight;
     if (!IsCenteredReticleSprite(spriteX, spriteY, spriteWidth, spriteHeight,
-                                windowWidth, windowHeight))
-        return std::nullopt;
+                                sourceWidth, sourceHeight)) {
+        sourceWidth = renderWidth;
+        sourceHeight = renderHeight;
+        if (!IsCenteredReticleSprite(spriteX, spriteY, spriteWidth, spriteHeight,
+                                    sourceWidth, sourceHeight))
+            return std::nullopt;
+    }
     const auto point = ProjectWorldToEye(target, eyeOrigin, forward, right, up,
                                          horizontalFovDegrees, aspect, renderWidth, renderHeight);
     if (!point)
@@ -231,7 +239,7 @@ inline std::optional<ScreenPoint> ProjectReticleSpriteToEye(
     // offset from the window center while moving the sprite to the projected
     // hit in the eye target (not the upper-left window-sized region).
     return ProjectedCrosshairPosition(false, point->x, point->y, spriteX, spriteY,
-        windowWidth, windowHeight, renderWidth, renderHeight);
+        sourceWidth, sourceHeight, renderWidth, renderHeight);
 }
 
 } // namespace AimFeedback

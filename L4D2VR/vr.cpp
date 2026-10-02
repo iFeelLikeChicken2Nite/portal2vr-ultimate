@@ -1663,10 +1663,11 @@ void VR::UpdateAimFeedback(C_BasePlayer *localPlayer)
                     Logger::Write("Controller laser creation requested; crosshair paint state is no longer a prerequisite");
                     m_LaserRequestLogged = true;
                 }
-                m_Game->m_Hooks->CreatePingPointer(localPlayer, m_AimPos);
+                m_Game->m_Hooks->CreateNativeAimPointer(localPlayer, m_AimPos);
             }
             // Apply control points on the creation frame too. Source may use a
-            // native muzzle attachment parent; both routes now agree on origin.
+            // player-owned world-origin branch, so engine attachment updates
+            // cannot overwrite CP0 with a separately projected viewmodel pose.
             if (portalPlayer->m_PointLaser) {
                 if (!m_LaserParticleObserved) {
                     Logger::Write("Controller laser particle pointer observed; actual visibility unverified");
