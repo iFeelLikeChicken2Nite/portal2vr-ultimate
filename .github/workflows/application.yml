@@ -1,0 +1,168 @@
+name: Portal2VR Windows application
+
+on:
+  push:
+    branches: [main, experimental]
+  pull_request:
+    branches: [main, experimental]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Queue every main push so version allocation and publication cannot race.
+concurrency:
+  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'portal2vr-main-release' || format('portal2vr-build-{0}-{1}', github.run_id, github.run_attempt) }}
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: tools/requirements-package.txt
+      - name: Find VS 2022 MSBuild
+        id: msbuild
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $msbuild = & $vswhere -latest -version '[17.0,18.0)' -products '*' -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+          if (-not $msbuild) { throw 'Visual Studio 2022 MSBuild was not found' }
+          "path=$msbuild" >> $env:GITHUB_OUTPUT
+      - name: Build Release x86 DLL and native tests
+        shell: pwsh
+        run: |
+          $msbuild = '${{ steps.msbuild.outputs.path }}'
+          & $msbuild l4d2vr.sln /t:Build /m /p:Configuration=Release /p:Platform=x86 '/p:PORTAL2_DIR='
+          if ($LASTEXITCODE -ne 0) { throw 'Release x86 DLL build failed' }
+          foreach ($project in @('stabilization_tests', 'd3d9_bridge_tests', 'native_safety_tests', 'hook_rollback_tests')) {
+            & $msbuild "tests/$project.vcxproj" /t:Build /m /p:Configuration=Release /p:Platform=Win32
+            if ($LASTEXITCODE -ne 0) { throw "$project build failed" }
+            & "tests/bin/$project.exe"
+            if ($LASTEXITCODE -ne 0) { throw "$project failed" }
+          }
+          if (-not (Test-Path -LiteralPath 'Release/d3d9.dll')) { throw 'Release/d3d9.dll is missing' }
+      - name: Run complete Python suite
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_*.py'
+          if ($LASTEXITCODE -ne 0) { throw 'Python tests failed' }
+      - name: Freeze standalone launcher
+        shell: pwsh
+        run: |
+          python -m pip install -r tools/requirements-package.txt
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller installation failed' }
+          python -m PyInstaller --noconfirm --onefile --windowed --name 'Portal2VR Launcher' --paths . --distpath dist/launcher --workpath build/launcher --specpath build/spec tools/launcher_entry.py
+          if ($LASTEXITCODE -ne 0) { throw 'Launcher freeze failed' }
+          if (-not (Test-Path -LiteralPath 'dist/launcher/Portal2VR Launcher.exe')) { throw 'Frozen launcher is missing' }
+      - name: Assemble and checksum CI snapshot
+        shell: pwsh
+        run: |
+          python -m tools.build_release_package --repo . --launcher-exe 'dist/launcher/Portal2VR Launcher.exe' --output dist/package --version v0.0.0 --commit $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'CI snapshot assembly failed' }
+          $archive = @(Get-ChildItem -LiteralPath dist/package -Filter '*.zip' -File)
+          if ($archive.Count -ne 1 -or $archive[0].Name -ne 'Portal2VR-v0.0.0-win32.zip') { throw 'Expected one CI snapshot ZIP' }
+          $digest = (Get-FileHash -LiteralPath $archive[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText((Join-Path $PWD 'dist/package/SHA256SUMS.txt'), "$digest  $($archive[0].Name)`n", [System.Text.Encoding]::ASCII)
+          [System.IO.File]::WriteAllText((Join-Path $PWD 'dist/package/version.txt'), "v0.0.0`n", [System.Text.Encoding]::ASCII)
+      - name: Test extracted frozen package with fixture game
+        shell: pwsh
+        run: |
+          $archive = @(Get-ChildItem -LiteralPath dist/package -Filter '*.zip' -File)
+          Expand-Archive -LiteralPath $archive[0].FullName -DestinationPath dist/extracted
+          $exe = (Resolve-Path -LiteralPath 'dist/extracted/Portal2VR Launcher.exe').Path
+          $report = Join-Path (Resolve-Path -LiteralPath dist/package).Path 'smoke-report.json'
+          $process = Start-Process -FilePath $exe -ArgumentList "--self-test `"$report`"" -WindowStyle Hidden -PassThru
+          if (-not $process.WaitForExit(60000)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw 'Frozen launcher self-test exceeded 60 seconds'
+          }
+          $process.Refresh()
+          if ($process.ExitCode -ne 0) { throw "Frozen launcher self-test exited $($process.ExitCode)" }
+          if (-not (Test-Path -LiteralPath $report)) { throw 'Frozen launcher did not write a report' }
+          $smoke = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+          if ($smoke.ok -ne $true -or $smoke.frozen -ne $true -or $smoke.tkinter -ne $true -or $smoke.restored -ne $true -or $smoke.payload_count -ne 9) {
+            throw "Frozen launcher self-test failed: $(Get-Content -LiteralPath $report -Raw)"
+          }
+      - name: Upload downloadable build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: portal2vr-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/package/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: portal2vr-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/snapshot
+      - name: Verify and extract CI snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "$GITHUB_SHA" <<'PY'
+          from pathlib import Path
+          import sys
+          from tools.publish_release import verify_snapshot
+
+          verify_snapshot(Path('dist/snapshot/Portal2VR-v0.0.0-win32.zip'),
+                          Path('dist/snapshot/SHA256SUMS.txt'), sys.argv[1],
+                          Path('dist/extracted'))
+          PY
+      - name: Select stable version and reassemble exact snapshot payloads
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate --slurp > dist/releases.json
+          version="$(python -m tools.release_version --releases dist/releases.json --commit "$GITHUB_SHA")"
+          python -m tools.build_release_package \
+            --repo dist/extracted --launcher-exe 'dist/extracted/Portal2VR Launcher.exe' \
+            --output dist/release --version "$version" --commit "$GITHUB_SHA"
+          python - "$version" <<'PY'
+          import hashlib
+          from pathlib import Path
+          import sys
+
+          archive = Path('dist/release') / f'Portal2VR-{sys.argv[1]}-win32.zip'
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          (archive.parent / 'SHA256SUMS.txt').write_bytes(
+              f'{digest}  {archive.name}\n'.encode('ascii'))
+          PY
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+      - name: Publish verified main release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ steps.release.outputs.value }}'
+          python -m tools.publish_release \
+            --repo "$GITHUB_REPOSITORY" --tag "$version" --commit "$GITHUB_SHA" \
+            --zip "dist/release/Portal2VR-${version}-win32.zip" \
+            --checksum dist/release/SHA256SUMS.txt

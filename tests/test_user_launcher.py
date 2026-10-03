@@ -303,6 +303,29 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(original.read_bytes(), b"original")
         self.assertFalse((self.game / "VR").exists())
 
+    def test_restore_recovers_interrupted_first_install_before_empty_state_return(self):
+        from tests.test_launcher_transactions import CrashRecoveryTests
+        original = self.game / "bin/d3d9.dll"
+        original.write_bytes(b"original")
+        CrashRecoveryTests().crash(self.folder, "install", "after_write")
+        self.assertFalse(core.load_state(self.state_path)["managed_files"])
+        self.app.restore()
+        self.assertEqual(original.read_bytes(), b"original")
+        self.assertFalse((self.game / "VR").exists())
+        self.assertFalse(self.state_path.with_name("state.json.transaction.json").exists())
+
+    def test_running_game_blocks_interrupted_transaction_recovery(self):
+        from tests.test_launcher_transactions import CrashRecoveryTests
+        original = self.game / "bin/d3d9.dll"
+        original.write_bytes(b"original")
+        CrashRecoveryTests().crash(self.folder, "install", "after_write")
+        journal = self.state_path.with_name("state.json.transaction.json")
+        before = journal.read_bytes()
+        with patch.object(self.launcher, "game_is_running", return_value=True):
+            self.app.restore()
+        self.assertEqual(original.read_bytes(), b"test-d3d9")
+        self.assertEqual(journal.read_bytes(), before)
+
     def test_launch_stages_selected_settings_before_external_steam_call(self):
         observed = []
 
