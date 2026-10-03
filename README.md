@@ -12,7 +12,7 @@ Requirements: Portal 2 for Windows, Steam, working SteamVR and a VR headset. The
 4. Start SteamVR and connect the headset/controllers, then click **Launch Portal 2 in VR**. The launcher applies the config, backs up originals and launches Steam app 620 with `-insecure` and the retained VR-compatible video arguments.
 5. Enable subtitles in Portal 2's own options if you want captions.
 
-The English launcher starts with the **recommended setup**, not the last milestone selected in the developer checklist. Settings survive restarts. `Save settings` changes only local preferences; `Apply without launching` installs the mod/config without starting the game. Apply changes with the game closed; restart to use the new settings.
+The launcher starts with the **recommended setup**. Settings survive restarts. `Save settings` changes only local preferences; `Apply without launching` installs the mod/config without starting the game. Apply changes with the game closed; restart to use the new settings.
 
 ### Recommended setup
 
@@ -86,4 +86,4 @@ C++/Python suites validate isolated logic and fixture installations. GUI tests u
 
 ## Credits
 
-Based on Gistix/portal2vr, existing OpenVR bindings and the VR-modified DXVK pipeline. Upstream PRs/community forks were research references, not blindly merged branches. Third-party licenses/source pins are retained. Internal architecture notes, session records and binary-analysis/decompilation artifacts are local-only, not published.
+Based on Gistix/portal2vr, existing OpenVR bindings and the VR-modified DXVK pipeline. Upstream PRs/community forks were research references, not blindly merged branches. Third-party licenses/source pins are retained.

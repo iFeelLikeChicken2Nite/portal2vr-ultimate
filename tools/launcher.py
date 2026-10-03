@@ -80,7 +80,7 @@ class Launcher:
         outer = ttk.Frame(self.root, padding=24)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="Portal2VR", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(outer, text="Your Portal 2 VR setup, without the test checklist.",
+        ttk.Label(outer, text="Your Portal 2 VR setup.",
                   style="Muted.TLabel").pack(anchor="w", pady=(2, 16))
         self.notebook = ttk.Notebook(outer)
         self.notebook.pack(fill="both", expand=True)
