@@ -23,6 +23,11 @@ LICENSES = (
 )
 README = ("Portal2VR for Windows\n"
           "=====================\n\n"
+          "Requirements: 64-bit Windows, installed Portal 2, Steam and SteamVR,\n"
+          "a Vulkan-capable graphics driver, and Microsoft Visual C++ v14\n"
+          "Redistributable (x86), at least as recent as the MSVC build tools.\n"
+          "Latest supported x86 runtime: https://aka.ms/vc14/vc_redist.x86.exe\n"
+          "Python and build tools are not required.\n\n"
           "1. Extract this entire ZIP to a writable folder. Keep its folders together.\n"
           "2. Close Portal 2, then double-click Portal2VR Launcher.exe.\n"
           "3. Select your Portal 2 and Steam paths. Choose Apply or Launch.\n"
