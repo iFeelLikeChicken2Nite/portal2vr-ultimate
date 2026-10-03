@@ -5,6 +5,7 @@
 #include "logger.h"
 #include "hud_capture.h"
 #include "native_beam.h"
+#include "required_hooks.h"
 
 class Game;
 class VR;
@@ -167,6 +168,8 @@ class Hooks
 public:
 	bool m_Ready = false;
 	bool m_MinHookInitialized = false;
+	bool m_OptionalRollbackFailed = false;
+	RequiredHooks m_RequiredHooks;
 	bool m_HudCaptureHooksReady = false;
 	static inline Game *m_Game;
 	static inline VR *m_VR;
@@ -268,8 +271,10 @@ public:
 
 	Hooks() {};
 	Hooks(Game *game);
+	void Initialize();
 
 	~Hooks();
+	bool RollbackFailedInitialization();
 
 	int initSourceHooks();
     void InitViewmodelAlignment();

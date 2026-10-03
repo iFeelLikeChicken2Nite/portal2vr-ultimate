@@ -51,6 +51,7 @@ struct ConfigSnapshot {
 struct ConfigParseResult {
     ConfigSnapshot value;
     std::vector<std::string> errors;
+    std::vector<std::string> notes;
 };
 
 inline std::string TrimConfigValue(const std::string &text)
@@ -59,6 +60,64 @@ inline std::string TrimConfigValue(const std::string &text)
     if (first == std::string::npos) return {};
     const auto last = text.find_last_not_of(" \t\r\n");
     return text.substr(first, last - first + 1);
+}
+
+inline bool ValidateConfig(const ConfigSnapshot &candidate, std::vector<std::string> &errors)
+{
+    if (candidate.roomscaleMode == RoomscaleMotion::Mode::ActiveExperimental &&
+        (!candidate.sixDof || candidate.portalOrientationMode != PortalOrientation::Mode::LegacyYaw))
+        errors.push_back("ActiveExperimental roomscale requires 6DOF=true and PortalOrientationMode=LegacyYaw");
+    if (candidate.aimFromViewmodelMuzzle && !candidate.experimentalViewmodelAlignment)
+        errors.push_back("AimFromViewmodelMuzzle requires ExperimentalViewmodelAlignment=true");
+    return errors.empty();
+}
+
+inline ConfigParseResult ApplyRuntimeConfig(const ConfigSnapshot &previous,
+                                            ConfigParseResult parsed, bool initialized)
+{
+    if (initialized && !parsed.errors.empty()) {
+        parsed.value = previous;
+        parsed.errors.push_back("malformed reload rejected; keeping active configuration");
+        return parsed;
+    }
+    if (initialized) {
+        const auto keep = [&](auto &candidate, const auto &active, const char *message) {
+            if (candidate != active) {
+                candidate = active;
+                parsed.notes.push_back(message);
+            }
+        };
+        keep(parsed.value.antiAliasing, previous.antiAliasing,
+             "AntiAliasing change requires a restart; keeping current value");
+        keep(parsed.value.trackingMode, previous.trackingMode,
+             "TrackingMode change requires restart; keeping active compositor origin");
+        keep(parsed.value.experimentalViewmodelAlignment, previous.experimentalViewmodelAlignment,
+             "ExperimentalViewmodelAlignment change requires restart; keeping current hook group");
+        keep(parsed.value.aimFromViewmodelMuzzle, previous.aimFromViewmodelMuzzle,
+             "AimFromViewmodelMuzzle change requires restart; keeping current sampler");
+        keep(parsed.value.portalOrientationMode, previous.portalOrientationMode,
+             "PortalOrientationMode change requires restart; keeping active mode");
+        if (parsed.value.roomscaleMode != previous.roomscaleMode &&
+            (parsed.value.roomscaleMode == RoomscaleMotion::Mode::ActiveExperimental ||
+             previous.roomscaleMode == RoomscaleMotion::Mode::ActiveExperimental))
+            keep(parsed.value.roomscaleMode, previous.roomscaleMode,
+                 "entering/leaving ActiveExperimental roomscale requires restart; keeping active mode");
+        if (parsed.value.experimentalHudOverlay != previous.experimentalHudOverlay ||
+            parsed.value.hudDistanceMeters != previous.hudDistanceMeters ||
+            parsed.value.hudWidthMeters != previous.hudWidthMeters ||
+            parsed.value.hudVerticalOffsetMeters != previous.hudVerticalOffsetMeters) {
+            parsed.value.experimentalHudOverlay = previous.experimentalHudOverlay;
+            parsed.value.hudDistanceMeters = previous.hudDistanceMeters;
+            parsed.value.hudWidthMeters = previous.hudWidthMeters;
+            parsed.value.hudVerticalOffsetMeters = previous.hudVerticalOffsetMeters;
+            parsed.notes.push_back("HUD overlay settings require restart; keeping active geometry");
+        }
+    }
+    if (!ValidateConfig(parsed.value, parsed.errors)) {
+        parsed.value = previous;
+        parsed.errors.push_back("dependent settings rejected; keeping previous configuration");
+    }
+    return parsed;
 }
 
 inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot &previous)

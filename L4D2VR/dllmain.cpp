@@ -55,6 +55,15 @@ DWORD WINAPI InitL4D2VR(HMODULE hModule)
     } catch (...) {
         Game::errorMsg("Portal2VR initialization failed with an unexpected error.");
     }
+    if (candidate && candidate->m_Hooks && candidate->m_Hooks->m_MinHookInitialized) {
+        const bool disabled = candidate->m_Hooks->RollbackFailedInitialization();
+        Logger::Write(disabled ?
+            "Hook startup failed; detours disabled, state retained until process exit for in-flight callbacks." :
+            "Hook startup rollback failed; unpublished detours and state retained until process exit.");
+        // An unpublished detour can already be inside its original function.
+        // Keep its Game/VR/trampoline state alive even after disabling entries.
+        return 0;
+    }
     delete candidate;
     Logger::Write("Portal2VR initialization stopped; DXVK proxy remains loaded.");
 
