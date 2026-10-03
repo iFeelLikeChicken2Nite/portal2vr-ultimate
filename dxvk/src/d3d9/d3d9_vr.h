@@ -5,11 +5,14 @@
 #define VK_USE_PLATFORM_WIN32_KHR 1
 #include <vulkan/vulkan.h>
 #undef VK_USE_PLATFORM_WIN32_KHR
+#include "L4D2VR/d3d9_bridge_registry.h"
 
-class IDirect3DVR9;
-class D3D9DeviceEx;
+struct IDirect3DVR9;
 class SharedTextureHolder;
-inline IDirect3DVR9 *g_D3DVR9;
+namespace dxvk {
+  class D3D9DeviceEx;
+  Portal2VRBridge::Registry<D3D9DeviceEx, IDirect3DVR9>& GetD3D9VRBridgeRegistry();
+}
 
 struct D3D9_TEXTURE_VR_DESC {
     uint64_t         Image;
@@ -32,6 +35,8 @@ IDirect3DVR9 : public IUnknown{
   virtual HRESULT STDMETHODCALLTYPE LockDevice() = 0;
   virtual HRESULT STDMETHODCALLTYPE UnlockDevice() = 0;
   virtual HRESULT STDMETHODCALLTYPE WaitDeviceIdle() = 0;
+  virtual HRESULT STDMETHODCALLTYPE CaptureBackBufferData() = 0;
+  virtual void STDMETHODCALLTYPE InvalidateBackBufferData() = 0;
   virtual HRESULT STDMETHODCALLTYPE GetBackBufferData(SharedTextureHolder *backBufferData) = 0;
 };
 
@@ -42,4 +47,7 @@ __CRT_UUID_DECL(IDirect3DVR9, 0x7e272b32, 0xa49c, 0x46c7, 0xb1, 0xa4, 0xef, 0x52
 #endif
 
 HRESULT __stdcall Direct3DCreateVRImpl(IDirect3DDevice9 *pDevice,
+    IDirect3DVR9 **pInterface);
+
+HRESULT __stdcall AcquireSoleVRBridge(IDirect3DDevice9 **pDevice,
     IDirect3DVR9 **pInterface);

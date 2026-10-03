@@ -21,6 +21,7 @@
 #include "../L4D2VR/muzzle_origin.h"
 #include "../L4D2VR/native_reticle.h"
 #include "../L4D2VR/native_beam.h"
+#include "../L4D2VR/shared_runtime_session.h"
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -888,12 +889,12 @@ int main()
     unsigned nestedPushDepth = 2;
     unsigned nestedPops = 0;
     HudCapture::UnwindNestedTargets(nestedPushDepth, [&] { ++nestedPops; });
-    expect(nestedPops, 2u,
+    expectInt(nestedPops, 2,
            "explicit capture unwinds unmatched nested pushes before its outer target");
-    expect(nestedPushDepth, 0u,
+    expectInt(nestedPushDepth, 0,
            "nested target depth is reset only after matching pops");
     HudCapture::UnwindNestedTargets(nestedPushDepth, [&] { ++nestedPops; });
-    expect(nestedPops, 2u,
+    expectInt(nestedPops, 2,
            "balanced explicit capture needs no nested target pops");
     expect(HudCapture::ShouldForwardPaintPop(true, 0), false,
            "unmatched Source pop cannot remove the explicit HUD target");
@@ -1643,6 +1644,77 @@ int main()
     std::istringstream invalidVerbose("VerboseDiagnostics=1\n");
     expect(ParseConfig(invalidVerbose, verbose.value).value.verboseDiagnostics, true,
            "malformed diagnostics reload retains the last valid choice");
+
+    const auto menuCrop = HudCapture::MenuTextureMapping(2528, 2704, 1280, 720, true);
+    expect(menuCrop.has_value(), true, "menu mapping accepts a valid cropped window");
+    if (menuCrop) {
+        expectNear(menuCrop->bounds.uMax, 0.506329f, "menu uses submitted texture width");
+        expectNear(menuCrop->bounds.vMax, 0.266272f, "menu uses submitted texture height");
+        expectNear(menuCrop->texelAspect, 0.525888f, "menu texel aspect preserves crop proportions");
+    }
+    for (const auto &size : {std::array<int, 4>{0, 720, 1280, 720},
+                            std::array<int, 4>{1280, 0, 1280, 720},
+                            std::array<int, 4>{1280, 720, 0, 720},
+                            std::array<int, 4>{1280, 720, 1280, 0},
+                            std::array<int, 4>{1280, 720, -1, 720},
+                            std::array<int, 4>{-1, 720, 1280, 720}}) {
+        expect(HudCapture::MenuTextureMapping(size[0], size[1], size[2], size[3], true).has_value(),
+               false, "unavailable dimensions never produce OpenVR menu geometry");
+        expect(HudCapture::MenuTextureMapping(size[0], size[1], size[2], size[3], false).has_value(),
+               false, "main menu also hides for unavailable window or texture dimensions");
+    }
+    const auto oversizedMenu = HudCapture::MenuTextureMapping(1280, 720, 2560, 360, true);
+    if (oversizedMenu) {
+        expectNear(oversizedMenu->bounds.uMax, 1.0f, "oversized menu width clamps to texture");
+        expectNear(oversizedMenu->bounds.vMax, 0.5f, "menu height retains valid partial crop");
+        expectNear(oversizedMenu->texelAspect, 0.5f, "menu aspect follows clamped bounds");
+    } else expect(false, true, "oversized valid menu stays available");
+    const auto fullMenu = HudCapture::MenuTextureMapping(2528, 2704, 1280, 720, false);
+    if (fullMenu) {
+        expectNear(fullMenu->bounds.uMax, 1.0f, "main menu uses entire submitted backbuffer");
+        expectNear(fullMenu->texelAspect, 1.0f, "main menu retains square texel aspect");
+    } else expect(false, true, "valid main menu remains available");
+    const auto extremeMenu = HudCapture::MenuTextureMapping(
+        (std::numeric_limits<int>::max)(), 1, 1, (std::numeric_limits<int>::max)(), true);
+    expect(extremeMenu && std::isfinite(extremeMenu->texelAspect) && extremeMenu->texelAspect > 0,
+           true, "extreme positive menu dimensions produce finite positive aspect");
+
+    RenderTargetRetryState targetRetry;
+    expect(targetRetry.CanAttempt(0, false), false, "unavailable device does not allocate or consume retry budget");
+    expect(targetRetry.CanAttempt(0, true), true, "initial target allocation can proceed");
+    targetRetry.RecordFailure(0);
+    expect(targetRetry.CanAttempt(999, true), false, "failed targets do not retry every frame");
+    expect(targetRetry.CanAttempt(1000, true), true, "transient target failure gets a delayed retry");
+    targetRetry.RecordFailure(1000);
+    targetRetry.RecordFailure(2000);
+    expect(targetRetry.CanAttempt(100000, true), false, "persistent target failure exhausts bounded retry budget");
+    targetRetry.ResetForDevice();
+    expect(targetRetry.CanAttempt(100000, false), false, "new unavailable device still cannot allocate");
+    expect(targetRetry.CanAttempt(100000, true), true, "new device lifecycle rearms target recovery");
+    targetRetry.RecordFailure(100000);
+    targetRetry.RecordSuccess();
+    expect(targetRetry.CanAttempt(100001, true), true, "successful allocation resets transient failure budget");
+
+    SharedRuntimeSession<int> sharedSession;
+    int sessionObject = 7, sessionInitializations = 0, sessionShutdowns = 0;
+    const auto startSession = [&]() { ++sessionInitializations; return &sessionObject; };
+    const auto stopSession = [&]() { ++sessionShutdowns; };
+    expect(sharedSession.Acquire(startSession) == &sessionObject, true, "first runtime lease initializes session");
+    expect(sharedSession.Acquire(startSession) == &sessionObject, true, "second lease shares same runtime session");
+    expectInt(sessionInitializations, 1, "D3D bootstrap and VR runtime never initialize OpenVR twice");
+    sharedSession.Release(stopSession);
+    expectInt(sessionShutdowns, 0, "bootstrap release does not shut down adopted session");
+    sharedSession.Release(stopSession);
+    expectInt(sessionShutdowns, 1, "last runtime owner shuts OpenVR down exactly once");
+    sharedSession.Release(stopSession);
+    expectInt(sessionShutdowns, 1, "extra release cannot duplicate runtime shutdown");
+    expect(sharedSession.Acquire([]() -> int * { return nullptr; }) == nullptr, true,
+           "failed OpenVR bootstrap publishes no session");
+    sharedSession.Release(stopSession);
+    expectInt(sessionShutdowns, 1, "failed initialization has no shutdown ownership");
+    expect(sharedSession.Acquire(startSession) == &sessionObject, true, "runtime can recover after failed bootstrap");
+    expectInt(sessionInitializations, 2, "fresh lifecycle initializes once after previous shutdown");
+    sharedSession.Release(stopSession);
 
     if (failures) return 1;
     std::cout << "stabilization tests passed\n";
