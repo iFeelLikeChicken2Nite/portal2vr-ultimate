@@ -225,6 +225,10 @@ def load_state(path: Path) -> dict:
         raise ValueError(f"Cannot read launcher state: {error}") from error
     if not isinstance(loaded, dict):
         raise ValueError("Launcher state must be a JSON object")
+    ownership_fields = {"managed_files", "original_files", "backup_id",
+                        "installed_game_dir"}
+    if not ownership_fields <= loaded.keys():
+        raise ValueError("Incomplete launcher state ownership metadata")
     for key, expected in (("checks", list), ("notes", str), ("profile", str),
                           ("game_dir", str), ("steam_exe", str), ("managed_files", dict),
                           ("original_files", dict), ("backup_id", str),
@@ -239,16 +243,31 @@ def load_state(path: Path) -> dict:
         if any(not isinstance(key, str) or not isinstance(value, str)
                for key, value in state[field].items()):
             raise ValueError(f"Invalid launcher {field} entry")
+    if not state["managed_files"] and (state["original_files"] or
+                                        state["backup_id"] or state["installed_game_dir"]):
+        raise ValueError("Launcher state has inconsistent ownership metadata")
     return state
 
 
 def save_state(path: Path, state: dict) -> None:
     """Atomically persist human observations and exact-file ownership."""
+    _write_json_durable(path, state)
+
+
+def _write_json_durable(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n",
-                         encoding="utf-8")
-    os.replace(temporary, path)
+    payload = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    with tempfile.NamedTemporaryFile(prefix=path.name + ".", suffix=".tmp",
+                                     dir=path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+    try:
+        with temporary.open("wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 @contextmanager
@@ -283,6 +302,8 @@ def save_preferences(state_path: Path, ui_state: dict) -> dict:
     if ui_state["profile"] not in PROFILES:
         raise ValueError("Unknown test profile")
     with _transaction_lock(state_path):
+        if _journal_path(state_path).exists() or _journal_path(state_path).is_symlink():
+            raise RuntimeError("Interrupted launcher operation requires recovery before saving state")
         current = load_state(state_path)
         for key in ("checks", "notes", "profile", "game_dir", "steam_exe"):
             current[key] = ui_state[key]
@@ -342,7 +363,10 @@ def _write_payload(target: Path, payload: bytes) -> None:
                                      dir=target.parent, delete=False) as stream:
         temporary = Path(stream.name)
     try:
-        temporary.write_bytes(payload)
+        with temporary.open("wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)
@@ -396,7 +420,11 @@ def _create_backup(game: Path, state_path: Path,
         relative = target.relative_to(game).as_posix()
         backup = snapshot / relative
         backup.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(target, backup)
+        shutil.copyfile(target, backup)
+        with backup.open("r+b") as stream:
+            stream.flush()
+            os.fsync(stream.fileno())
+        shutil.copystat(target, backup)
         digest = _digest(contents)
         if _digest(backup.read_bytes()) != digest:
             raise RuntimeError(f"Backup verification failed: {backup}")
@@ -429,16 +457,259 @@ def _verified_backups(game: Path, state_path: Path, state: dict) -> dict[str, Pa
     return verified
 
 
+def _check_unowned_backups(game: Path, state_path: Path,
+                           previous: dict[Path, bytes | None]) -> None:
+    """A missing state file may be a lost ownership record, not a first run."""
+    root = state_path.parent / ".launcher-backups"
+    if not root.exists():
+        return
+    if root.is_symlink() or not root.is_dir():
+        raise RuntimeError(f"Unsafe launcher backup root: {root}")
+    allowed = {relative for _, relative in SOURCE_TO_TARGET}
+    for snapshot in root.iterdir():
+        if not re.fullmatch(r"[0-9a-f]{32}", snapshot.name):
+            continue
+        if snapshot.is_symlink() or not snapshot.is_dir():
+            raise RuntimeError(f"Unsafe launcher backup snapshot: {snapshot}")
+        manifest = snapshot / "manifest.json"
+        if not manifest.exists() and not manifest.is_symlink():
+            continue  # A process may have exited before backup completion.
+        if manifest.is_symlink() or not manifest.is_file():
+            raise RuntimeError(f"Unsafe launcher backup manifest: {manifest}")
+        try:
+            recorded = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"Cannot read retained backup manifest: {error}") from error
+        if (not isinstance(recorded, dict) or
+                recorded.keys() != {"game_dir", "original_files"} or
+                not isinstance(recorded["game_dir"], str) or
+                not isinstance(recorded["original_files"], dict)):
+            raise RuntimeError(f"Invalid retained backup manifest: {manifest}")
+        if recorded["game_dir"] != str(game.resolve()):
+            continue
+        originals = recorded["original_files"]
+        if any(not isinstance(relative, str) or relative not in allowed or
+               not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+               for relative, digest in originals.items()):
+            raise RuntimeError(f"Invalid retained backup manifest: {manifest}")
+        _verified_backups(game, state_path,
+                          {"backup_id": snapshot.name, "original_files": originals})
+        for target, contents in previous.items():
+            relative = target.relative_to(game).as_posix()
+            current = _digest(contents) if contents is not None else None
+            if current != originals.get(relative):
+                raise RuntimeError("Retained backup conflicts with missing launcher ownership: "
+                                   f"{target}")
+
+
 def _copy_backup(backup: Path, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(prefix=target.name + ".portal2vr-", suffix=".tmp",
                                      dir=target.parent, delete=False) as stream:
         temporary = Path(stream.name)
     try:
-        shutil.copy2(backup, temporary)
+        shutil.copyfile(backup, temporary)
+        with temporary.open("r+b") as stream:
+            stream.flush()
+            os.fsync(stream.fileno())
+        shutil.copystat(backup, temporary)
         os.replace(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+_OWNERSHIP_FIELDS = ("managed_files", "original_files", "backup_id", "installed_game_dir")
+
+
+def _ownership(state: dict) -> dict:
+    return {key: state[key].copy() if isinstance(state[key], dict) else state[key]
+            for key in _OWNERSHIP_FIELDS}
+
+
+def _journal_path(state_path: Path) -> Path:
+    return state_path.with_name(state_path.name + ".transaction.json")
+
+
+def _transaction_dir(state_path: Path, transaction_id: str) -> Path:
+    if not re.fullmatch(r"[0-9a-f]{32}", transaction_id):
+        raise ValueError("Invalid transaction identifier")
+    root = state_path.parent / ".launcher-backups"
+    transactions = root / ".transactions"
+    snapshot = transactions / transaction_id
+    if any(path.is_symlink() for path in (root, transactions, snapshot)):
+        raise ValueError("Transaction backup path must not be a symlink")
+    return snapshot
+
+
+def _file_digest(target: Path) -> str | None:
+    if target.is_symlink() or (target.exists() and not target.is_file()):
+        raise RuntimeError(f"Unsafe transaction target: {target}")
+    return _digest(target.read_bytes()) if target.is_file() else None
+
+
+def _prepare_transaction(game: Path, state_path: Path, before_state: dict,
+                         after_state: dict, before: dict[Path, bytes | None],
+                         after: dict[Path, bytes | None]) -> dict:
+    """Publish recoverable preimages before changing even one game file."""
+    journal_path = _journal_path(state_path)
+    if journal_path.exists() or journal_path.is_symlink():
+        raise RuntimeError("Interrupted launcher operation requires recovery")
+    transaction_id = uuid.uuid4().hex
+    snapshot = _transaction_dir(state_path, transaction_id)
+    snapshot.mkdir(parents=True, exist_ok=False)
+    files = {}
+    for target, contents in before.items():
+        relative = target.relative_to(game).as_posix()
+        prior = _digest(contents) if contents is not None else None
+        desired = after[target]
+        files[relative] = {"before": prior,
+                           "after": _digest(desired) if desired is not None else None}
+        if contents is not None:
+            backup = snapshot / relative
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            with backup.open("xb") as stream:
+                stream.write(contents)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if _digest(backup.read_bytes()) != prior:
+                raise RuntimeError(f"Transaction preimage verification failed: {backup}")
+    if any(_file_digest(target) != files[target.relative_to(game).as_posix()]["before"]
+           for target in before):
+        raise RuntimeError("Game files changed while preparing launcher transaction")
+    journal = {"version": 1, "id": transaction_id, "game_dir": str(game.resolve()),
+               "before_state": _ownership(before_state),
+               "after_state": _ownership(after_state), "files": files}
+    _write_json_durable(journal_path, journal)
+    return journal
+
+
+def _verify_transaction_output(game: Path, journal: dict) -> None:
+    for relative, expected in journal["files"].items():
+        target = _safe_target(game, relative)
+        if _file_digest(target) != expected["after"]:
+            raise RuntimeError(f"Launcher transaction output verification failed: {target}")
+
+
+def _read_transaction(state_path: Path) -> dict | None:
+    path = _journal_path(state_path)
+    if path.is_symlink():
+        raise RuntimeError(f"Unsafe launcher transaction journal: {path}")
+    if not path.exists():
+        return None
+    try:
+        journal = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"Cannot read launcher transaction journal: {error}") from error
+    if (not isinstance(journal, dict) or journal.keys() !=
+            {"version", "id", "game_dir", "before_state", "after_state", "files"}
+            or type(journal["version"]) is not int or journal["version"] != 1
+            or not isinstance(journal["game_dir"], str)
+            or not isinstance(journal["before_state"], dict)
+            or not isinstance(journal["after_state"], dict)
+            or not isinstance(journal["files"], dict)):
+        raise RuntimeError("Invalid launcher transaction journal")
+    if not isinstance(journal["id"], str):
+        raise RuntimeError("Invalid launcher transaction identifier")
+    _transaction_dir(state_path, journal["id"])
+    allowed = {target for _, target in SOURCE_TO_TARGET}
+    if journal["files"].keys() != allowed:
+        raise RuntimeError("Invalid launcher transaction file set")
+    for ownership in (journal["before_state"], journal["after_state"]):
+        if ownership.keys() != set(_OWNERSHIP_FIELDS):
+            raise RuntimeError("Invalid launcher transaction ownership")
+        if (not isinstance(ownership["managed_files"], dict)
+                or not isinstance(ownership["original_files"], dict)
+                or not isinstance(ownership["backup_id"], str)
+                or not isinstance(ownership["installed_game_dir"], str)):
+            raise RuntimeError("Invalid launcher transaction ownership")
+        if any(not isinstance(key, str) or not isinstance(value, str)
+               for field in ("managed_files", "original_files")
+               for key, value in ownership[field].items()):
+            raise RuntimeError("Invalid launcher transaction ownership")
+    for entry in journal["files"].values():
+        if (not isinstance(entry, dict) or entry.keys() != {"before", "after"}
+                or any(value is not None and
+                       (not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value))
+                       for value in entry.values())):
+            raise RuntimeError("Invalid launcher transaction file digest")
+    before, after = journal["before_state"], journal["after_state"]
+    if not before["managed_files"] and not after["managed_files"]:
+        raise RuntimeError("Invalid launcher transaction ownership transition")
+    if (before["managed_files"] and after["managed_files"]
+            and (before["backup_id"] != after["backup_id"]
+                 or before["original_files"] != after["original_files"]
+                 or before["installed_game_dir"] != after["installed_game_dir"])):
+        raise RuntimeError("Launcher transaction changed original backup ownership")
+    for relative, entry in journal["files"].items():
+        expected_before = (before["managed_files"].get(relative)
+                           if before["managed_files"] else after["original_files"].get(relative))
+        expected_after = (after["managed_files"].get(relative)
+                          if after["managed_files"] else before["original_files"].get(relative))
+        if entry != {"before": expected_before, "after": expected_after}:
+            raise RuntimeError("Launcher transaction file digest disagrees with ownership")
+    return journal
+
+
+def _finish_transaction(state_path: Path, journal: dict) -> None:
+    _journal_path(state_path).unlink()
+    shutil.rmtree(_transaction_dir(state_path, journal["id"]))
+
+
+def _recover_transaction_unlocked(state_path: Path) -> bool:
+    journal = _read_transaction(state_path)
+    if journal is None:
+        return False
+    game = Path(journal["game_dir"])
+    if str(game.resolve()) != journal["game_dir"]:
+        raise RuntimeError("Launcher transaction game path changed")
+    state = load_state(state_path)
+    ownership = _ownership(state)
+    before_state, after_state = journal["before_state"], journal["after_state"]
+    if ownership != before_state and ownership != after_state:
+        raise RuntimeError("Launcher state changed during interrupted operation")
+    for recorded in (before_state, after_state):
+        _validate_managed({**state, **recorded}, game)
+        if recorded["managed_files"]:
+            _verified_backups(game, state_path, recorded)
+    snapshot = _transaction_dir(state_path, journal["id"])
+    if not snapshot.is_dir():
+        raise RuntimeError("Launcher transaction preimages are missing")
+    targets = {}
+    for relative, expected in journal["files"].items():
+        target = _safe_target(game, relative)
+        backup = snapshot / relative
+        if expected["before"] is not None:
+            if (backup.is_symlink() or not backup.resolve().is_relative_to(snapshot.resolve())
+                    or not backup.is_file()
+                    or _digest(backup.read_bytes()) != expected["before"]):
+                raise RuntimeError(f"Launcher transaction preimage changed or missing: {backup}")
+        current = _file_digest(target)
+        if current not in (expected["before"], expected["after"]):
+            raise RuntimeError(f"Game file changed outside interrupted launcher operation: {target}")
+        if ownership == after_state and current != expected["after"]:
+            raise RuntimeError(f"Completed launcher operation has changed file: {target}")
+        targets[target] = (current, expected, backup)
+    if ownership == before_state and ownership != after_state:
+        for target, (current, expected, backup) in targets.items():
+            if current == expected["before"]:
+                continue
+            if expected["before"] is None:
+                target.unlink()
+            else:
+                _write_payload(target, backup.read_bytes())
+        _remove_empty_vr_directories(game)
+    if any(_file_digest(target) !=
+           data[1]["after" if ownership == after_state else "before"]
+           for target, data in targets.items()):
+        raise RuntimeError("Launcher transaction recovery verification failed")
+    _finish_transaction(state_path, journal)
+    return True
+
+
+def recover_pending_transaction(state_path: Path) -> bool:
+    """Restore the pre-operation files after an interrupted launcher process."""
+    with _transaction_lock(state_path):
+        return _recover_transaction_unlocked(state_path)
 
 
 def _stage_install_unlocked(repo: Path, game: Path, state_path: Path, profile: str, *,
@@ -451,7 +722,8 @@ def _stage_install_unlocked(repo: Path, game: Path, state_path: Path, profile: s
     if managed and managed.keys() != planned_paths:
         raise RuntimeError("Launcher version changed its file set; restore first")
     previous: dict[Path, bytes | None] = {}
-    backups = _verified_backups(game, state_path, state) if managed else {}
+    if managed:
+        _verified_backups(game, state_path, state)
     for target in planned:
         relative = target.relative_to(game).as_posix()
         if target.is_symlink():
@@ -467,48 +739,38 @@ def _stage_install_unlocked(repo: Path, game: Path, state_path: Path, profile: s
             previous[target] = None
     backup_id, originals = (state["backup_id"], state["original_files"])
     if not managed:
+        if not state_path.exists():
+            _check_unowned_backups(game, state_path, previous)
         backup_id, originals = _create_backup(game, state_path, previous)
-    written: list[Path] = []
+    next_state = {**state, "managed_files": {
+        target.relative_to(game).as_posix(): _digest(payload)
+        for target, payload in planned.items()},
+        "original_files": originals, "backup_id": backup_id,
+        "installed_game_dir": str(game.resolve()), "game_dir": str(game),
+        "profile": profile}
+    journal = _prepare_transaction(game, state_path, state, next_state, previous,
+                                   {target: payload for target, payload in planned.items()})
     try:
         for target, payload in planned.items():
             if previous[target] == payload:
                 continue
-            written.append(target)
             _write_payload(target, payload)
-        state["managed_files"] = {
-            target.relative_to(game).as_posix(): _digest(payload)
-            for target, payload in planned.items()
-        }
-        state["original_files"] = originals
-        state["backup_id"] = backup_id
-        state["installed_game_dir"] = str(game.resolve())
-        state["game_dir"] = str(game)
-        state["profile"] = profile
-        save_state(state_path, state)
+        _verify_transaction_output(game, journal)
+        save_state(state_path, next_state)
     except Exception as error:
-        rollback_errors = []
-        for target in reversed(written):
-            try:
-                if previous[target] is None:
-                    target.unlink(missing_ok=True)
-                elif not managed and target.relative_to(game).as_posix() in originals:
-                    _copy_backup(_backup_dir(state_path, backup_id) /
-                                 target.relative_to(game).as_posix(), target)
-                else:
-                    _write_payload(target, previous[target])
-            except OSError as rollback_error:
-                rollback_errors.append(f"{target}: {rollback_error}")
-        _remove_empty_vr_directories(game)
-        if rollback_errors:
-            raise RuntimeError("Staging failed and rollback is incomplete: " +
-                               "; ".join(rollback_errors)) from error
+        try:
+            _recover_transaction_unlocked(state_path)
+        except Exception as rollback_error:
+            raise RuntimeError(f"Staging failed and rollback is incomplete: {rollback_error}") from error
         raise
+    _finish_transaction(state_path, journal)
     return list(planned)
 
 
 def stage_install(repo: Path, game: Path, state_path: Path, profile: str, *,
                   config_values: dict[str, str] | None = None) -> list[Path]:
     with _transaction_lock(state_path):
+        _recover_transaction_unlocked(state_path)
         return _stage_install_unlocked(repo, game, state_path, profile, config_values=config_values)
 
 
@@ -526,35 +788,34 @@ def _restore_install_unlocked(game: Path, state_path: Path) -> list[Path]:
             raise RuntimeError(f"Managed file changed outside launcher: {target}")
         targets.append(target)
     staged_payloads = {target: target.read_bytes() for target in targets}
-    restored: list[Path] = []
+    next_state = {**state, "managed_files": {}, "original_files": {},
+                  "backup_id": "", "installed_game_dir": ""}
+    desired = {target: backups[target.relative_to(game).as_posix()].read_bytes()
+               if target.relative_to(game).as_posix() in backups else None
+               for target in targets}
+    journal = _prepare_transaction(game, state_path, state, next_state,
+                                   staged_payloads, desired)
     try:
         for target in targets:
             relative = target.relative_to(game).as_posix()
-            restored.append(target)
             if relative in backups:
                 _copy_backup(backups[relative], target)
             else:
                 target.unlink()
-        state["managed_files"] = {}
-        state["original_files"] = {}
-        state["backup_id"] = ""
-        state["installed_game_dir"] = ""
-        save_state(state_path, state)
+        _verify_transaction_output(game, journal)
+        save_state(state_path, next_state)
     except Exception as error:
-        rollback_errors = []
-        for target in reversed(restored):
-            try:
-                _write_payload(target, staged_payloads[target])
-            except OSError as rollback_error:
-                rollback_errors.append(f"{target}: {rollback_error}")
-        if rollback_errors:
-            raise RuntimeError("Restore failed and rollback is incomplete: " +
-                               "; ".join(rollback_errors)) from error
+        try:
+            _recover_transaction_unlocked(state_path)
+        except Exception as rollback_error:
+            raise RuntimeError(f"Restore failed ({error}) and rollback is incomplete: {rollback_error}") from error
         raise
+    _finish_transaction(state_path, journal)
     _remove_empty_vr_directories(game)
-    return restored
+    return targets
 
 
 def restore_install(game: Path, state_path: Path) -> list[Path]:
     with _transaction_lock(state_path):
+        _recover_transaction_unlocked(state_path)
         return _restore_install_unlocked(game, state_path)
