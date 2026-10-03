@@ -304,6 +304,8 @@ def save_preferences(state_path: Path, ui_state: dict) -> dict:
     with _transaction_lock(state_path):
         if _journal_path(state_path).exists() or _journal_path(state_path).is_symlink():
             raise RuntimeError("Interrupted launcher operation requires recovery before saving state")
+        if not state_path.exists():
+            _check_unowned_backups(state_path)
         current = load_state(state_path)
         for key in ("checks", "notes", "profile", "game_dir", "steam_exe"):
             current[key] = ui_state[key]
@@ -457,11 +459,10 @@ def _verified_backups(game: Path, state_path: Path, state: dict) -> dict[str, Pa
     return verified
 
 
-def _check_unowned_backups(game: Path, state_path: Path,
-                           previous: dict[Path, bytes | None]) -> None:
-    """A missing state file may be a lost ownership record, not a first run."""
+def _retained_backup_manifests(state_path: Path):
+    """Read and verify complete backup snapshots once per ownership check."""
     root = state_path.parent / ".launcher-backups"
-    if not root.exists():
+    if not root.exists() and not root.is_symlink():
         return
     if root.is_symlink() or not root.is_dir():
         raise RuntimeError(f"Unsafe launcher backup root: {root}")
@@ -485,8 +486,9 @@ def _check_unowned_backups(game: Path, state_path: Path,
                 not isinstance(recorded["game_dir"], str) or
                 not isinstance(recorded["original_files"], dict)):
             raise RuntimeError(f"Invalid retained backup manifest: {manifest}")
-        if recorded["game_dir"] != str(game.resolve()):
-            continue
+        game = Path(recorded["game_dir"])
+        if str(game.resolve()) != recorded["game_dir"]:
+            raise RuntimeError(f"Invalid retained backup game path: {manifest}")
         originals = recorded["original_files"]
         if any(not isinstance(relative, str) or relative not in allowed or
                not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
@@ -494,10 +496,18 @@ def _check_unowned_backups(game: Path, state_path: Path,
             raise RuntimeError(f"Invalid retained backup manifest: {manifest}")
         _verified_backups(game, state_path,
                           {"backup_id": snapshot.name, "original_files": originals})
-        for target, contents in previous.items():
-            relative = target.relative_to(game).as_posix()
-            current = _digest(contents) if contents is not None else None
-            if current != originals.get(relative):
+        yield game, originals
+
+
+def _check_unowned_backups(state_path: Path, game: Path | None = None) -> None:
+    """A missing state file may be a lost ownership record, not a first run."""
+    selected = str(game.resolve()) if game is not None else None
+    for recorded_game, originals in _retained_backup_manifests(state_path):
+        if selected is not None and str(recorded_game) != selected:
+            continue
+        for _, relative in SOURCE_TO_TARGET:
+            target = _safe_target(recorded_game, relative)
+            if _file_digest(target) != originals.get(relative):
                 raise RuntimeError("Retained backup conflicts with missing launcher ownership: "
                                    f"{target}")
 
@@ -740,7 +750,7 @@ def _stage_install_unlocked(repo: Path, game: Path, state_path: Path, profile: s
     backup_id, originals = (state["backup_id"], state["original_files"])
     if not managed:
         if not state_path.exists():
-            _check_unowned_backups(game, state_path, previous)
+            _check_unowned_backups(state_path, game)
         backup_id, originals = _create_backup(game, state_path, previous)
     next_state = {**state, "managed_files": {
         target.relative_to(game).as_posix(): _digest(payload)

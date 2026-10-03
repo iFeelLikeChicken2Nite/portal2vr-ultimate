@@ -267,6 +267,66 @@ class CrashRecoveryTests(unittest.TestCase):
             self.assertEqual({path.name for path in (root / ".launcher-backups").iterdir()
                               if path.name != ".transactions"}, {backup_id})
 
+    def test_checklist_save_cannot_replace_missing_install_ownership(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, game, steam = fixture_install(root)
+            original = game / "bin/d3d9.dll"
+            original.write_bytes(b"user-dll")
+            state = root / "state.json"
+            core.stage_install(repo, game, state, "baseline")
+            backup_id = core.load_state(state)["backup_id"]
+            state.unlink()
+            ui = core.load_state(state)
+            ui.update(game_dir=str(game), steam_exe=str(steam))
+
+            with self.assertRaisesRegex(RuntimeError, "backup.*ownership"):
+                core.save_preferences(state, ui)
+
+            self.assertFalse(state.exists())
+            self.assertEqual(original.read_bytes(), b"test-d3d9")
+            self.assertTrue((root / ".launcher-backups" / backup_id / "bin/d3d9.dll").is_file())
+
+    def test_checklist_save_checks_backups_for_other_selected_game(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, game, _ = fixture_install(root)
+            _, second_game, second_steam = fixture_install(root / "second")
+            original = game / "bin/d3d9.dll"
+            original.write_bytes(b"user-dll")
+            state = root / "state.json"
+            core.stage_install(repo, game, state, "baseline")
+            state.unlink()
+            ui = core.load_state(state)
+            ui.update(game_dir=str(second_game), steam_exe=str(second_steam))
+
+            with self.assertRaisesRegex(RuntimeError, "backup.*ownership"):
+                core.save_preferences(state, ui)
+
+            self.assertFalse(state.exists())
+            self.assertEqual(original.read_bytes(), b"test-d3d9")
+
+    def test_checklist_save_accepts_clean_game_after_restore_and_state_loss(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, game, steam = fixture_install(root)
+            original = game / "bin/d3d9.dll"
+            original.write_bytes(b"user-dll")
+            state = root / "state.json"
+            core.stage_install(repo, game, state, "baseline")
+            core.restore_install(game, state)
+            state.unlink()
+            ui = core.load_state(state)
+            ui.update(game_dir=str(game), steam_exe=str(steam))
+
+            saved = core.save_preferences(state, ui)
+
+            self.assertFalse(saved["managed_files"])
+            self.assertEqual(original.read_bytes(), b"user-dll")
+            core.stage_install(repo, game, state, "baseline")
+            core.restore_install(game, state)
+            self.assertEqual(original.read_bytes(), b"user-dll")
+
     def test_missing_preimage_blocks_recovery_and_preserves_game(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
