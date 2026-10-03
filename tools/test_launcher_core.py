@@ -216,6 +216,7 @@ def load_state(path: Path) -> dict:
         "original_files": {},
         "backup_id": "",
         "installed_game_dir": "",
+        "unmanaged_checkpoint": False,
     }
     if not path.exists():
         return state
@@ -237,6 +238,10 @@ def load_state(path: Path) -> dict:
             if not isinstance(loaded[key], expected):
                 raise ValueError(f"Invalid launcher state field: {key}")
             state[key] = loaded[key]
+    if "unmanaged_checkpoint" in loaded:
+        if type(loaded["unmanaged_checkpoint"]) is not bool:
+            raise ValueError("Invalid launcher state field: unmanaged_checkpoint")
+        state["unmanaged_checkpoint"] = loaded["unmanaged_checkpoint"]
     if any(not isinstance(item, str) for item in state["checks"]):
         raise ValueError("Invalid launcher checklist entry")
     for field in ("managed_files", "original_files"):
@@ -246,6 +251,8 @@ def load_state(path: Path) -> dict:
     if not state["managed_files"] and (state["original_files"] or
                                         state["backup_id"] or state["installed_game_dir"]):
         raise ValueError("Launcher state has inconsistent ownership metadata")
+    if state["managed_files"] and state["unmanaged_checkpoint"]:
+        raise ValueError("Managed launcher state cannot have an unmanaged checkpoint")
     return state
 
 
@@ -304,9 +311,10 @@ def save_preferences(state_path: Path, ui_state: dict) -> dict:
     with _transaction_lock(state_path):
         if _journal_path(state_path).exists() or _journal_path(state_path).is_symlink():
             raise RuntimeError("Interrupted launcher operation requires recovery before saving state")
-        if not state_path.exists():
-            _check_unowned_backups(state_path)
         current = load_state(state_path)
+        if not current["managed_files"] and not current["unmanaged_checkpoint"]:
+            _check_unowned_backups(state_path)
+            current["unmanaged_checkpoint"] = True
         for key in ("checks", "notes", "profile", "game_dir", "steam_exe"):
             current[key] = ui_state[key]
         save_state(state_path, current)
@@ -499,12 +507,9 @@ def _retained_backup_manifests(state_path: Path):
         yield game, originals
 
 
-def _check_unowned_backups(state_path: Path, game: Path | None = None) -> None:
-    """A missing state file may be a lost ownership record, not a first run."""
-    selected = str(game.resolve()) if game is not None else None
+def _check_unowned_backups(state_path: Path) -> None:
+    """An unchecked empty state may conceal an active install."""
     for recorded_game, originals in _retained_backup_manifests(state_path):
-        if selected is not None and str(recorded_game) != selected:
-            continue
         for _, relative in SOURCE_TO_TARGET:
             target = _safe_target(recorded_game, relative)
             if _file_digest(target) != originals.get(relative):
@@ -749,15 +754,15 @@ def _stage_install_unlocked(repo: Path, game: Path, state_path: Path, profile: s
             previous[target] = None
     backup_id, originals = (state["backup_id"], state["original_files"])
     if not managed:
-        if not state_path.exists():
-            _check_unowned_backups(state_path, game)
+        if not state["unmanaged_checkpoint"]:
+            _check_unowned_backups(state_path)
         backup_id, originals = _create_backup(game, state_path, previous)
     next_state = {**state, "managed_files": {
         target.relative_to(game).as_posix(): _digest(payload)
         for target, payload in planned.items()},
         "original_files": originals, "backup_id": backup_id,
         "installed_game_dir": str(game.resolve()), "game_dir": str(game),
-        "profile": profile}
+        "profile": profile, "unmanaged_checkpoint": False}
     journal = _prepare_transaction(game, state_path, state, next_state, previous,
                                    {target: payload for target, payload in planned.items()})
     try:
@@ -789,6 +794,8 @@ def _restore_install_unlocked(game: Path, state_path: Path) -> list[Path]:
     state = load_state(state_path)
     managed = _validate_managed(state, game)
     if not managed:
+        if not state["unmanaged_checkpoint"]:
+            _check_unowned_backups(state_path)
         return []
     backups = _verified_backups(game, state_path, state)
     targets: list[Path] = []
@@ -799,7 +806,8 @@ def _restore_install_unlocked(game: Path, state_path: Path) -> list[Path]:
         targets.append(target)
     staged_payloads = {target: target.read_bytes() for target in targets}
     next_state = {**state, "managed_files": {}, "original_files": {},
-                  "backup_id": "", "installed_game_dir": ""}
+                  "backup_id": "", "installed_game_dir": "",
+                  "unmanaged_checkpoint": True}
     desired = {target: backups[target.relative_to(game).as_posix()].read_bytes()
                if target.relative_to(game).as_posix() in backups else None
                for target in targets}

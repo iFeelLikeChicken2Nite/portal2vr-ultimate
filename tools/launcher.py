@@ -331,6 +331,7 @@ class Launcher:
             recovered = core.recover_pending_transaction(self.install_state_path)
             state = core.load_state(self.install_state_path)
             if not state["managed_files"]:
+                core.restore_install(Path(state["game_dir"]), self.install_state_path)
                 self.status_var.set("Interrupted operation recovered; original files restored." if recovered else
                                     "No files are currently managed by the launcher.")
                 return

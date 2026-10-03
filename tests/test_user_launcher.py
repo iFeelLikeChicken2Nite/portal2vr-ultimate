@@ -314,6 +314,22 @@ class LauncherTests(unittest.TestCase):
         self.assertFalse((self.game / "VR").exists())
         self.assertFalse(self.state_path.with_name("state.json.transaction.json").exists())
 
+    def test_restore_rejects_legacy_empty_state_with_retained_install(self):
+        original = self.game / "bin/d3d9.dll"
+        original.write_bytes(b"original")
+        core.stage_install(self.repo, self.game, self.state_path, "baseline")
+        self.state_path.unlink()
+        legacy = core.load_state(self.state_path)
+        legacy["game_dir"] = str(self.game)
+        core.save_state(self.state_path, legacy)
+        before = self.state_path.read_bytes()
+
+        self.app.restore()
+
+        self.assertIn("ownership", self.app.status_var.get())
+        self.assertEqual(original.read_bytes(), b"test-d3d9")
+        self.assertEqual(self.state_path.read_bytes(), before)
+
     def test_running_game_blocks_interrupted_transaction_recovery(self):
         from tests.test_launcher_transactions import CrashRecoveryTests
         original = self.game / "bin/d3d9.dll"

@@ -116,6 +116,8 @@ class CrashRecoveryTests(unittest.TestCase):
                 self.crash(root, "restore", boundary, limit)
                 self.assertTrue(core.recover_pending_transaction(state))
                 self.assertEqual(bool(core.load_state(state)["managed_files"]), not committed)
+                self.assertIs(core.load_state(state).get("unmanaged_checkpoint", False),
+                              committed)
                 if not committed:
                     self.assertEqual((game / "bin/d3d9.dll").read_bytes(), b"test-d3d9")
                     core.restore_install(game, state)
@@ -326,6 +328,89 @@ class CrashRecoveryTests(unittest.TestCase):
             core.stage_install(repo, game, state, "baseline")
             core.restore_install(game, state)
             self.assertEqual(original.read_bytes(), b"user-dll")
+
+    def test_legacy_empty_state_cannot_stage_over_installed_mod(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, game, _ = fixture_install(root)
+            original = game / "bin/d3d9.dll"
+            original.write_bytes(b"user-dll")
+            state = root / "state.json"
+            core.stage_install(repo, game, state, "baseline")
+            backup_id = core.load_state(state)["backup_id"]
+            state.unlink()
+            core.save_state(state, core.load_state(state))  # Old checklist save.
+
+            with self.assertRaisesRegex(RuntimeError, "backup.*ownership"):
+                core.stage_install(repo, game, state, "baseline")
+
+            self.assertEqual(original.read_bytes(), b"test-d3d9")
+            self.assertEqual({path.name for path in (root / ".launcher-backups").iterdir()
+                              if path.name != ".transactions"}, {backup_id})
+
+    def test_legacy_empty_state_cannot_report_nothing_to_restore(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, game, _ = fixture_install(root)
+            original = game / "bin/d3d9.dll"
+            original.write_bytes(b"user-dll")
+            state = root / "state.json"
+            core.stage_install(repo, game, state, "baseline")
+            state.unlink()
+            core.save_state(state, core.load_state(state))
+
+            with self.assertRaisesRegex(RuntimeError, "backup.*ownership"):
+                core.restore_install(game, state)
+
+            self.assertEqual(original.read_bytes(), b"test-d3d9")
+
+    def test_legacy_empty_state_save_cannot_hide_other_game_install(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, game, _ = fixture_install(root)
+            _, other_game, other_steam = fixture_install(root / "other")
+            original = game / "bin/d3d9.dll"
+            original.write_bytes(b"user-dll")
+            state = root / "state.json"
+            core.stage_install(repo, game, state, "baseline")
+            state.unlink()
+            legacy = core.load_state(state)
+            core.save_state(state, legacy)
+            before_save = state.read_bytes()
+            ui = {**legacy, "game_dir": str(other_game), "steam_exe": str(other_steam)}
+
+            with self.assertRaisesRegex(RuntimeError, "backup.*ownership"):
+                core.save_preferences(state, ui)
+
+            self.assertEqual(original.read_bytes(), b"test-d3d9")
+            self.assertEqual(state.read_bytes(), before_save)
+
+    def test_restored_checkpoint_allows_later_game_update_and_new_install(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, game, steam = fixture_install(root)
+            original = game / "bin/d3d9.dll"
+            original.write_bytes(b"user-dll")
+            state = root / "state.json"
+            core.stage_install(repo, game, state, "baseline")
+            core.restore_install(game, state)
+            self.assertIs(core.load_state(state).get("unmanaged_checkpoint", False), True)
+
+            original.write_bytes(b"updated-user-dll")
+            ui = core.load_state(state)
+            ui.update(game_dir=str(game), steam_exe=str(steam))
+            core.save_preferences(state, ui)
+            core.stage_install(repo, game, state, "baseline")
+            self.assertIs(core.load_state(state).get("unmanaged_checkpoint", False), False)
+            core.restore_install(game, state)
+            self.assertEqual(original.read_bytes(), b"updated-user-dll")
+
+    def test_checkpoint_must_be_json_boolean(self):
+        with TemporaryDirectory() as temporary:
+            state = Path(temporary) / "state.json"
+            core.save_state(state, {**core.load_state(state), "unmanaged_checkpoint": 1})
+            with self.assertRaisesRegex(ValueError, "unmanaged_checkpoint"):
+                core.load_state(state)
 
     def test_missing_preimage_blocks_recovery_and_preserves_game(self):
         with TemporaryDirectory() as temporary:
