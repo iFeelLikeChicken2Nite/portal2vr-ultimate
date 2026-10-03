@@ -415,6 +415,6 @@ FodyWeavers.xsd
 /tools/.user-launcher-settings.json.lock
 /tools/.user-launcher-settings.json.*.tmp
 /docs/user-launcher-*.png
-
+STABILIZATION_REPORT.md
 # Project notes are maintained locally, not published to origin.
 /docs/**/*.md
