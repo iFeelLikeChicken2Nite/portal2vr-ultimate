@@ -1,6 +1,7 @@
 #include "../L4D2VR/sigscanner.h"
 #include "../L4D2VR/config.h"
 #include "../L4D2VR/required_hooks.h"
+#include "../L4D2VR/optional_hooks.h"
 #include "../L4D2VR/startup_symbol_policy.h"
 #include <cstdint>
 #include <cstring>
@@ -171,29 +172,55 @@ int main()
            "required enable failure is reported after complete creation stage");
 
     calls.clear();
-    RequiredHooks unresolvedHooks;
+    OptionalHooks unresolvedHooks;
     for (const char *name : warningOnly) {
         unresolvedHooks.AddIfResolved(name, nullptr,
             [&] { calls.push_back("create-unresolved"); return 1; },
             [&] { calls.push_back("enable-unresolved"); return 1; });
     }
-    unresolvedHooks.Add("required", [&] { calls.push_back("create-required"); return 0; },
-                        [&] { calls.push_back("enable-required"); return 0; });
-    Expect(unresolvedHooks.CreateAll(failedHook) && unresolvedHooks.EnableAll(failedHook) &&
-           calls == std::vector<std::string>{"create-required", "enable-required"},
+    std::vector<std::string> warnings;
+    unresolvedHooks.Install([&](const std::string &warning) { warnings.push_back(warning); });
+    Expect(calls.empty() && warnings.empty(),
            "unresolved compatibility hooks are never created or enabled");
 
     calls.clear();
-    RequiredHooks resolvedHooks;
+    OptionalHooks resolvedHooks;
     for (const char *name : warningOnly) {
         resolvedHooks.AddIfResolved(name, reinterpret_cast<void *>(1),
             [&, name] { calls.push_back(std::string("create-") + name); return 0; },
             [&, name] { calls.push_back(std::string("enable-") + name); return 0; });
     }
-    Expect(resolvedHooks.CreateAll(failedHook) && resolvedHooks.EnableAll(failedHook) &&
-           calls == std::vector<std::string>{
+    resolvedHooks.Install([&](const std::string &warning) { warnings.push_back(warning); });
+    Expect(warnings.empty() && calls == std::vector<std::string>{
                "create-EyePosition", "create-Weapon_ShootPosition", "create-GetViewModelFOV",
                "enable-EyePosition", "enable-Weapon_ShootPosition", "enable-GetViewModelFOV"},
-           "resolved compatibility hooks retain checked create and enable stages");
+           "resolved compatibility hooks create before enabling without warnings");
+
+    calls.clear();
+    OptionalHooks partialHooks;
+    partialHooks.AddIfResolved("created", reinterpret_cast<void *>(1),
+        [&] { calls.push_back("create-created"); return 0; },
+        [&] { calls.push_back("enable-created"); return 0; });
+    partialHooks.AddIfResolved("createFailed", reinterpret_cast<void *>(2),
+        [&] { calls.push_back("create-createFailed"); return 1; },
+        [&] { calls.push_back("enable-createFailed"); return 0; });
+    partialHooks.AddIfResolved("enableFailed", reinterpret_cast<void *>(3),
+        [&] { calls.push_back("create-enableFailed"); return 0; },
+        [&] { calls.push_back("enable-enableFailed"); return 1; });
+    partialHooks.AddIfResolved("later", reinterpret_cast<void *>(4),
+        [&] { calls.push_back("create-later"); return 0; },
+        [&] { calls.push_back("enable-later"); return 0; });
+    warnings.clear();
+    partialHooks.Install([&](const std::string &warning) { warnings.push_back(warning); });
+    Expect(calls == std::vector<std::string>{
+               "create-created", "create-createFailed", "create-enableFailed", "create-later",
+               "enable-created", "enable-enableFailed", "enable-later"},
+           "optional hook failures do not prevent later creates and enables");
+    Expect(warnings.size() == 2 &&
+           warnings[0].find("createFailed") != std::string::npos &&
+           warnings[0].find("create") != std::string::npos &&
+           warnings[1].find("enableFailed") != std::string::npos &&
+           warnings[1].find("enable") != std::string::npos,
+           "optional hook failures identify hook and failed stage");
     return failures ? 1 : 0;
 }

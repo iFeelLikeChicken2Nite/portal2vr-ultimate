@@ -408,6 +408,7 @@ void Hooks::Initialize()
 		Logger::Write("Failed to enable required hook " + failedHook);
 		return;
 	}
+	m_CompatibilityHooks.Install([](const std::string &warning) { Logger::Write(warning); });
 	// The optional particle path remains independently disabled on failure.
 	if (m_Game->m_Offsets->m_LaserAvailable && hkPrecache.enableHook()) {
 		m_Game->m_Offsets->m_LaserAvailable = false;
@@ -777,7 +778,7 @@ int Hooks::initSourceHooks()
 } while (false)
 #define REGISTER_IF_RESOLVED(hook, target, detour) do { \
 	LPVOID resolvedTarget = (LPVOID)(target); \
-	m_RequiredHooks.AddIfResolved(#hook, resolvedTarget, \
+	m_CompatibilityHooks.AddIfResolved(#hook, resolvedTarget, \
 		[resolvedTarget]() { return hook.createHook(resolvedTarget, &detour); }, \
 		[]() { return hook.enableHook(); }); \
 } while (false)
@@ -1502,10 +1503,14 @@ DWORD *Hooks::dPrePushRenderTarget(void *ecx, void *edx, int a2)
 	return hkPrePushRenderTarget.fOriginal(ecx, a2);
 }
 
-Vector* Hooks::dWeapon_ShootPosition(void* ecx, void* edx, Vector* eyePos)
+Vector* __fastcall Hooks::dWeapon_ShootPosition(void* ecx, void* edx, Vector* eyePos)
 {
+	// This address is also used by another virtual method. Only the audited
+	// FirePortal call is allowed to replace its hidden Vector return value.
+	const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
 	Vector* result = hkWeapon_ShootPosition.fOriginal(ecx, eyePos);
-	if (!RuntimePublished()) return result;
+	if (!RuntimePublished() || !result || !CompatibilityHooks::IsVerifiedShootCaller(
+		caller, m_Game->m_Offsets->Weapon_ShootPosition.shootCaller)) return result;
 
 	int localIndex = m_Game->m_EngineClient->GetLocalPlayer();
 	int index = EntityIndex(ecx);
@@ -1974,7 +1979,7 @@ double __fastcall Hooks::dGetFOV(void* ecx, void* edx) {
 	return m_VR->m_Fov;
 }
 
-double __fastcall Hooks::dGetViewModelFOV(void* ecx, void* edx) {
+float __fastcall Hooks::dGetViewModelFOV(void* ecx, void* edx) {
 	if (!RuntimePublished()) return hkGetViewModelFOV.fOriginal(ecx);
-	return m_VR->m_Fov;
+	return static_cast<float>(m_VR->m_Fov);
 }

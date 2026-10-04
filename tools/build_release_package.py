@@ -34,7 +34,8 @@ README = ("Portal2VR for Windows\n"
           "4. Use Restore original game files in the launcher when finished.\n\n"
           "Keep the launcher-created tools folder and .launcher-backups with this package\n"
           "until you have restored your original game files.\n\n"
-          "Unresolved compatibility hooks are skipped with warnings in bin/portal2vr.log.\n"
+          "Compatibility hooks require a verified DLL build and loaded code/table references.\n"
+          "Verification or installation failures skip that hook with warnings in bin/portal2vr.log.\n"
           "Source's original shoot position or viewmodel FOV may be used.\n").encode("utf-8")
 
 

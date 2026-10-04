@@ -65,7 +65,7 @@ Do not delete install state/backups to fix an error. If only user preferences ar
 - FullRotation, YawOnly and PreserveHorizon are manual experiments. FullRotation has limited wall-portal evidence; floor/ceiling comfort, recenter edge cases and broader traversal need testing. Active roomscale requires LegacyYaw and 6DOF.
 - Reticle distance scaling is modest (100% at 1 m to 80% at 10 m); a dedicated far-distance readability comparison remains outstanding.
 - Signatures, offsets, vtables and the 32-bit engine ABI remain compatibility risks. No universal compatibility, co-op, performance or 120 Hz frame-rate claim is made.
-- Unresolved `EyePosition`, `Weapon_ShootPosition` or `GetViewModelFOV` signatures produce warnings in `bin/portal2vr.log` and their hooks are skipped. Startup continues with Source's original behavior for those functions; the controller shoot-origin and viewmodel FOV overrides may be unavailable.
+- `EyePosition`, `Weapon_ShootPosition` and `GetViewModelFOV` use audited RVAs only after the DLL's SHA-256 and its loaded code/table references match the supported build. The shoot-origin override applies only to the verified `FirePortal` call, preserving other calls to the shared function. An unsupported DLL, failed verification or failed hook installation produces a warning in `bin/portal2vr.log` and skips that hook without blocking startup; Source's original shoot position or viewmodel FOV may be used. These overrides still need testing in game with a headset.
 - No OpenXR backend, haptic redesign, optimized desktop mirror, Portal Reloaded ThirdAttack support or complete HUD rewrite. Haptics cover local portal shots, not every interaction.
 
 ## Building and verification
