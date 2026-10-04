@@ -28,7 +28,21 @@ class GhClient:
         return None if output is None else json.loads(output)
 
     def get_release(self, repo, tag):
-        return self._api(f"repos/{repo}/releases/tags/{tag}", missing_ok=True)
+        release = self._api(f"repos/{repo}/releases/tags/{tag}", missing_ok=True)
+        if release is not None:
+            return release
+        # The tag endpoint returns published releases only. Authenticated listings
+        # include drafts, including ones whose Git tag does not yet exist.
+        pages = json.loads(self._run("api", f"repos/{repo}/releases?per_page=100",
+                                    "--paginate", "--slurp"))
+        if (not isinstance(pages, list) or
+                any(not isinstance(page, list) for page in pages) or
+                any(not isinstance(item, dict) for page in pages for item in page)):
+            raise ValueError("Invalid GitHub release listing")
+        matches = [item for page in pages for item in page if item.get("tag_name") == tag]
+        if len(matches) > 1:
+            raise ValueError(f"Multiple releases have tag {tag}")
+        return matches[0] if matches else None
 
     def get_tag_commit(self, repo, tag):
         ref = self._api(f"repos/{repo}/git/ref/tags/{tag}", missing_ok=True)
