@@ -33,7 +33,9 @@ README = ("Portal2VR for Windows\n"
           "3. Select your Portal 2 and Steam paths. Choose Apply or Launch.\n"
           "4. Use Restore original game files in the launcher when finished.\n\n"
           "Keep the launcher-created tools folder and .launcher-backups with this package\n"
-          "until you have restored your original game files.\n").encode("utf-8")
+          "until you have restored your original game files.\n\n"
+          "Unresolved compatibility hooks are skipped with warnings in bin/portal2vr.log.\n"
+          "Source's original shoot position or viewmodel FOV may be used.\n").encode("utf-8")
 
 
 def _source_bytes(repo: Path, relative: str) -> bytes:

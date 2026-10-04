@@ -775,6 +775,12 @@ int Hooks::initSourceHooks()
 	m_RequiredHooks.Add(#hook, [requiredTarget]() { return hook.createHook(requiredTarget, &detour); }, \
 		[]() { return hook.enableHook(); }); \
 } while (false)
+#define REGISTER_IF_RESOLVED(hook, target, detour) do { \
+	LPVOID resolvedTarget = (LPVOID)(target); \
+	m_RequiredHooks.AddIfResolved(#hook, resolvedTarget, \
+		[resolvedTarget]() { return hook.createHook(resolvedTarget, &detour); }, \
+		[]() { return hook.enableHook(); }); \
+} while (false)
 	/*LPVOID pGetRenderTargetVFunc = (LPVOID)(m_Game->m_Offsets->GetRenderTarget.address);
 	hkGetRenderTarget.createHook(pGetRenderTargetVFunc, &dGetRenderTarget);*/
 
@@ -806,7 +812,7 @@ int Hooks::initSourceHooks()
 	hkGetViewport.createHook(GetViewportAddr, &dGetViewport);*/
 
 	LPVOID EyePositionAddr = (LPVOID)(m_Game->m_Offsets->EyePosition.address);
-	REQUIRE_HOOK(hkEyePosition, EyePositionAddr, dEyePosition);
+	REGISTER_IF_RESOLVED(hkEyePosition, EyePositionAddr, dEyePosition);
 
 	/*LPVOID DrawModelExecuteAddr = (LPVOID)(m_Game->m_Offsets->DrawModelExecute.address);
 	hkDrawModelExecute.createHook(DrawModelExecuteAddr, &dDrawModelExecute);*/
@@ -820,7 +826,7 @@ int Hooks::initSourceHooks()
 	hkGetFullScreenTexture.createHook(GetFullScreenTextureAddr, &dGetFullScreenTexture);*/
 
 	LPVOID Weapon_ShootPositionAddr = (LPVOID)(m_Game->m_Offsets->Weapon_ShootPosition.address);
-	REQUIRE_HOOK(hkWeapon_ShootPosition, Weapon_ShootPositionAddr, dWeapon_ShootPosition);
+	REGISTER_IF_RESOLVED(hkWeapon_ShootPosition, Weapon_ShootPositionAddr, dWeapon_ShootPosition);
 	
 	LPVOID TraceFirePortalAddr = (LPVOID)(m_Game->m_Offsets->TraceFirePortalServer.address);
 	REQUIRE_HOOK(hkTraceFirePortal, TraceFirePortalAddr, dTraceFirePortal);
@@ -852,7 +858,7 @@ int Hooks::initSourceHooks()
 	// Portal Gun VFX
 	REQUIRE_HOOK(hkGetDefaultFOV, m_Game->m_Offsets->GetDefaultFOV.address, dGetDefaultFOV);
 	REQUIRE_HOOK(hkGetFOV, m_Game->m_Offsets->GetFOV.address, dGetFOV);
-	REQUIRE_HOOK(hkGetViewModelFOV, m_Game->m_Offsets->GetViewModelFOV.address, dGetViewModelFOV);
+	REGISTER_IF_RESOLVED(hkGetViewModelFOV, m_Game->m_Offsets->GetViewModelFOV.address, dGetViewModelFOV);
 	
 	// Laser Pointer
 	GetPortalPlayer = (tGetPortalPlayer)m_Game->m_Offsets->GetPortalPlayer.address;
@@ -871,6 +877,7 @@ int Hooks::initSourceHooks()
 	GetOwner = (tGetOwner)m_Game->m_Offsets->GetOwner.address;
 	GetFullScreenTexture = (tGetFullScreenTexture)m_Game->m_Offsets->GetFullScreenTexture.address;
 #undef REQUIRE_HOOK
+#undef REGISTER_IF_RESOLVED
 	return 0;
 } 
 

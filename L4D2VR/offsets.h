@@ -2,6 +2,7 @@
 #include "sigscanner.h"
 #include "game.h"
 #include "logger.h"
+#include "startup_symbol_policy.h"
 
 
 struct Offset
@@ -161,47 +162,47 @@ public:
 
     bool Validate()
     {
-        const struct Symbol { const char *name; const Offset *offset; bool required; } symbols[] = {
-            { "RenderView", &RenderView, true }, { "CreateMove", &CreateMove, true },
-            { "PlayerPortalled", &PlayerPortalled, true },
-            { "TraceFirePortalServer", &TraceFirePortalServer, true },
-            { "CWeaponPortalgun_FirePortal", &CWeaponPortalgun_FirePortal, true },
-            { "CalcViewModelView", &CalcViewModelView, true },
-            { "ProcessUsercmds", &ProcessUsercmds, true },
-            { "ReadUsercmd", &ReadUserCmd, true }, { "WriteUsercmd", &WriteUsercmd, true },
-            { "EyeAngles", &EyeAngles, true }, { "EyePosition", &EyePosition, true },
-            { "Weapon_ShootPosition", &Weapon_ShootPosition, true },
-            { "DrawSelf", &DrawSelf, true },
-            { "ClipTransform", &ClipTransform, true },
-            { "UpdateObject", &UpdateObject, true }, { "UpdateObjectVM", &UpdateObjectVM, true },
-            { "GetDefaultFOV", &GetDefaultFOV, true }, { "GetFOV", &GetFOV, true },
-            { "GetViewModelFOV", &GetViewModelFOV, true },
-            { "SetDrawOnlyForSplitScreenUser", &SetDrawOnlyForSplitScreenUser, true },
-            { "CHudCrosshair_ShouldDraw", &CHudCrosshair_ShouldDraw, true },
-            { "CBaseEntity_entindex", &CBaseEntity_entindex, true },
-            { "GetOwner", &GetOwner, true },
-            { "UTIL_Portal_FirstAlongRay", &UTIL_Portal_FirstAlongRay, true },
-            { "UTIL_IntersectRayWithPortal", &UTIL_IntersectRayWithPortal, true },
-            { "CreatePingPointer", &CreatePingPointer, false },
-            { "Precache", &Precache, false },
-            { "PrecacheParticleSystem", &PrecacheParticleSystem, false },
-            { "SetControlPoint", &SetControlPoint, false },
-            { "StopEmission", &StopEmission, false }
+        const struct Symbol { const char *name; const Offset *offset; } symbols[] = {
+            { "RenderView", &RenderView }, { "CreateMove", &CreateMove },
+            { "PlayerPortalled", &PlayerPortalled },
+            { "TraceFirePortalServer", &TraceFirePortalServer },
+            { "CWeaponPortalgun_FirePortal", &CWeaponPortalgun_FirePortal },
+            { "CalcViewModelView", &CalcViewModelView },
+            { "ProcessUsercmds", &ProcessUsercmds },
+            { "ReadUsercmd", &ReadUserCmd }, { "WriteUsercmd", &WriteUsercmd },
+            { "EyeAngles", &EyeAngles }, { "EyePosition", &EyePosition },
+            { "Weapon_ShootPosition", &Weapon_ShootPosition },
+            { "DrawSelf", &DrawSelf },
+            { "ClipTransform", &ClipTransform },
+            { "UpdateObject", &UpdateObject }, { "UpdateObjectVM", &UpdateObjectVM },
+            { "GetDefaultFOV", &GetDefaultFOV }, { "GetFOV", &GetFOV },
+            { "GetViewModelFOV", &GetViewModelFOV },
+            { "SetDrawOnlyForSplitScreenUser", &SetDrawOnlyForSplitScreenUser },
+            { "CHudCrosshair_ShouldDraw", &CHudCrosshair_ShouldDraw },
+            { "CBaseEntity_entindex", &CBaseEntity_entindex },
+            { "GetOwner", &GetOwner },
+            { "UTIL_Portal_FirstAlongRay", &UTIL_Portal_FirstAlongRay },
+            { "UTIL_IntersectRayWithPortal", &UTIL_IntersectRayWithPortal },
+            { "CreatePingPointer", &CreatePingPointer },
+            { "Precache", &Precache },
+            { "PrecacheParticleSystem", &PrecacheParticleSystem },
+            { "SetControlPoint", &SetControlPoint },
+            { "StopEmission", &StopEmission }
         };
 
-        bool requiredAvailable = true;
-        m_LaserAvailable = true;
+        StartupSymbolStatus status;
         for (const auto &symbol : symbols) {
+            const auto role = RoleForStartupSymbol(symbol.name);
             Logger::Write(std::string(symbol.name) + " ........ " +
                           (symbol.offset->address ? "OK" : "MISSING") +
-                          (symbol.required ? " [required]" : " [optional]"));
-            if (!symbol.offset->address) {
-                if (symbol.required) requiredAvailable = false;
-                else m_LaserAvailable = false;
-            }
+                          (role == StartupSymbolRole::Required ? " [required]" : " [optional]"));
+            InspectStartupSymbol(status, symbol.name, symbol.offset->address);
         }
+        for (const auto &name : status.warnings)
+            Logger::Write("Warning: " + name + " unresolved; its VR hook is disabled.");
+        m_LaserAvailable = status.laserAvailable;
         if (!m_LaserAvailable)
             Logger::Write("Laser pointer disabled: optional symbol unavailable.");
-        return requiredAvailable;
+        return status.requiredAvailable;
     }
 };

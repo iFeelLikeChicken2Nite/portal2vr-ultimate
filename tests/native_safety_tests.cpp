@@ -1,6 +1,7 @@
 #include "../L4D2VR/sigscanner.h"
 #include "../L4D2VR/config.h"
 #include "../L4D2VR/required_hooks.h"
+#include "../L4D2VR/startup_symbol_policy.h"
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -91,6 +92,33 @@ int main()
     Expect(SigScanner::VerifyImageOffset(duplicateImage.bytes, 0x3000, 0x1100, "AB CD EF", INT_MAX) == -1,
            "signature offset cannot overflow the image");
 
+    const char *warningOnly[] = {"EyePosition", "Weapon_ShootPosition", "GetViewModelFOV"};
+    for (const char *name : warningOnly) {
+        StartupSymbolStatus missing;
+        InspectStartupSymbol(missing, name, 0);
+        Expect(missing.requiredAvailable && missing.laserAvailable &&
+               missing.warnings == std::vector<std::string>{name},
+               "each unresolved compatibility hook warns without blocking startup or laser");
+        StartupSymbolStatus present;
+        InspectStartupSymbol(present, name, 1);
+        Expect(present.requiredAvailable && present.laserAvailable && present.warnings.empty(),
+               "resolved compatibility hook emits no warning");
+    }
+    StartupSymbolStatus allMissing;
+    for (const char *name : warningOnly) InspectStartupSymbol(allMissing, name, 0);
+    Expect(allMissing.requiredAvailable && allMissing.laserAvailable &&
+           allMissing.warnings == std::vector<std::string>{
+               "EyePosition", "Weapon_ShootPosition", "GetViewModelFOV"},
+           "all unresolved compatibility hooks leave required startup and laser available");
+    StartupSymbolStatus requiredMissing;
+    InspectStartupSymbol(requiredMissing, "RenderView", 0);
+    Expect(!requiredMissing.requiredAvailable && requiredMissing.laserAvailable &&
+           requiredMissing.warnings.empty(), "unresolved required hook still blocks startup");
+    StartupSymbolStatus laserMissing;
+    InspectStartupSymbol(laserMissing, "CreatePingPointer", 0);
+    Expect(laserMissing.requiredAvailable && !laserMissing.laserAvailable &&
+           laserMissing.warnings.empty(), "unresolved laser symbol disables only laser");
+
     ConfigSnapshot prior;
     prior.turnSpeed = 0.25f;
     std::istringstream malformedReload("TurnSpeed=0.5\nIPDScale=nan\n");
@@ -141,5 +169,31 @@ int main()
            failedHook == "second" &&
            calls == std::vector<std::string>{"create-first", "create-second", "enable-first", "enable-second"},
            "required enable failure is reported after complete creation stage");
+
+    calls.clear();
+    RequiredHooks unresolvedHooks;
+    for (const char *name : warningOnly) {
+        unresolvedHooks.AddIfResolved(name, nullptr,
+            [&] { calls.push_back("create-unresolved"); return 1; },
+            [&] { calls.push_back("enable-unresolved"); return 1; });
+    }
+    unresolvedHooks.Add("required", [&] { calls.push_back("create-required"); return 0; },
+                        [&] { calls.push_back("enable-required"); return 0; });
+    Expect(unresolvedHooks.CreateAll(failedHook) && unresolvedHooks.EnableAll(failedHook) &&
+           calls == std::vector<std::string>{"create-required", "enable-required"},
+           "unresolved compatibility hooks are never created or enabled");
+
+    calls.clear();
+    RequiredHooks resolvedHooks;
+    for (const char *name : warningOnly) {
+        resolvedHooks.AddIfResolved(name, reinterpret_cast<void *>(1),
+            [&, name] { calls.push_back(std::string("create-") + name); return 0; },
+            [&, name] { calls.push_back(std::string("enable-") + name); return 0; });
+    }
+    Expect(resolvedHooks.CreateAll(failedHook) && resolvedHooks.EnableAll(failedHook) &&
+           calls == std::vector<std::string>{
+               "create-EyePosition", "create-Weapon_ShootPosition", "create-GetViewModelFOV",
+               "enable-EyePosition", "enable-Weapon_ShootPosition", "enable-GetViewModelFOV"},
+           "resolved compatibility hooks retain checked create and enable stages");
     return failures ? 1 : 0;
 }

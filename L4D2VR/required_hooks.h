@@ -15,6 +15,13 @@ public:
         m_Steps.push_back({name, std::move(create), std::move(enable)});
     }
 
+    // An unresolved optional symbol has no safe target or original trampoline.
+    // A resolved symbol still uses the checked required create/enable stages.
+    void AddIfResolved(const char *name, const void *target, Operation create, Operation enable)
+    {
+        if (target) Add(name, std::move(create), std::move(enable));
+    }
+
     bool CreateAll(std::string &failed)
     {
         for (const auto &step : m_Steps) {
