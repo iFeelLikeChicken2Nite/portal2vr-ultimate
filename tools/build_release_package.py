@@ -36,7 +36,8 @@ README = ("Portal2VR for Windows\n"
           "until you have restored your original game files.\n\n"
           "Compatibility hooks require a verified DLL build and loaded code/table references.\n"
           "Verification or installation failures skip that hook with warnings in bin/portal2vr.log.\n"
-          "Source's original shoot position or viewmodel FOV may be used.\n").encode("utf-8")
+          "Source's original shoot position or viewmodel FOV may be used.\n"
+          "Verbose diagnostics in Advanced enables repeated texture/MSAA details and periodic summaries.\n").encode("utf-8")
 
 
 def _source_bytes(repo: Path, relative: str) -> bytes:

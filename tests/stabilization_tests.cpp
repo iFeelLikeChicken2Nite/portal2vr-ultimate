@@ -271,6 +271,39 @@ int main()
     expect(renderDiagnostics.First(RenderDiagnosticEvent::CrosshairHudDraw), false,
            "crosshair HUD draw diagnostic does not spam each frame");
 
+    RenderTargetDiagnosticGate targetDiagnostics;
+    int allocations = 0, projections = 0, bounds = 0;
+    for (int i = 0; i < 1944; ++i) {
+        allocations += targetDiagnostics.Allocation(2528, 2704, false);
+        projections += targetDiagnostics.Projection(1280, 720, 2528, 2704, 1.2f, 100.0f, false);
+        bounds += targetDiagnostics.HudBounds(1280, 720, 2528, 2704, 0.5f, 0.25f, 0, false);
+    }
+    expectInt(allocations, 1, "unchanged menu allocations log once in normal mode");
+    expectInt(projections, 1, "unchanged projection geometry logs once in normal mode");
+    expectInt(bounds, 1, "unchanged successful HUD bounds log once in normal mode");
+    expect(targetDiagnostics.Allocation(3000, 2704, false), true, "changed target dimensions log");
+    expect(targetDiagnostics.Allocation(3000, 2704, false), false, "changed dimensions then stay quiet");
+    expect(targetDiagnostics.Projection(1920, 1080, 2528, 2704, 1.2f, 100.0f, false), true,
+           "Source window resize logs new projection geometry");
+    expect(targetDiagnostics.Projection(1920, 1080, 2528, 2704, 1.2f, 110.0f, false), true,
+           "FOV change logs even when dimensions are unchanged");
+    expect(targetDiagnostics.HudBounds(1280, 720, 2528, 2704, 0.6f, 0.25f, 0, false), true,
+           "changed HUD crop logs");
+    for (int i = 0; i < 3; ++i) {
+        expect(targetDiagnostics.Allocation(3000, 2704, true), true, "verbose logs repeated allocations");
+        expect(targetDiagnostics.Projection(1920, 1080, 2528, 2704, 1.2f, 110.0f, true), true,
+               "verbose logs repeated projection geometry");
+        expect(targetDiagnostics.HudBounds(1280, 720, 2528, 2704, 0.6f, 0.25f, 0, true), true,
+               "verbose logs repeated HUD bounds");
+        expect(targetDiagnostics.HudBounds(1280, 720, 2528, 2704, 0.6f, 0.25f, 12, false), true,
+               "repeated HUD bounds failures remain visible without verbose");
+    }
+    expect(targetDiagnostics.Allocation(3000, 2704, false), false, "disabling verbose resumes suppression");
+    expect(targetDiagnostics.HudBounds(1280, 720, 2528, 2704, 0.6f, 0.25f, 0, false), true,
+           "HUD bounds recovery logs once");
+    expect(targetDiagnostics.HudBounds(1280, 720, 2528, 2704, 0.6f, 0.25f, 0, false), false,
+           "recovered HUD bounds stay quiet");
+
     MenuOverlayPlacement menuPlacement;
     expect(menuPlacement.ShouldAttempt(false, false), false,
            "menu cannot be positioned before the first valid HMD pose");

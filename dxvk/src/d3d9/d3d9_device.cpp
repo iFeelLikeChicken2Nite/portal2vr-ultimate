@@ -509,7 +509,8 @@ namespace dxvk {
 
 	if (game && game->m_VR && game->m_VR->OwnsD3DDevice(this) && (game->m_VR->m_CreatingTextureID == VR::Texture_LeftEye || game->m_VR->m_CreatingTextureID == VR::Texture_RightEye))
 	{
-        dxvk::Logger::info(str::format("Creating texture with MSAA ", game->m_VR->m_AntiAliasing));
+        if (game->m_VR->m_Config.verboseDiagnostics)
+            dxvk::Logger::info(str::format("Creating texture with MSAA ", game->m_VR->m_AntiAliasing));
 		desc.MultiSample = MapToMultisampleType(game->m_VR->m_AntiAliasing);
 	}
 
@@ -3733,7 +3734,8 @@ namespace dxvk {
 	Game* const game = g_Game.load(std::memory_order_acquire);
 	if (game && game->m_VR && game->m_VR->OwnsD3DDevice(this) && (game->m_VR->m_CreatingTextureID == VR::Texture_LeftEye || game->m_VR->m_CreatingTextureID == VR::Texture_RightEye))
 	{
-        dxvk::Logger::info(str::format("Creating depth/stencil surface with MSAA ", game->m_VR->m_AntiAliasing));
+        if (game->m_VR->m_Config.verboseDiagnostics)
+            dxvk::Logger::info(str::format("Creating depth/stencil surface with MSAA ", game->m_VR->m_AntiAliasing));
 		desc.MultiSample = MapToMultisampleType(game->m_VR->m_AntiAliasing);
 	}
 

@@ -25,7 +25,7 @@ The launcher default includes features confirmed during the maintainer's headset
 - The **original Portal reticle and dynamic blue/orange status** at the aim endpoint, not custom replacement artwork.
 - Readable subtitle overlay and pause/menu placement corrected after physical walking.
 - Portal-shot haptics, with bounded amplitude/duration and duplicate-event suppression.
-- Quiet diagnostics: startup/failures are logged; periodic summaries and the extra desktop render are off.
+- Quiet diagnostics: startup, changed render geometry and failures are logged. Repeated allocation/MSAA details and periodic summaries are off; enable **Verbose diagnostics** in Advanced when investigating them. The extra desktop render is off.
 
 These observations concern the tested installation, not every headset, game build or portal orientation. The versioned `L4D2VR/config.txt` retains conservative default-off experimental flags; the launcher supplies the recommended profile.
 
@@ -65,7 +65,7 @@ Do not delete install state/backups to fix an error. If only user preferences ar
 - FullRotation, YawOnly and PreserveHorizon are manual experiments. FullRotation has limited wall-portal evidence; floor/ceiling comfort, recenter edge cases and broader traversal need testing. Active roomscale requires LegacyYaw and 6DOF.
 - Reticle distance scaling is modest (100% at 1 m to 80% at 10 m); a dedicated far-distance readability comparison remains outstanding.
 - Signatures, offsets, vtables and the 32-bit engine ABI remain compatibility risks. No universal compatibility, co-op, performance or 120 Hz frame-rate claim is made.
-- `EyePosition`, `Weapon_ShootPosition` and `GetViewModelFOV` use audited RVAs only after the DLL's SHA-256 and its loaded code/table references match the supported build. The shoot-origin override applies only to the verified `FirePortal` call, preserving other calls to the shared function. An unsupported DLL, failed verification or failed hook installation produces a warning in `bin/portal2vr.log` and skips that hook without blocking startup; Source's original shoot position or viewmodel FOV may be used. These overrides still need testing in game with a headset.
+- `EyePosition`, `Weapon_ShootPosition` and `GetViewModelFOV` use audited RVAs only after the DLL's SHA-256 and its loaded code/table references match the supported build. The shoot-origin override applies only to the verified `FirePortal` call, preserving other calls to the shared function. An unsupported DLL, failed verification or failed hook installation produces a warning in `bin/portal2vr.log` and skips that hook without blocking startup; Source's original shoot position or viewmodel FOV may be used. The user reported successful hardware testing on one current setup; other game builds and setups require separate validation.
 - No OpenXR backend, haptic redesign, optimized desktop mirror, Portal Reloaded ThirdAttack support or complete HUD rewrite. Haptics cover local portal shots, not every interaction.
 
 ## Building and verification

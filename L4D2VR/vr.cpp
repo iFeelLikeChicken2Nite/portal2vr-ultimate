@@ -489,9 +489,12 @@ void VR::CreateVRTextures()
         return;
     }
 
-    Logger::Write("Creating VR render targets: " + std::to_string(m_RenderWidth) +
-                  "x" + std::to_string(m_RenderHeight));
-    if (windowWidth > 0 && windowHeight > 0)
+    if (m_RenderTargetDiagnostics.Allocation(m_RenderWidth, m_RenderHeight, m_Config.verboseDiagnostics))
+        Logger::Write("Creating VR render targets: " + std::to_string(m_RenderWidth) +
+                      "x" + std::to_string(m_RenderHeight));
+    if (windowWidth > 0 && windowHeight > 0 && m_RenderTargetDiagnostics.Projection(
+            windowWidth, windowHeight, m_RenderWidth, m_RenderHeight, m_Aspect, m_Fov,
+            m_Config.verboseDiagnostics))
         Logger::Write("Projection geometry: Source window=" +
             std::to_string(windowWidth) + "x" + std::to_string(windowHeight) +
             " aspect=" + std::to_string(static_cast<float>(windowWidth) / windowHeight) +
@@ -536,7 +539,9 @@ void VR::CreateVRTextures()
             const vr::VRTextureBounds_t bounds{0.0f, 0.0f, crop->uMax, crop->vMax};
             const auto boundsError = m_Overlay->SetOverlayTextureBounds(m_HUDHandle, &bounds);
             m_HUDBoundsReady = boundsError == vr::VROverlayError_None;
-            Logger::Write("Experimental HUD texture bounds: window=" +
+            if (m_RenderTargetDiagnostics.HudBounds(windowWidth, windowHeight, m_RenderWidth,
+                    m_RenderHeight, crop->uMax, crop->vMax, boundsError, m_Config.verboseDiagnostics))
+                Logger::Write("Experimental HUD texture bounds: window=" +
                 std::to_string(windowWidth) + "x" + std::to_string(windowHeight) +
                 " target=" + std::to_string(m_RenderWidth) + "x" +
                 std::to_string(m_RenderHeight) + " uMax=" + std::to_string(crop->uMax) +

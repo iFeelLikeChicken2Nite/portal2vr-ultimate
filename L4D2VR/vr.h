@@ -201,6 +201,7 @@ public:
 
 	bool m_IsVREnabled = false;
 	RenderDiagnosticGate m_RenderDiagnostics;
+	RenderTargetDiagnosticGate m_RenderTargetDiagnostics;
 	MenuOverlayPlacement m_MenuOverlayPlacement;
 	bool m_IsInitialized = false;
 	bool m_RenderedNewFrame = false;
