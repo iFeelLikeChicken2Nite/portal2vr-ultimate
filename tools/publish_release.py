@@ -13,6 +13,9 @@ import zipfile
 class GhClient:
     """Small GitHub CLI boundary; the publisher owns all policy decisions."""
 
+    def __init__(self):
+        self._created_release_ids = {}
+
     @staticmethod
     def _run(*args, missing_ok=False):
         result = subprocess.run(["gh", *args], capture_output=True, text=True,
@@ -28,6 +31,9 @@ class GhClient:
         return None if output is None else json.loads(output)
 
     def get_release(self, repo, tag):
+        release_id = self._created_release_ids.get((repo, tag))
+        if release_id is not None:
+            return self._api(f"repos/{repo}/releases/{release_id}")
         release = self._api(f"repos/{repo}/releases/tags/{tag}", missing_ok=True)
         if release is not None:
             return release
@@ -63,9 +69,18 @@ class GhClient:
         notes = (f"Windows x86 package for commit {commit}.\n\n"
                  "Extract the ZIP and run Portal2VR Launcher.exe. "
                  "See README.txt inside the ZIP and RELEASES.md in the repository.")
-        self._run("release", "create", tag, "--repo", repo, "--draft",
-                  "--target", commit, "--title", f"Portal2VR {tag}",
-                  "--notes", notes)
+        created = json.loads(self._run(
+            "api", f"repos/{repo}/releases", "--method", "POST",
+            "-f", f"tag_name={tag}", "-f", f"target_commitish={commit}",
+            "-F", "draft=true", "-f", f"name=Portal2VR {tag}", "-f", f"body={notes}"))
+        if (not isinstance(created, dict) or type(created.get("id")) is not int or
+                created["id"] <= 0 or created.get("tag_name") != tag or
+                created.get("target_commitish") != commit or created.get("draft") is not True or
+                created.get("prerelease") is not False or created.get("assets") != []):
+            raise ValueError("Created draft response does not match this release")
+        # A new draft can be absent from release listings immediately after POST.
+        # Retain its exact identity for readback, asset refresh and publication.
+        self._created_release_ids[(repo, tag)] = created["id"]
 
     def download_asset(self, repo, tag, name):
         with TemporaryDirectory() as temporary:

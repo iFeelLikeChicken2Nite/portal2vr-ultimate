@@ -72,6 +72,49 @@ def files(root: Path):
 
 
 class GhClientTests(unittest.TestCase):
+    def test_new_draft_is_read_and_refreshed_by_returned_id_without_list_lookup(self):
+        draft = {"id": 42, "tag_name": TAG, "target_commitish": COMMIT,
+                 "draft": True, "prerelease": False, "assets": []}
+        refreshed = dict(draft, assets=[{"name": ZIP_NAME}])
+        published = dict(refreshed, draft=False)
+        with patch.object(GhClient, "_run", side_effect=[json.dumps(draft),
+                          json.dumps(refreshed), json.dumps(published)]) as run:
+            client = GhClient()
+            client.create_draft("owner/repo", TAG, COMMIT)
+            self.assertEqual(client.get_release("owner/repo", TAG), refreshed)
+            self.assertEqual(client.get_release("owner/repo", TAG), published)
+        self.assertEqual(run.call_args_list[0].args[:4],
+                         ("api", "repos/owner/repo/releases", "--method", "POST"))
+        for call in run.call_args_list[1:]:
+            self.assertEqual(call.args, ("api", "repos/owner/repo/releases/42"))
+
+    def test_invalid_created_draft_does_not_enable_id_readback(self):
+        draft = {"id": 42, "tag_name": TAG, "target_commitish": COMMIT,
+                 "draft": True, "prerelease": False, "assets": []}
+        variants = [{"id": None}, {"id": True}, {"id": 0}, {"id": "42"},
+                    {"tag_name": "v0.2.0"}, {"target_commitish": OTHER},
+                    {"draft": False}, {"prerelease": True},
+                    {"assets": [{"name": "unexpected.zip"}]}]
+        for fields in variants:
+            with self.subTest(fields=fields), patch.object(
+                    GhClient, "_run", return_value=json.dumps(dict(draft, **fields))) as run:
+                with self.assertRaisesRegex(ValueError, "Created draft"):
+                    GhClient().create_draft("owner/repo", TAG, COMMIT)
+                self.assertEqual(run.call_count, 1)
+
+    def test_created_draft_readback_failure_does_not_rediscover_or_create(self):
+        draft = {"id": 42, "tag_name": TAG, "target_commitish": COMMIT,
+                 "draft": True, "prerelease": False, "assets": []}
+        with patch.object(GhClient, "_run", side_effect=[json.dumps(draft),
+                          RuntimeError("HTTP 404")]) as run:
+            client = GhClient()
+            client.create_draft("owner/repo", TAG, COMMIT)
+            with self.assertRaisesRegex(RuntimeError, "HTTP 404"):
+                client.get_release("owner/repo", TAG)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[1].args,
+                         ("api", "repos/owner/repo/releases/42"))
+
     def test_published_release_uses_direct_tag_lookup(self):
         release = {"tag_name": TAG, "draft": False}
         with patch.object(GhClient, "_run", return_value=json.dumps(release)) as run:
