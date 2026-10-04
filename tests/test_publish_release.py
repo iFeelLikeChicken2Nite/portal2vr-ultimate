@@ -5,11 +5,12 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 import zipfile
 
 from tests.test_release_package import fixture as package_fixture
 from tools.build_release_package import assemble_release
-from tools.publish_release import publish_release, verify_snapshot
+from tools.publish_release import GhClient, publish_release, verify_snapshot
 
 
 COMMIT = "a" * 40
@@ -68,6 +69,49 @@ def files(root: Path):
     checksum = root / "SHA256SUMS.txt"
     checksum.write_bytes(f"{digest}  {ZIP_NAME}\n".encode("ascii"))
     return archive, checksum
+
+
+class GhClientTests(unittest.TestCase):
+    def test_published_release_uses_direct_tag_lookup(self):
+        release = {"tag_name": TAG, "draft": False}
+        with patch.object(GhClient, "_run", return_value=json.dumps(release)) as run:
+            self.assertEqual(GhClient().get_release("owner/repo", TAG), release)
+        run.assert_called_once_with("api", f"repos/owner/repo/releases/tags/{TAG}",
+                                    missing_ok=True)
+
+    def test_unpublished_draft_is_found_after_first_release_page(self):
+        draft = {"tag_name": TAG, "target_commitish": COMMIT, "draft": True,
+                 "prerelease": False, "assets": []}
+        pages = [[{"tag_name": "v0.2.0", "draft": False}], [draft]]
+        with patch.object(GhClient, "_run", side_effect=[None, json.dumps(pages)]) as run:
+            self.assertEqual(GhClient().get_release("owner/repo", TAG), draft)
+        self.assertEqual(run.call_args_list[1].args,
+                         ("api", "repos/owner/repo/releases?per_page=100",
+                          "--paginate", "--slurp"))
+
+    def test_missing_tag_and_draft_returns_none(self):
+        with patch.object(GhClient, "_run", side_effect=[None, "[[]]"]):
+            self.assertIsNone(GhClient().get_release("owner/repo", TAG))
+
+    def test_duplicate_matching_releases_refuse_ambiguous_draft(self):
+        draft = {"tag_name": TAG, "draft": True}
+        with patch.object(GhClient, "_run",
+                          side_effect=[None, json.dumps([[draft], [draft]])]):
+            with self.assertRaisesRegex(ValueError, "Multiple releases"):
+                GhClient().get_release("owner/repo", TAG)
+
+    def test_invalid_release_pages_are_not_treated_as_absent_draft(self):
+        for pages in ({}, [None], [[None]]):
+            with self.subTest(pages=pages), patch.object(
+                    GhClient, "_run", side_effect=[None, json.dumps(pages)]):
+                with self.assertRaisesRegex(ValueError, "Invalid GitHub release"):
+                    GhClient().get_release("owner/repo", TAG)
+
+    def test_failed_tag_lookup_is_not_treated_as_missing_draft(self):
+        with patch.object(GhClient, "_run", side_effect=RuntimeError("HTTP 403")) as run:
+            with self.assertRaisesRegex(RuntimeError, "HTTP 403"):
+                GhClient().get_release("owner/repo", TAG)
+        self.assertEqual(run.call_count, 1)
 
 
 class PublishReleaseTests(unittest.TestCase):
