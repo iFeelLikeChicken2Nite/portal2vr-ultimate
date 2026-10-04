@@ -1,0 +1,7 @@
+# Windows builds and releases
+
+For a stable build, open the repository's **Releases** page and download the latest `Portal2VR-vX.Y.Z-win32.zip` plus `SHA256SUMS.txt`. Check the ZIP's SHA-256 against the checksum file, then extract the entire ZIP to a writable folder. Keep the folder layout intact and double-click `Portal2VR Launcher.exe`. The launcher is a standalone Windows executable; users do not need Python, Visual Studio, or a local build.
+
+Close Portal 2 before using the launcher. Select the Portal 2 installation and its matching Steam installation, then use the launcher to apply or launch the mod. Keep the extracted folder, its launcher state, and its backups until you have used **Restore original game files**. The package contains the x86 mod DLL, OpenVR runtime DLL, configuration, action manifests, image, and license notices. The automated launcher build requires 64-bit Windows; the game-facing DLLs remain 32-bit. It does not include Portal 2, Steam, or SteamVR.
+
+The native mod requires a Vulkan-capable graphics driver and the **Microsoft Visual C++ v14 Redistributable (x86)**, even on 64-bit Windows. Install the [latest supported x86 runtime](https://aka.ms/vc14/vc_redist.x86.exe) if needed. Its version must be at least as recent as the build tools used for the mod, as specified in [Microsoft's runtime guidance](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/). The launcher embeds Python; the package does not install system runtimes or graphics drivers.

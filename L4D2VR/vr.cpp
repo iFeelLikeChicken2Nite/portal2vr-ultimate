@@ -29,7 +29,7 @@ VR::VR(Game *game)
     char errorString[MAX_STR_LEN];
 
     vr::HmdError error = vr::VRInitError_None;
-    m_System = vr::VR_Init(&error, vr::VRApplication_Scene);
+    m_System = m_OpenVRSession.Acquire(error);
 
     if (error != vr::VRInitError_None || !m_System)
     {
@@ -112,7 +112,7 @@ VR::VR(Game *game)
     m_ConfigLastModified = std::filesystem::last_write_time("VR\\config.txt", configTimeError);
 
     const auto d3dStart = GetTickCount64();
-    while (!g_D3DVR9) {
+    while (FAILED(AcquireSoleVRBridge(&m_D3DDevice, &m_D3DVR))) {
         if (GetTickCount64() - d3dStart > 30000) {
             Game::errorMsg("Timed out waiting for the DXVK VR bridge.");
             return;
@@ -120,7 +120,7 @@ VR::VR(Game *game)
         Sleep(10);
     }
 
-    if (FAILED(g_D3DVR9->GetBackBufferData(&m_VKBackBuffer))) {
+    if (FAILED(m_D3DVR->GetBackBufferData(&m_VKBackBuffer))) {
         Game::errorMsg("DXVK VR back buffer initialization failed.");
         return;
     }
@@ -141,16 +141,9 @@ VR::VR(Game *game)
         return;
     }
 
-    int windowWidth, windowHeight;
-    IMatRenderContext *menuContext = m_Game->m_MaterialSystem->GetRenderContext();
-    menuContext->GetWindowSize(windowWidth, windowHeight);
-    menuContext->Release();
-
-    //const vr::HmdVector2_t mouseScaleHUD = {windowWidth, windowHeight};
-    //m_Overlay->SetOverlayMouseScale(m_HUDHandle, &mouseScaleHUD);
-
     const vr::HmdVector2_t mouseScaleMenu = {
-        static_cast<float>(m_RenderWidth), static_cast<float>(m_RenderHeight)};
+        static_cast<float>(m_VKBackBuffer.m_VulkanData.m_nWidth),
+        static_cast<float>(m_VKBackBuffer.m_VulkanData.m_nHeight)};
     if (m_Overlay->SetOverlayCurvature(m_MainMenuHandle, 0.15f) != vr::VROverlayError_None ||
         m_Overlay->SetOverlayMouseScale(m_MainMenuHandle, &mouseScaleMenu) != vr::VROverlayError_None) {
         Game::errorMsg("OpenVR menu overlay geometry setup failed.");
@@ -184,9 +177,16 @@ VR::~VR()
             Logger::Write("OpenVR overlay cleanup failed: " + std::to_string(result));
     }
     if (m_OpenVRStarted) {
-        vr::VR_Shutdown();
-        Logger::Write("OpenVR shutdown complete");
+        m_OpenVRSession.Reset();
+        Logger::Write("OpenVR runtime lease released");
     }
+    // The OpenVR consumer is gone before dropping any Vulkan image owners.
+    m_Overlay = nullptr;
+    InvalidateD3DResources();
+    if (m_D3DVR) m_D3DVR->Release();
+    if (m_D3DDevice) m_D3DDevice->Release();
+    m_D3DVR = nullptr;
+    m_D3DDevice = nullptr;
 }
 
 void VR::CreateExperimentalHUDOverlay()
@@ -380,7 +380,7 @@ void VR::Update()
                 " units; feedback is Source view origin, accepted hull movement unverified");
     }
 
-    if (m_IsVREnabled && g_D3DVR9)
+    if (m_IsVREnabled && m_D3DVR)
     {
         bool inGame = m_Game->m_EngineClient->IsInGame();
 
@@ -390,8 +390,10 @@ void VR::Update()
         if (!inGame)
         {
             IMatRenderContext *rndrContext = m_Game->m_MaterialSystem->GetRenderContext();
-            rndrContext->SetRenderTarget(NULL);
-            rndrContext->Release();
+            if (rndrContext) {
+                rndrContext->SetRenderTarget(NULL);
+                rndrContext->Release();
+            }
 
             m_Game->m_CachedArmsModel = false;
             m_CreatedVRTextures = false; // Have to recreate textures otherwise some workshop maps won't render
@@ -424,12 +426,22 @@ void VR::Update()
     }
 }
 
-void VR::CreateVRTextures()
+void VR::InvalidateD3DResources()
 {
+    if (m_Overlay) {
+        if (m_MainMenuHandle != vr::k_ulOverlayHandleInvalid) {
+            m_Overlay->HideOverlay(m_MainMenuHandle);
+            m_Overlay->ClearOverlayTexture(m_MainMenuHandle);
+        }
+        if (m_HUDHandle != vr::k_ulOverlayHandleInvalid) {
+            m_Overlay->HideOverlay(m_HUDHandle);
+            m_Overlay->ClearOverlayTexture(m_HUDHandle);
+        }
+    }
     m_HUDBoundsReady = false;
-    if (m_RenderTargetsFailed)
-        return;
     m_CreatedVRTextures = false;
+    m_RenderedNewFrame = false;
+    m_RenderedHud = false;
     auto releaseSurface = [](IDirect3DSurface9*& surface) {
         if (surface) {
             surface->Release();
@@ -444,16 +456,45 @@ void VR::CreateVRTextures()
     m_VKRightEye.m_VRTexture.handle = nullptr;
     m_VKHUD.m_VRTexture.handle = nullptr;
     m_VKBlankTexture.m_VRTexture.handle = nullptr;
+    m_VKBackBuffer.m_VRTexture.handle = nullptr;
+    // Named Source textures are borrowed material-system objects. Only the
+    // GetSurfaceLevel references above belong to the mod.
+    m_LeftEyeTexture = m_RightEyeTexture = m_HUDTexture = m_BlankTexture = nullptr;
+    m_RenderTargetRetry.ResetForDevice();
+}
 
-    int windowWidth, windowHeight;
+void VR::CreateVRTextures()
+{
+    const auto now = GetTickCount64();
+    if (!m_D3DVR || !m_RenderTargetRetry.CanAttempt(now, true))
+        return;
+    SharedTextureHolder currentBackBuffer;
+    if (FAILED(m_D3DVR->GetBackBufferData(&currentBackBuffer)) ||
+        !currentBackBuffer.m_VulkanData.m_nImage ||
+        !currentBackBuffer.m_VulkanData.m_nWidth || !currentBackBuffer.m_VulkanData.m_nHeight)
+        return;
+    // Preserve retry history when replacing partial resources from an attempt.
+    const auto retryState = m_RenderTargetRetry;
+    InvalidateD3DResources();
+    m_RenderTargetRetry = retryState;
+
+    int windowWidth = 0, windowHeight = 0;
 
     IMatRenderContext* rndrContext = m_Game->m_MaterialSystem->GetRenderContext();
-    rndrContext->GetWindowSize(windowWidth, windowHeight);
-    rndrContext->Release();
+    if (rndrContext) {
+        rndrContext->GetWindowSize(windowWidth, windowHeight);
+        rndrContext->Release();
+    } else {
+        m_RenderTargetRetry.RecordFailure(now);
+        return;
+    }
 
-    Logger::Write("Creating VR render targets: " + std::to_string(m_RenderWidth) +
-                  "x" + std::to_string(m_RenderHeight));
-    if (windowWidth > 0 && windowHeight > 0)
+    if (m_RenderTargetDiagnostics.Allocation(m_RenderWidth, m_RenderHeight, m_Config.verboseDiagnostics))
+        Logger::Write("Creating VR render targets: " + std::to_string(m_RenderWidth) +
+                      "x" + std::to_string(m_RenderHeight));
+    if (windowWidth > 0 && windowHeight > 0 && m_RenderTargetDiagnostics.Projection(
+            windowWidth, windowHeight, m_RenderWidth, m_RenderHeight, m_Aspect, m_Fov,
+            m_Config.verboseDiagnostics))
         Logger::Write("Projection geometry: Source window=" +
             std::to_string(windowWidth) + "x" + std::to_string(windowHeight) +
             " aspect=" + std::to_string(static_cast<float>(windowWidth) / windowHeight) +
@@ -498,7 +539,9 @@ void VR::CreateVRTextures()
             const vr::VRTextureBounds_t bounds{0.0f, 0.0f, crop->uMax, crop->vMax};
             const auto boundsError = m_Overlay->SetOverlayTextureBounds(m_HUDHandle, &bounds);
             m_HUDBoundsReady = boundsError == vr::VROverlayError_None;
-            Logger::Write("Experimental HUD texture bounds: window=" +
+            if (m_RenderTargetDiagnostics.HudBounds(windowWidth, windowHeight, m_RenderWidth,
+                    m_RenderHeight, crop->uMax, crop->vMax, boundsError, m_Config.verboseDiagnostics))
+                Logger::Write("Experimental HUD texture bounds: window=" +
                 std::to_string(windowWidth) + "x" + std::to_string(windowHeight) +
                 " target=" + std::to_string(m_RenderWidth) + "x" +
                 std::to_string(m_RenderHeight) + " uMax=" + std::to_string(crop->uMax) +
@@ -522,53 +565,83 @@ void VR::CreateVRTextures()
          m_VKBlankTexture.m_VRTexture.handle != nullptr}};
     m_CreatedVRTextures = readiness.Ready();
     if (!m_CreatedVRTextures) {
-        m_RenderTargetsFailed = true;
+        m_RenderTargetRetry.RecordFailure(now);
         Logger::Write("VR render target creation failed: left=" +
             std::to_string(readiness.left.Ready()) + " right=" +
             std::to_string(readiness.right.Ready()) + " blank=" +
             std::to_string(readiness.blank.Ready()) +
-            "; stereo rendering disabled until restart");
+            (m_RenderTargetRetry.Exhausted() ?
+                "; retry budget exhausted; stereo disabled until device reset/restart" :
+                "; stereo bypassed; retry delayed at least one second"));
+        const auto failedRetry = m_RenderTargetRetry;
+        InvalidateD3DResources();
+        m_RenderTargetRetry = failedRetry;
+    } else {
+        m_RenderTargetRetry.RecordSuccess();
     }
 }
 
 void VR::SubmitVRTextures()
 {
+    // The bridge pins the image captured before Present rotates backbuffers.
+    // Reacquire its descriptor every submission; never reuse a reset-era handle.
+    m_VKBackBuffer.m_VRTexture.handle = nullptr;
+    if (!m_D3DVR || FAILED(m_D3DVR->GetBackBufferData(&m_VKBackBuffer))) {
+        if (m_Overlay) {
+            m_Overlay->HideOverlay(m_MainMenuHandle);
+            if (m_HUDHandle != vr::k_ulOverlayHandleInvalid)
+                m_Overlay->HideOverlay(m_HUDHandle);
+        }
+        m_RenderedNewFrame = false;
+        ReleaseMenuMouse();
+        return;
+    }
     SubmitExperimentalHUDOverlay();
     m_RenderedHud = false;
     if (!m_RenderedNewFrame)
     {
-        if (!m_BlankTexture && !m_RenderTargetsFailed)
+        if (!m_CreatedVRTextures)
             CreateVRTextures();
 
         if (!m_BlankTexture || !m_VKBlankTexture.m_VRTexture.handle)
             return;
-
-        // Translation follows the physical HMD even after roomscale walking.
-        // Heading is captured only on opening, not on every head turn.
-        const bool menuPositioned = RepositionOverlays();
-
-        vr::VRTextureBounds_t bounds{ 0, 0, 1, 1 };
-        const bool inGame = m_Game->m_EngineClient->IsInGame();
-        vr::EVROverlayError aspectError = vr::VROverlayError_None;
-        if (inGame)
-        {
-            // menu only renders to the window portion of the texture. Until we figure out a proper fix,
-            // as a workaround only show that portion of the texture
-            int windowWidth, windowHeight;
-            IMatRenderContext* rndrContext = m_Game->m_MaterialSystem->GetRenderContext();
-            rndrContext->GetWindowSize(windowWidth, windowHeight);
-            rndrContext->Release();
-
-            bounds.uMax = (float)windowWidth / m_RenderWidth;
-            bounds.vMax = (float)windowHeight / m_RenderHeight;
-            aspectError = vr::VROverlay()->SetOverlayTexelAspect(m_MainMenuHandle, bounds.vMax / bounds.uMax);
+        if (FAILED(m_D3DVR->GetBackBufferData(&m_VKBackBuffer))) {
+            m_Overlay->HideOverlay(m_MainMenuHandle);
+            ReleaseMenuMouse();
+            return;
         }
-        else
-            aspectError = vr::VROverlay()->SetOverlayTexelAspect(m_MainMenuHandle, 1.0f);
 
+        const bool inGame = m_Game->m_EngineClient->IsInGame();
+        int windowWidth = 0, windowHeight = 0;
+        IMatRenderContext *context = m_Game->m_MaterialSystem->GetRenderContext();
+        if (context) {
+            context->GetWindowSize(windowWidth, windowHeight);
+            context->Release();
+        }
+        const auto &backBuffer = m_VKBackBuffer.m_VulkanData;
+        const auto maxDimension = static_cast<uint32_t>((std::numeric_limits<int>::max)());
+        const auto mapping = backBuffer.m_nWidth <= maxDimension && backBuffer.m_nHeight <= maxDimension ?
+            HudCapture::MenuTextureMapping(static_cast<int>(backBuffer.m_nWidth),
+                static_cast<int>(backBuffer.m_nHeight), windowWidth, windowHeight, inGame) : std::nullopt;
+        if (!mapping) {
+            m_Overlay->HideOverlay(m_MainMenuHandle);
+            m_MenuOverlayPlacement.Invalidate();
+            ReleaseMenuMouse();
+            return;
+        }
+        // Translation follows physical HMD; heading locks until reopening.
+        const bool menuPositioned = RepositionOverlays();
+        const vr::VRTextureBounds_t bounds{0, 0, mapping->bounds.uMax, mapping->bounds.vMax};
+        const auto aspectError = m_Overlay->SetOverlayTexelAspect(m_MainMenuHandle, mapping->texelAspect);
         const auto boundsError = vr::VROverlay()->SetOverlayTextureBounds(m_MainMenuHandle, &bounds);
         const auto textureError = vr::VROverlay()->SetOverlayTexture(m_MainMenuHandle, &m_VKBackBuffer.m_VRTexture);
-        const auto showError = menuPositioned ?
+        const vr::HmdVector2_t mouseScale{static_cast<float>(backBuffer.m_nWidth),
+                                        static_cast<float>(backBuffer.m_nHeight)};
+        const auto mouseError = m_Overlay->SetOverlayMouseScale(m_MainMenuHandle, &mouseScale);
+        const bool menuReady = menuPositioned && aspectError == vr::VROverlayError_None &&
+            boundsError == vr::VROverlayError_None && textureError == vr::VROverlayError_None &&
+            mouseError == vr::VROverlayError_None;
+        const auto showError = menuReady ?
             vr::VROverlay()->ShowOverlay(m_MainMenuHandle) :
             vr::VROverlay()->HideOverlay(m_MainMenuHandle);
 
@@ -688,10 +761,12 @@ bool VR::RepositionOverlays()
     if (!pose)
         return false;
 
-    int windowWidth, windowHeight;
+    int windowWidth = 0, windowHeight = 0;
     IMatRenderContext *menuContext = m_Game->m_MaterialSystem->GetRenderContext();
-    menuContext->GetWindowSize(windowWidth, windowHeight);
-    menuContext->Release();
+    if (menuContext) {
+        menuContext->GetWindowSize(windowWidth, windowHeight);
+        menuContext->Release();
+    }
 
     vr::HmdMatrix34_t menuTransform{};
     std::memcpy(menuTransform.m, pose->m, sizeof(menuTransform.m));
@@ -699,15 +774,19 @@ bool VR::RepositionOverlays()
     vr::ETrackingUniverseOrigin trackingOrigin = vr::VRCompositor()->GetTrackingSpace();
 
     // Reposition main menu overlay
-    float renderWidth = m_VKBackBuffer.m_VulkanData.m_nWidth;
-    float renderHeight = m_VKBackBuffer.m_VulkanData.m_nHeight;
-    if (windowWidth <= 0 || windowHeight <= 0 || renderWidth <= 0 || renderHeight <= 0) {
+    const auto renderWidth = m_VKBackBuffer.m_VulkanData.m_nWidth;
+    const auto renderHeight = m_VKBackBuffer.m_VulkanData.m_nHeight;
+    const auto maximum = static_cast<uint32_t>((std::numeric_limits<int>::max)());
+    const auto crop = renderWidth <= maximum && renderHeight <= maximum ?
+        HudCapture::WindowTextureCrop(static_cast<int>(renderWidth), static_cast<int>(renderHeight),
+            windowWidth, windowHeight) : std::nullopt;
+    if (!crop) {
         m_MenuOverlayPlacement.Invalidate();
         return false;
     }
 
-    float widthRatio = windowWidth / renderWidth;
-    float heightRatio = windowHeight / renderHeight;
+    float widthRatio = crop->uMax;
+    float heightRatio = crop->vMax;
     menuTransform.m[0][0] *= widthRatio;
     menuTransform.m[2][0] *= widthRatio;
     menuTransform.m[1][1] *= heightRatio;
@@ -934,17 +1013,20 @@ void VR::ProcessMenuInput()
     // release even if the controller is still hovering and no new event arrives.
     SendMenuMouse(m_MenuPointerState.PendingRelease());
     const auto overlay = m_MainMenuHandle;
-    const bool hovering = m_Overlay->IsOverlayVisible(overlay) &&
+    bool hovering = m_Overlay->IsOverlayVisible(overlay) &&
         (CheckOverlayIntersectionForController(overlay, vr::TrackedControllerRole_LeftHand) ||
          CheckOverlayIntersectionForController(overlay, vr::TrackedControllerRole_RightHand));
+    int windowWidth = 0, windowHeight = 0;
+    IMatRenderContext *context = m_Game->m_MaterialSystem->GetRenderContext();
+    if (context) {
+        context->GetWindowSize(windowWidth, windowHeight);
+        context->Release();
+    }
+    hovering = hovering && windowWidth > 0 && windowHeight > 0 &&
+        m_VKBackBuffer.m_VRTexture.handle;
     m_Overlay->SetOverlayFlag(overlay, vr::VROverlayFlags_MakeOverlaysInteractiveIfVisible, hovering);
     if (!hovering)
         ReleaseMenuMouse();
-
-    int windowWidth = 0, windowHeight = 0;
-    IMatRenderContext *context = m_Game->m_MaterialSystem->GetRenderContext();
-    context->GetWindowSize(windowWidth, windowHeight);
-    context->Release();
     const bool inGame = m_Game->m_EngineClient->IsInGame();
     vr::VREvent_t event{};
     // Drain releases even when a controller leaves the overlay after a press.
@@ -953,7 +1035,8 @@ void VR::ProcessMenuInput()
         case vr::VREvent_MouseMove:
             if (hovering) {
                 const auto point = UiInput::MapMenuPointer(event.data.mouse.x, event.data.mouse.y,
-                    m_RenderWidth, m_RenderHeight, windowWidth, windowHeight, inGame);
+                    m_VKBackBuffer.m_VulkanData.m_nWidth, m_VKBackBuffer.m_VulkanData.m_nHeight,
+                    windowWidth, windowHeight, inGame);
                 if (point)
                     m_Game->m_VguiInput->SetCursorPos(point->x, point->y);
             }
@@ -2136,45 +2219,9 @@ void VR::ParseConfigFile()
         Logger::Write("VR/config.txt unavailable; keeping previous/default configuration");
         return;
     }
-    auto parsed = ParseConfig(configStream, m_Config);
+    auto parsed = ApplyRuntimeConfig(m_Config, ParseConfig(configStream, m_Config), m_IsInitialized);
     for (const auto &error : parsed.errors) Logger::Write("Config: " + error);
-    if (m_IsInitialized && parsed.value.antiAliasing != m_AntiAliasing) {
-        Logger::Write("Config: AntiAliasing change requires a restart; keeping current value");
-        parsed.value.antiAliasing = m_AntiAliasing;
-    }
-    if (m_IsInitialized && parsed.value.trackingMode != m_Playspace.mode) {
-        Logger::Write("Config: TrackingMode change requires restart; keeping active compositor origin");
-        parsed.value.trackingMode = m_Playspace.mode;
-    }
-    if (m_IsInitialized && parsed.value.experimentalViewmodelAlignment != m_Config.experimentalViewmodelAlignment) {
-        Logger::Write("Config: ExperimentalViewmodelAlignment change requires restart; keeping current hook group");
-        parsed.value.experimentalViewmodelAlignment = m_Config.experimentalViewmodelAlignment;
-    }
-    if (m_IsInitialized && parsed.value.aimFromViewmodelMuzzle != m_Config.aimFromViewmodelMuzzle) {
-        Logger::Write("Config: AimFromViewmodelMuzzle change requires restart; keeping current sampler");
-        parsed.value.aimFromViewmodelMuzzle = m_Config.aimFromViewmodelMuzzle;
-    }
-    if (m_IsInitialized && parsed.value.portalOrientationMode != m_ActivePortalMode) {
-        Logger::Write("Config: PortalOrientationMode change requires restart; keeping active mode");
-        parsed.value.portalOrientationMode = m_ActivePortalMode;
-    }
-    if (m_IsInitialized && parsed.value.roomscaleMode != m_Config.roomscaleMode &&
-        (parsed.value.roomscaleMode == RoomscaleMotion::Mode::ActiveExperimental ||
-         m_Config.roomscaleMode == RoomscaleMotion::Mode::ActiveExperimental)) {
-        Logger::Write("Config: entering/leaving ActiveExperimental roomscale requires restart; keeping active mode");
-        parsed.value.roomscaleMode = m_Config.roomscaleMode;
-    }
-    if (m_IsInitialized &&
-        (parsed.value.experimentalHudOverlay != m_Config.experimentalHudOverlay ||
-         parsed.value.hudDistanceMeters != m_Config.hudDistanceMeters ||
-         parsed.value.hudWidthMeters != m_Config.hudWidthMeters ||
-         parsed.value.hudVerticalOffsetMeters != m_Config.hudVerticalOffsetMeters)) {
-        Logger::Write("Config: HUD overlay settings require restart; keeping active geometry");
-        parsed.value.experimentalHudOverlay = m_Config.experimentalHudOverlay;
-        parsed.value.hudDistanceMeters = m_Config.hudDistanceMeters;
-        parsed.value.hudWidthMeters = m_Config.hudWidthMeters;
-        parsed.value.hudVerticalOffsetMeters = m_Config.hudVerticalOffsetMeters;
-    }
+    for (const auto &note : parsed.notes) Logger::Write("Config: " + note);
     if (m_IsInitialized && m_VRScale != parsed.value.vrScale)
         Logger::Write("Config: VRScale change staged until recenter");
     if (m_IsInitialized && m_Playspace.heightOffsetMeters != parsed.value.heightOffsetMeters)

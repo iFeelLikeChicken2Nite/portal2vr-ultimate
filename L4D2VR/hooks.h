@@ -5,6 +5,9 @@
 #include "logger.h"
 #include "hud_capture.h"
 #include "native_beam.h"
+#include "required_hooks.h"
+#include "optional_hooks.h"
+#include "compatibility_hook_policy.h"
 
 class Game;
 class VR;
@@ -143,7 +146,7 @@ typedef void(__cdecl* tMatrixBuildPerspectiveX)(void*& dst, double flFovX, doubl
 
 typedef int(__cdecl* tGetDefaultFOV)(void*& thisptr);
 typedef double(__cdecl* tGetFOV)(void*& thisptr);
-typedef double(__cdecl* tGetViewModelFOV)(void*& thisptr);
+using tGetViewModelFOV = CompatibilityHooks::ViewModelFov;
 
 typedef void(__thiscall* tCreatePingPointer)(void* thisptr, Vector vecDestintaion);
 typedef void *(__thiscall* tCreateBeamParticle)(void*, const char*, int, int, Vector, int);
@@ -167,6 +170,9 @@ class Hooks
 public:
 	bool m_Ready = false;
 	bool m_MinHookInitialized = false;
+	bool m_OptionalRollbackFailed = false;
+	RequiredHooks m_RequiredHooks;
+	OptionalHooks m_CompatibilityHooks;
 	bool m_HudCaptureHooksReady = false;
 	static inline Game *m_Game;
 	static inline VR *m_VR;
@@ -268,8 +274,10 @@ public:
 
 	Hooks() {};
 	Hooks(Game *game);
+	void Initialize();
 
 	~Hooks();
+	bool RollbackFailedInitialization();
 
 	int initSourceHooks();
     void InitViewmodelAlignment();
@@ -345,7 +353,7 @@ public:
 
 	static int __fastcall dGetDefaultFOV(void* ecx, void* edx);
 	static double __fastcall dGetFOV(void* ecx, void* edx);
-	static double __fastcall dGetViewModelFOV(void* ecx, void* edx);
+	static float __fastcall dGetViewModelFOV(void* ecx, void* edx);
 
 	static void __fastcall dSetDrawOnlyForSplitScreenUser(void* ecx, void* edx, int nSlot);
 	static void __fastcall dClientThink(void* ecx, void* edx);

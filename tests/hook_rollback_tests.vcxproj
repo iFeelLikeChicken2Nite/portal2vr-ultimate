@@ -5,9 +5,9 @@
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>
-    <ProjectGuid>{CBFC84E7-2593-4D72-8622-C015A2268DA7}</ProjectGuid>
+    <ProjectGuid>{D77189A5-47D7-4BBD-933E-F7912D1CB827}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
-    <RootNamespace>StabilizationTests</RootNamespace>
+    <RootNamespace>HookRollbackTests</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -20,13 +20,19 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <OutDir>$(ProjectDir)bin\</OutDir>
-    <IntDir>$(ProjectDir)obj\stabilization\</IntDir>
-    <TargetName>stabilization_tests</TargetName>
+    <IntDir>$(ProjectDir)obj\hook_rollback\</IntDir>
+    <TargetName>hook_rollback_tests</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile><LanguageStandard>stdcpp17</LanguageStandard><WarningLevel>Level3</WarningLevel></ClCompile>
     <Link><SubSystem>Console</SubSystem></Link>
   </ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="stabilization_tests.cpp" /></ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="hook_rollback_tests.cpp" />
+    <ClCompile Include="..\thirdparty\minhook\src\buffer.c" />
+    <ClCompile Include="..\thirdparty\minhook\src\hook.c" />
+    <ClCompile Include="..\thirdparty\minhook\src\trampoline.c" />
+    <ClCompile Include="..\thirdparty\minhook\src\hde\hde32.c" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

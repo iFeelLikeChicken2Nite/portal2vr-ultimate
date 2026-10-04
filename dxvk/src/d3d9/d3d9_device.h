@@ -22,6 +22,7 @@
 #include "d3d9_sampler.h"
 #include "d3d9_fixed_function.h"
 #include "d3d9_swvp_emu.h"
+#include "d3d9_vr.h"
 
 #include "d3d9_shader_permutations.h"
 
@@ -111,6 +112,11 @@ namespace dxvk {
             Rc<DxvkDevice>         dxvkDevice);
 
     ~D3D9DeviceEx();
+
+    ULONG STDMETHODCALLTYPE Release() override;
+
+    void SetVRBridge(IDirect3DVR9* bridge) { m_vrBridge = bridge; }
+    IDirect3DVR9* GetVRBridge() const { return m_vrBridge.ptr(); }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObject);
 
@@ -1179,6 +1185,7 @@ namespace dxvk {
     Com<D3D9Surface, false>         m_autoDepthStencil;
 
     Com<D3D9SwapChainEx, false>     m_implicitSwapchain;
+    Com<IDirect3DVR9>              m_vrBridge;
 
     const D3D9Options               m_d3d9Options;
     DxsoOptions                     m_dxsoOptions;

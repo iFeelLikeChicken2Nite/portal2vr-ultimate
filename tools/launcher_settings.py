@@ -73,8 +73,8 @@ SETTINGS = (
     Setting("PortalShotHapticDurationSeconds", "Vibration duration (seconds)", "Haptics", "0.05", bounds=(.01, .15)),
     Setting("AntiAliasing", "Mod anti-aliasing", "Rendering", "0", ("0", "2", "4", "8"),
             help="0 is recommended. Performance and image quality must be checked on your headset."),
-    Setting("VerboseDiagnostics", "Periodic debug summaries", "Diagnostics", "false", ("false", "true"),
-            help="Off keeps startup/failure logs, without periodic roomscale/aim spam."),
+    Setting("VerboseDiagnostics", "Verbose diagnostics", "Diagnostics", "false", ("false", "true"),
+            help="Off logs startup, changed render geometry and failures. On adds repeated allocation/MSAA details and roomscale/aim summaries."),
 )
 BASIC_KEYS = frozenset(("TrackingMode", "MovementDirection", "RoomscaleMode", "SnapTurning",
                         "SnapTurnAngle", "TurnSpeed", "RenderWindow"))

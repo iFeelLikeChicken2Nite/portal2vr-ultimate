@@ -8,6 +8,7 @@
 #include "offsets.h"
 #include "logger.h"
 #include "runtime_publication.h"
+#include "hook_startup_rollback.h"
 #include "aim_feedback.h"
 #include "render_context_abi.h"
 #include "reticle_telemetry.h"
@@ -22,6 +23,16 @@
 #include <iostream>
 #include <optional>
 #include <string>
+
+static bool RuntimePublished()
+{
+    return Portal2VRRuntime::IsPublished(g_Game, Hooks::m_Game);
+}
+
+static bool ValidPlayerSlot(const Game *game, int index)
+{
+    return game && index > 0 && static_cast<size_t>(index) < game->m_PlayersVRInfo.size();
+}
 
 static std::optional<PortalOrientation::Rotation> ReadPortalRotation(const void* portal)
 {
@@ -370,6 +381,15 @@ static void RecordReticleDraw(bool verbose, int eye, ReticleTelemetry::Icon icon
 
 Hooks::Hooks(Game *game)
 {
+	m_Game = game;
+	m_VR = game->m_VR;
+	m_PushHUDStep = -999;
+	m_PushedHud = true;
+	m_HudCaptureRoute = HudCapture::RouteState{};
+}
+
+void Hooks::Initialize()
+{
 	if (MH_Initialize() != MH_OK)
 	{
 		Game::errorMsg("Failed to init MinHook");
@@ -377,57 +397,23 @@ Hooks::Hooks(Game *game)
 	}
 	m_MinHookInitialized = true;
 
-	m_Game = game;
-	m_VR = m_Game->m_VR;
-
-	m_PushHUDStep = -999;
-	m_PushedHud = true;
-	m_HudCaptureRoute = HudCapture::RouteState{};
-
 	if (initSourceHooks() != 0)
 		return;
-
-#define ENABLE_REQUIRED(hook) do { if (hook.enableHook()) { Logger::Write("Failed to enable " #hook); return; } } while (false)
-
-	//hkGetRenderTarget.enableHook();
-	ENABLE_REQUIRED(hkCalcViewModelView);
-
-	ENABLE_REQUIRED(hkProcessUsercmds);
-	ENABLE_REQUIRED(hkReadUsercmd);
-
-	//hkWriteUsercmdDeltaToBuffer.enableHook();
-	ENABLE_REQUIRED(hkWriteUsercmd);
-
-	ENABLE_REQUIRED(hkCreateMove);
-	ENABLE_REQUIRED(hkEyePosition);
-	ENABLE_REQUIRED(hkRenderView);
-
-
-	ENABLE_REQUIRED(hkWeapon_ShootPosition);
-	ENABLE_REQUIRED(hkTraceFirePortal);
-	ENABLE_REQUIRED(hkCWeaponPortalgun_FirePortal);
-
-	ENABLE_REQUIRED(hkDrawSelf);
-	ENABLE_REQUIRED(hkPlayerPortalled);
-
-	//hkComputeError.enableHook();
-	ENABLE_REQUIRED(hkUpdateObject);
-	ENABLE_REQUIRED(hkUpdateObjectVM);
-	//hkRotateObject.enableHook();
-	ENABLE_REQUIRED(hkEyeAngles);
-
-	ENABLE_REQUIRED(hkGetDefaultFOV);
-	ENABLE_REQUIRED(hkGetFOV);
-	ENABLE_REQUIRED(hkGetViewModelFOV);
-
-	ENABLE_REQUIRED(hkSetDrawOnlyForSplitScreenUser);
-	//kClientThink.enableHook();
+	std::string failedHook;
+	if (!m_RequiredHooks.CreateAll(failedHook)) {
+		Logger::Write("Failed to create required hook " + failedHook);
+		return;
+	}
+	if (!m_RequiredHooks.EnableAll(failedHook)) {
+		Logger::Write("Failed to enable required hook " + failedHook);
+		return;
+	}
+	m_CompatibilityHooks.Install([](const std::string &warning) { Logger::Write(warning); });
+	// The optional particle path remains independently disabled on failure.
 	if (m_Game->m_Offsets->m_LaserAvailable && hkPrecache.enableHook()) {
 		m_Game->m_Offsets->m_LaserAvailable = false;
 		Logger::Write("Laser pointer disabled: Precache hook enable failed.");
 	}
-	ENABLE_REQUIRED(hkCHudCrosshair_ShouldDraw);
-#undef ENABLE_REQUIRED
 	if (m_VR->m_Config.experimentalHudOverlay &&
 		m_VR->m_HUDHandle != vr::k_ulOverlayHandleInvalid) {
 		const auto *offsets = m_Game->m_Offsets;
@@ -450,8 +436,8 @@ Hooks::Hooks(Game *game)
 				const bool paintEnabled = popEnabled && !hkVgui_Paint.enableHook();
 				m_HudCaptureHooksReady = pushEnabled && popEnabled && paintEnabled;
 				if (!m_HudCaptureHooksReady) {
-					if (popEnabled) hkPopRenderTargetAndViewport.disableHook();
-					if (pushEnabled) hkPushRenderTargetAndViewport.disableHook();
+					if (popEnabled && hkPopRenderTargetAndViewport.disableHook()) m_OptionalRollbackFailed = true;
+					if (pushEnabled && hkPushRenderTargetAndViewport.disableHook()) m_OptionalRollbackFailed = true;
 				}
 			}
 		}
@@ -462,6 +448,10 @@ Hooks::Hooks(Game *game)
     InitViewmodelAlignment();
     InitMuzzleSampling();
     InitNativeBeam();
+	if (m_OptionalRollbackFailed) {
+		Logger::Write("Optional hook rollback failed; runtime publication stopped");
+		return;
+	}
 	m_Ready = true;
 }
 
@@ -515,7 +505,7 @@ void Hooks::InitNativeBeam()
     const bool createEnabled = createCreated && !hkCreateBeamParticle.enableHook();
     const bool lookupEnabled = createEnabled && !hkBeamAttachmentLookup.enableHook();
     if (!lookupEnabled) {
-        if (createEnabled) hkCreateBeamParticle.disableHook();
+		if (createEnabled && hkCreateBeamParticle.disableHook()) m_OptionalRollbackFailed = true;
         Logger::Write("Native manual-origin beam route unavailable: optional hook installation failed; existing native creation retained");
         return;
     }
@@ -548,6 +538,7 @@ void Hooks::CreateNativeAimPointer(void *player, const Vector &target)
 
 int __fastcall Hooks::dBeamAttachmentLookup(void *ecx, void *, const char *name)
 {
+    if (!RuntimePublished()) return hkBeamAttachmentLookup.fOriginal(ecx, name);
     if (NativeBeam::UsePlayerOwnedFallback(m_NativeBeamLookupCaller,
             reinterpret_cast<std::uintptr_t>(_ReturnAddress()), name)) {
         if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::NativeBeamPlayerOwned))
@@ -560,6 +551,8 @@ int __fastcall Hooks::dBeamAttachmentLookup(void *ecx, void *, const char *name)
 void *__fastcall Hooks::dCreateBeamParticle(void *ecx, void *, const char *name,
     int attachType, int attachment, Vector offset, int flags)
 {
+    if (!RuntimePublished())
+        return hkCreateBeamParticle.fOriginal(ecx, name, attachType, attachment, offset, flags);
     const int controlled = NativeBeam::FactoryAttachment(m_NativeBeamLookupCaller,
         reinterpret_cast<std::uintptr_t>(_ReturnAddress()), name, attachType, attachment);
     if (controlled != attachType &&
@@ -615,10 +608,10 @@ void Hooks::InitViewmodelAlignment()
         }
     }
     if (!m_ViewmodelAlignmentReady) {
-        if (hkDrawViewModels.isEnabled) hkDrawViewModels.disableHook();
-        if (hkViewmodelCalcView.isEnabled) hkViewmodelCalcView.disableHook();
-        if (hkFormatViewModelAttachment.isEnabled) hkFormatViewModelAttachment.disableHook();
-        if (hkViewmodelScreenAspect.isEnabled) hkViewmodelScreenAspect.disableHook();
+		if (hkDrawViewModels.isEnabled && hkDrawViewModels.disableHook()) m_OptionalRollbackFailed = true;
+		if (hkViewmodelCalcView.isEnabled && hkViewmodelCalcView.disableHook()) m_OptionalRollbackFailed = true;
+		if (hkFormatViewModelAttachment.isEnabled && hkFormatViewModelAttachment.disableHook()) m_OptionalRollbackFailed = true;
+		if (hkViewmodelScreenAspect.isEnabled && hkViewmodelScreenAspect.disableHook()) m_OptionalRollbackFailed = true;
         SetViewmodelLocalOrigin = nullptr;
         SetViewmodelLocalAngles = nullptr;
     }
@@ -711,6 +704,7 @@ void __fastcall Hooks::dDrawViewModels(void *ecx, void *, const CViewSetup &view
 float __fastcall Hooks::dViewmodelScreenAspect(void *ecx, void *, int width, int height)
 {
     const float nativeAspect = hkViewmodelScreenAspect.fOriginal(ecx, width, height);
+    if (!RuntimePublished()) return nativeAspect;
     static bool logged = false;
     if (!logged && std::isfinite(m_ViewmodelDrawAspect) && m_ViewmodelDrawAspect > 0.0f) {
         logged = true;
@@ -755,35 +749,59 @@ void __cdecl Hooks::dFormatViewModelAttachment(void *owner, Vector &origin, bool
 Hooks::~Hooks()
 {
 	if (m_MinHookInitialized) {
-		MH_DisableHook(MH_ALL_HOOKS);
+		if (MH_DisableHook(MH_ALL_HOOKS) != MH_OK)
+			Logger::Write("Failed to disable all MinHook detours during teardown");
 		if (MH_Uninitialize() != MH_OK)
 			Logger::Write("Failed to uninitialize MinHook");
 	}
 }
 
+bool Hooks::RollbackFailedInitialization()
+{
+	if (!m_MinHookInitialized) return true;
+	const MH_STATUS disable = DisableUnpublishedHooks();
+	// A callback may have entered its detour before the entries were disabled
+	// and call fOriginal later. Uninitialize would free that trampoline. Keep
+	// MinHook and the unpublished Game alive until process exit in dllmain.
+	Logger::Write("MinHook startup rollback: disable=" + std::to_string(disable) +
+		"; trampoline storage retained for in-flight callbacks");
+	return disable == MH_OK;
+}
+
 
 int Hooks::initSourceHooks()
 {
+#define REQUIRE_HOOK(hook, target, detour) do { \
+	LPVOID requiredTarget = (LPVOID)(target); \
+	m_RequiredHooks.Add(#hook, [requiredTarget]() { return hook.createHook(requiredTarget, &detour); }, \
+		[]() { return hook.enableHook(); }); \
+} while (false)
+#define REGISTER_IF_RESOLVED(hook, target, detour) do { \
+	LPVOID resolvedTarget = (LPVOID)(target); \
+	m_CompatibilityHooks.AddIfResolved(#hook, resolvedTarget, \
+		[resolvedTarget]() { return hook.createHook(resolvedTarget, &detour); }, \
+		[]() { return hook.enableHook(); }); \
+} while (false)
 	/*LPVOID pGetRenderTargetVFunc = (LPVOID)(m_Game->m_Offsets->GetRenderTarget.address);
 	hkGetRenderTarget.createHook(pGetRenderTargetVFunc, &dGetRenderTarget);*/
 
 	LPVOID pRenderViewVFunc = (LPVOID)(m_Game->m_Offsets->RenderView.address);
-	hkRenderView.createHook(pRenderViewVFunc, &dRenderView);
+	REQUIRE_HOOK(hkRenderView, pRenderViewVFunc, dRenderView);
 
 	LPVOID calcViewModelViewAddr = (LPVOID)(m_Game->m_Offsets->CalcViewModelView.address);
-	hkCalcViewModelView.createHook(calcViewModelViewAddr, &dCalcViewModelView);
+	REQUIRE_HOOK(hkCalcViewModelView, calcViewModelViewAddr, dCalcViewModelView);
 
 	LPVOID ProcessUsercmdsAddr = (LPVOID)(m_Game->m_Offsets->ProcessUsercmds.address);
-	hkProcessUsercmds.createHook(ProcessUsercmdsAddr, &dProcessUsercmds);
+	REQUIRE_HOOK(hkProcessUsercmds, ProcessUsercmdsAddr, dProcessUsercmds);
 
 	LPVOID ReadUserCmdAddr = (LPVOID)(m_Game->m_Offsets->ReadUserCmd.address);
-	hkReadUsercmd.createHook(ReadUserCmdAddr, &dReadUsercmd);
+	REQUIRE_HOOK(hkReadUsercmd, ReadUserCmdAddr, dReadUsercmd);
 
 	/*LPVOID WriteUsercmdDeltaToBufferAddr = (LPVOID)(m_Game->m_Offsets->WriteUsercmdDeltaToBuffer.address);
 	hkWriteUsercmdDeltaToBuffer.createHook(WriteUsercmdDeltaToBufferAddr, &dWriteUsercmdDeltaToBuffer);*/
 
 	LPVOID WriteUsercmdAddr = (LPVOID)(m_Game->m_Offsets->WriteUsercmd.address);
-	hkWriteUsercmd.createHook(WriteUsercmdAddr, &dWriteUsercmd);
+	REQUIRE_HOOK(hkWriteUsercmd, WriteUsercmdAddr, dWriteUsercmd);
 
 	/*LPVOID AdjustEngineViewportAddr = (LPVOID)(m_Game->m_Offsets->AdjustEngineViewport.address);
 	hkAdjustEngineViewport.createHook(AdjustEngineViewportAddr, &dAdjustEngineViewport);
@@ -795,7 +813,7 @@ int Hooks::initSourceHooks()
 	hkGetViewport.createHook(GetViewportAddr, &dGetViewport);*/
 
 	LPVOID EyePositionAddr = (LPVOID)(m_Game->m_Offsets->EyePosition.address);
-	hkEyePosition.createHook(EyePositionAddr, &dEyePosition);
+	REGISTER_IF_RESOLVED(hkEyePosition, EyePositionAddr, dEyePosition);
 
 	/*LPVOID DrawModelExecuteAddr = (LPVOID)(m_Game->m_Offsets->DrawModelExecute.address);
 	hkDrawModelExecute.createHook(DrawModelExecuteAddr, &dDrawModelExecute);*/
@@ -809,39 +827,39 @@ int Hooks::initSourceHooks()
 	hkGetFullScreenTexture.createHook(GetFullScreenTextureAddr, &dGetFullScreenTexture);*/
 
 	LPVOID Weapon_ShootPositionAddr = (LPVOID)(m_Game->m_Offsets->Weapon_ShootPosition.address);
-	hkWeapon_ShootPosition.createHook(Weapon_ShootPositionAddr, &dWeapon_ShootPosition);
+	REGISTER_IF_RESOLVED(hkWeapon_ShootPosition, Weapon_ShootPositionAddr, dWeapon_ShootPosition);
 	
 	LPVOID TraceFirePortalAddr = (LPVOID)(m_Game->m_Offsets->TraceFirePortalServer.address);
-	hkTraceFirePortal.createHook(TraceFirePortalAddr, &dTraceFirePortal);
+	REQUIRE_HOOK(hkTraceFirePortal, TraceFirePortalAddr, dTraceFirePortal);
 
-	hkCWeaponPortalgun_FirePortal.createHook((LPVOID)m_Game->m_Offsets->CWeaponPortalgun_FirePortal.address, &dCWeaponPortalgun_FirePortal);
+	REQUIRE_HOOK(hkCWeaponPortalgun_FirePortal, m_Game->m_Offsets->CWeaponPortalgun_FirePortal.address, dCWeaponPortalgun_FirePortal);
 
 	LPVOID DrawSelfAddr = (LPVOID)(m_Game->m_Offsets->DrawSelf.address);
-	hkDrawSelf.createHook(DrawSelfAddr, &dDrawSelf);
+	REQUIRE_HOOK(hkDrawSelf, DrawSelfAddr, dDrawSelf);
 	// Projection is called by our HUD hook, but does not need its own detour.
 	ClipTransform = reinterpret_cast<tClipTransform>(m_Game->m_Offsets->ClipTransform.address);
 	
 
 	// Portalling
 	LPVOID PlayerPortalledAddr = (LPVOID)(m_Game->m_Offsets->PlayerPortalled.address);
-	hkPlayerPortalled.createHook(PlayerPortalledAddr, &dPlayerPortalled);
+	REQUIRE_HOOK(hkPlayerPortalled, PlayerPortalledAddr, dPlayerPortalled);
 
 	UTIL_Portal_FirstAlongRay = (tUTIL_Portal_FirstAlongRay)m_Game->m_Offsets->UTIL_Portal_FirstAlongRay.address;
 	UTIL_IntersectRayWithPortal = (tUTIL_IntersectRayWithPortal)m_Game->m_Offsets->UTIL_IntersectRayWithPortal.address;
 	UTIL_Portal_AngleTransform = (tUTIL_Portal_AngleTransform)m_Game->m_Offsets->UTIL_Portal_AngleTransform.address;
 
 	LPVOID CreateMoveAddr = (LPVOID)(m_Game->m_Offsets->CreateMove.address);
-	hkCreateMove.createHook(CreateMoveAddr, &dCreateMove);
+	REQUIRE_HOOK(hkCreateMove, CreateMoveAddr, dCreateMove);
 
 	// Grababbles
-	hkUpdateObject.createHook((LPVOID)(m_Game->m_Offsets->UpdateObject.address), &dUpdateObject);
-	hkUpdateObjectVM.createHook((LPVOID)(m_Game->m_Offsets->UpdateObjectVM.address), &dUpdateObjectVM);
-	hkEyeAngles.createHook((LPVOID)(m_Game->m_Offsets->EyeAngles.address), &dEyeAngles);
+	REQUIRE_HOOK(hkUpdateObject, m_Game->m_Offsets->UpdateObject.address, dUpdateObject);
+	REQUIRE_HOOK(hkUpdateObjectVM, m_Game->m_Offsets->UpdateObjectVM.address, dUpdateObjectVM);
+	REQUIRE_HOOK(hkEyeAngles, m_Game->m_Offsets->EyeAngles.address, dEyeAngles);
 
 	// Portal Gun VFX
-	hkGetDefaultFOV.createHook((LPVOID)(m_Game->m_Offsets->GetDefaultFOV.address), &dGetDefaultFOV);
-	hkGetFOV.createHook((LPVOID)(m_Game->m_Offsets->GetFOV.address), &dGetFOV);
-	hkGetViewModelFOV.createHook((LPVOID)(m_Game->m_Offsets->GetViewModelFOV.address), &dGetViewModelFOV);
+	REQUIRE_HOOK(hkGetDefaultFOV, m_Game->m_Offsets->GetDefaultFOV.address, dGetDefaultFOV);
+	REQUIRE_HOOK(hkGetFOV, m_Game->m_Offsets->GetFOV.address, dGetFOV);
+	REGISTER_IF_RESOLVED(hkGetViewModelFOV, m_Game->m_Offsets->GetViewModelFOV.address, dGetViewModelFOV);
 	
 	// Laser Pointer
 	GetPortalPlayer = (tGetPortalPlayer)m_Game->m_Offsets->GetPortalPlayer.address;
@@ -852,13 +870,15 @@ int Hooks::initSourceHooks()
 		m_Game->m_Offsets->m_LaserAvailable = false;
 		Logger::Write("Laser pointer disabled: Precache hook creation failed.");
 	}
-	hkSetDrawOnlyForSplitScreenUser.createHook((LPVOID)m_Game->m_Offsets->SetDrawOnlyForSplitScreenUser.address, &dSetDrawOnlyForSplitScreenUser);
-	hkCHudCrosshair_ShouldDraw.createHook((LPVOID)m_Game->m_Offsets->CHudCrosshair_ShouldDraw.address, &dCHudCrosshair_ShouldDraw);
+	REQUIRE_HOOK(hkSetDrawOnlyForSplitScreenUser, m_Game->m_Offsets->SetDrawOnlyForSplitScreenUser.address, dSetDrawOnlyForSplitScreenUser);
+	REQUIRE_HOOK(hkCHudCrosshair_ShouldDraw, m_Game->m_Offsets->CHudCrosshair_ShouldDraw.address, dCHudCrosshair_ShouldDraw);
 
 	//
 	EntityIndex = (tEntindex)m_Game->m_Offsets->CBaseEntity_entindex.address;
 	GetOwner = (tGetOwner)m_Game->m_Offsets->GetOwner.address;
 	GetFullScreenTexture = (tGetFullScreenTexture)m_Game->m_Offsets->GetFullScreenTexture.address;
+#undef REQUIRE_HOOK
+#undef REGISTER_IF_RESOLVED
 	return 0;
 } 
 
@@ -878,6 +898,7 @@ bool __fastcall Hooks::dCHudCrosshair_ShouldDraw(void* ecx, void* edx) {
 
 void __fastcall Hooks::dPrecache(void* ecx, void* edx) {
 	hkPrecache.fOriginal(ecx);
+	if (!RuntimePublished()) return;
 	PrecacheParticleSystem("robot_point_beam");
 }
 
@@ -886,7 +907,7 @@ void __fastcall Hooks::dClientThink(void* ecx, void* edx) {
 }
 
 void __fastcall Hooks::dSetDrawOnlyForSplitScreenUser(void* ecx, void* edx, int nSlot) {
-	hkSetDrawOnlyForSplitScreenUser.fOriginal(ecx, -1);
+	hkSetDrawOnlyForSplitScreenUser.fOriginal(ecx, RuntimePublished() ? -1 : nSlot);
 }
 
 ITexture *__fastcall Hooks::dGetFullScreenTexture()
@@ -1079,6 +1100,7 @@ void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CVie
 
 bool __fastcall Hooks::dCreateMove(void *ecx, void *edx, float flInputSampleTime, CUserCmd *cmd)
 {
+	if (!RuntimePublished()) return hkCreateMove.fOriginal(ecx, flInputSampleTime, cmd);
 	if (!cmd->command_number)
 		return hkCreateMove.fOriginal(ecx, flInputSampleTime, cmd);
 	const int manualButtons = cmd->buttons & (IN_FORWARD | IN_BACK | IN_MOVELEFT | IN_MOVERIGHT | IN_JUMP);
@@ -1145,6 +1167,7 @@ void __fastcall Hooks::dEndFrame(void *ecx, void *edx)
 
 void __fastcall Hooks::dCalcViewModelView(void *ecx, void *edx, const Vector &eyePosition, const QAngle &eyeAngles)
 {
+	if (!RuntimePublished()) return hkCalcViewModelView.fOriginal(ecx, eyePosition, eyeAngles);
 	Vector vecNewOrigin = eyePosition;
 	QAngle vecNewAngles = eyeAngles;
 
@@ -1166,17 +1189,23 @@ void __fastcall Hooks::dCalcViewModelView(void *ecx, void *edx, const Vector &ey
 
 float __fastcall Hooks::dProcessUsercmds(void *ecx, void *edx, edict_t *player, void *buf, int numcmds, int totalcmds, int dropped_packets, bool ignore, bool paused)
 {
+	if (!RuntimePublished())
+		return hkProcessUsercmds.fOriginal(ecx, player, buf, numcmds, totalcmds, dropped_packets, ignore, paused);
 	Server_BaseEntity *pPlayer = (Server_BaseEntity*)player->m_pUnk->GetBaseEntity();
 
 	int index = EntityIndex(pPlayer);
+	const int priorIndex = m_Game->m_CurrentUsercmdID;
 	m_Game->m_CurrentUsercmdID = index;
 
-	return hkProcessUsercmds.fOriginal(ecx, player, buf, numcmds, totalcmds, dropped_packets, ignore, paused);
+	const auto result = hkProcessUsercmds.fOriginal(ecx, player, buf, numcmds, totalcmds, dropped_packets, ignore, paused);
+	m_Game->m_CurrentUsercmdID = priorIndex;
+	return result;
 }
 
 int Hooks::dWriteUsercmd(bf_write *buf, CUserCmd *to, CUserCmd *from)
 {
 	auto result =  hkWriteUsercmd.fOriginal(buf, to, from);
+	if (!RuntimePublished()) return result;
 
 	// Let's write our stuff into the buffer
 	if (m_VR->m_IsVREnabled && m_VR->m_TrackingOutputValid && m_VR->m_RightControllerPose.valid)
@@ -1195,8 +1224,10 @@ int Hooks::dWriteUsercmd(bf_write *buf, CUserCmd *to, CUserCmd *from)
 int Hooks::dReadUsercmd(bf_read *buf, CUserCmd* move, CUserCmd* from)
 {
 	auto result = hkReadUsercmd.fOriginal(buf, move, from);
+	if (!RuntimePublished()) return result;
 
 	int i = m_Game->m_CurrentUsercmdID;
+	if (!ValidPlayerSlot(m_Game, i)) return result;
 	auto& vrPlayer = m_Game->m_PlayersVRInfo[i];
 
 	auto pos = buf->Tell();
@@ -1273,6 +1304,8 @@ void Hooks::dDrawModelExecute(void *ecx, void *edx, void *state, const ModelRend
 
 void Hooks::dPushRenderTargetAndViewport(void *ecx, void *edx, ITexture *pTexture, ITexture *pDepthTexture, int nViewX, int nViewY, int nViewW, int nViewH)
 {
+	if (!RuntimePublished())
+		return hkPushRenderTargetAndViewport.fOriginal(ecx, pTexture, pDepthTexture, nViewX, nViewY, nViewW, nViewH);
 	const bool inPaint = m_VguiPaintActive;
 	const bool published = Portal2VRRuntime::IsPublished(g_Game, m_Game);
 	const bool redirect = published && m_HudCaptureRoute.AllowsRedirect() &&
@@ -1322,6 +1355,7 @@ void Hooks::dPushRenderTargetAndViewport(void *ecx, void *edx, ITexture *pTextur
 
 void Hooks::dPopRenderTargetAndViewport(void *ecx, void *edx)
 {
+	if (!RuntimePublished()) return hkPopRenderTargetAndViewport.fOriginal(ecx);
 	if (m_VguiPaintActive && !HudCapture::ShouldForwardPaintPop(
 		m_ExplicitHudCaptureActive, m_HudPushDepth)) {
 		m_HudUnexpectedPopDuringPaint = true;
@@ -1469,12 +1503,18 @@ DWORD *Hooks::dPrePushRenderTarget(void *ecx, void *edx, int a2)
 	return hkPrePushRenderTarget.fOriginal(ecx, a2);
 }
 
-Vector* Hooks::dWeapon_ShootPosition(void* ecx, void* edx, Vector* eyePos)
+Vector* __fastcall Hooks::dWeapon_ShootPosition(void* ecx, void* edx, Vector* eyePos)
 {
+	// This address is also used by another virtual method. Only the audited
+	// FirePortal call is allowed to replace its hidden Vector return value.
+	const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
 	Vector* result = hkWeapon_ShootPosition.fOriginal(ecx, eyePos);
+	if (!RuntimePublished() || !result || !CompatibilityHooks::IsVerifiedShootCaller(
+		caller, m_Game->m_Offsets->Weapon_ShootPosition.shootCaller)) return result;
 
 	int localIndex = m_Game->m_EngineClient->GetLocalPlayer();
 	int index = EntityIndex(ecx);
+	if (!ValidPlayerSlot(m_Game, index)) return result;
 
 	auto vrPlayer = m_Game->m_PlayersVRInfo[index];
 
@@ -1490,6 +1530,7 @@ Vector* Hooks::dWeapon_ShootPosition(void* ecx, void* edx, Vector* eyePos)
 }
 
 void* Hooks::dCWeaponPortalgun_FirePortal(void* ecx, void* edx, bool bPortal2, Vector* pVector) {
+	if (!RuntimePublished()) return hkCWeaponPortalgun_FirePortal.fOriginal(ecx, bPortal2, pVector);
 	bool wasTrue = m_VR->m_OverrideEyeAngles;
 	const int localIndex = m_Game->m_EngineClient ?
 		m_Game->m_EngineClient->GetLocalPlayer() : -1;
@@ -1512,6 +1553,8 @@ void* Hooks::dCWeaponPortalgun_FirePortal(void* ecx, void* edx, bool bPortal2, V
 
 bool __fastcall Hooks::dTraceFirePortal(void* ecx, void* edx, const Vector& vTraceStart, const Vector& vDirection, bool bPortal2, int iPlacedBy, void* tr) //trace_tx& tr, Vector& vFinalPosition //  , Vector& vFinalPosition, QAngle& qFinalAngles, int iPlacedBy, bool bTest /*= false*/
 {
+	if (!RuntimePublished())
+		return hkTraceFirePortal.fOriginal(ecx, vTraceStart, vDirection, bPortal2, iPlacedBy, tr);
 	Vector vNewTraceStart = vTraceStart;
 	Vector vNewDirection = vDirection;
 
@@ -1522,6 +1565,8 @@ bool __fastcall Hooks::dTraceFirePortal(void* ecx, void* edx, const Vector& vTra
 
 		if (owner) {
 			int index = EntityIndex(owner);
+			if (!ValidPlayerSlot(m_Game, index))
+				return hkTraceFirePortal.fOriginal(ecx, vTraceStart, vDirection, bPortal2, iPlacedBy, tr);
 
 			auto vrPlayer = m_Game->m_PlayersVRInfo[index];
 
@@ -1544,6 +1589,7 @@ bool __fastcall Hooks::dTraceFirePortal(void* ecx, void* edx, const Vector& vTra
 
 void __fastcall Hooks::dPlayerPortalled(void* ecx, void* edx, void* a2, __int64 a3)
 {
+	if (!RuntimePublished()) return hkPlayerPortalled.fOriginal(ecx, a2, a3);
 	CBaseEntity* pBaseEntity = (CBaseEntity*)ecx;
 	const int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
 	const bool localPlayer = playerIndex > 0 &&
@@ -1589,6 +1635,7 @@ bool Hooks::ScreenTransform(const Vector& point, Vector* pScreen, int width, int
 }
 
 int __fastcall Hooks::dDrawSelf(void* ecx, void* edx, int x, int y, int w, int h, const void* clr, float flApparentZ) {
+	if (!RuntimePublished()) return hkDrawSelf.fOriginal(ecx, x, y, w, h, clr, flApparentZ);
 	//std::cout << "dDrawSelf - X: " << x << ", Y: " << y << ", W: " << w << ", H: " << h << ", Z: " << flApparentZ << "\n";
 
 	//int playerIndex = m_Game->m_EngineClient->GetLocalPlayer();
@@ -1860,6 +1907,7 @@ double __fastcall Hooks::dComputeError(void* ecx, void* edx) {
 }
 
 bool __fastcall Hooks::dUpdateObject(void* ecx, void* edx, void* pPlayer, float flError, bool bIsTeleport) {
+	if (!RuntimePublished()) return hkUpdateObject.fOriginal(ecx, pPlayer, flError, bIsTeleport);
 	bool wasTrue = m_VR->m_OverrideEyeAngles;
 
 	m_VR->m_OverrideEyeAngles = true;
@@ -1873,6 +1921,7 @@ bool __fastcall Hooks::dUpdateObject(void* ecx, void* edx, void* pPlayer, float 
 }
 
 bool __fastcall Hooks::dUpdateObjectVM(void* ecx, void* edx, void* pPlayer, float flError) {
+	if (!RuntimePublished()) return hkUpdateObjectVM.fOriginal(ecx, pPlayer, flError);
 	bool wasTrue = m_VR->m_OverrideEyeAngles;
 
 	m_VR->m_OverrideEyeAngles = true;
@@ -1900,9 +1949,11 @@ void __fastcall Hooks::dRotateObject(void* ecx, void* edx, void* pPlayer, float 
 // This is CPlayerBase, do we also need to hook CPortalPlayer? can the same function be used by both?
 // This works for release, but why was it crashing before??? TODO: buy a c++ book...
 QAngle& __fastcall Hooks::dEyeAngles(void* ecx, void* edx) {
+	if (!RuntimePublished()) return hkEyeAngles.fOriginal(ecx);
 	if (m_VR->m_OverrideEyeAngles) {
 		int localIndex = m_Game->m_EngineClient->GetLocalPlayer();
 		int index = EntityIndex(ecx);
+		if (!ValidPlayerSlot(m_Game, index)) return hkEyeAngles.fOriginal(ecx);
 
 		auto& vrPlayer = m_Game->m_PlayersVRInfo[index];
 
@@ -1919,13 +1970,16 @@ QAngle& __fastcall Hooks::dEyeAngles(void* ecx, void* edx) {
 }
 
 int __fastcall Hooks::dGetDefaultFOV(void* ecx, void* edx) {
+	if (!RuntimePublished()) return hkGetDefaultFOV.fOriginal(ecx);
 	return m_VR->m_Fov;
 }
 
 double __fastcall Hooks::dGetFOV(void* ecx, void* edx) {
+	if (!RuntimePublished()) return hkGetFOV.fOriginal(ecx);
 	return m_VR->m_Fov;
 }
 
-double __fastcall Hooks::dGetViewModelFOV(void* ecx, void* edx) {
-	return m_VR->m_Fov;
+float __fastcall Hooks::dGetViewModelFOV(void* ecx, void* edx) {
+	if (!RuntimePublished()) return hkGetViewModelFOV.fOriginal(ecx);
+	return static_cast<float>(m_VR->m_Fov);
 }

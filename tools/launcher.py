@@ -11,12 +11,14 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from tools import launcher_settings as settings, test_launcher_core as core
     from tools.test_launcher import game_is_running
+    from tools.launcher_paths import application_root, prepare_frozen_process
 else:
     from . import launcher_settings as settings, test_launcher_core as core
     from .test_launcher import game_is_running
+    from .launcher_paths import application_root, prepare_frozen_process
 
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = application_root()
 PREFERENCES_PATH = REPO / "tools/.user-launcher-settings.json"
 INSTALL_STATE_PATH = REPO / "tools/.launcher-state.json"
 BG, PANEL, TEXT, MUTED, ACCENT = "#111923", "#1b2838", "#edf4fc", "#a9b9cd", "#53c9f5"
@@ -78,7 +80,7 @@ class Launcher:
         outer = ttk.Frame(self.root, padding=24)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="Portal2VR", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(outer, text="Your Portal 2 VR setup, without the test checklist.",
+        ttk.Label(outer, text="Your Portal 2 VR setup.",
                   style="Muted.TLabel").pack(anchor="w", pady=(2, 16))
         self.notebook = ttk.Notebook(outer)
         self.notebook.pack(fill="both", expand=True)
@@ -281,6 +283,7 @@ class Launcher:
         if launch:
             core.validate_launch_paths(self.repo, game, steam)
         core.plan_install(self.repo, game, "baseline", config_values=prefs["values"])
+        core.recover_pending_transaction(self.install_state_path)
         state = core.load_state(self.install_state_path)
         if not state["managed_files"] and not messagebox.askyesno(
                 "Install Portal2VR", f"Install the mod in:\n{game}\n\n"
@@ -325,9 +328,12 @@ class Launcher:
         try:
             if game_is_running():
                 raise RuntimeError("Close Portal 2 before restoring game files.")
+            recovered = core.recover_pending_transaction(self.install_state_path)
             state = core.load_state(self.install_state_path)
             if not state["managed_files"]:
-                self.status_var.set("No files are currently managed by the launcher.")
+                core.restore_install(Path(state["game_dir"]), self.install_state_path)
+                self.status_var.set("Interrupted operation recovered; original files restored." if recovered else
+                                    "No files are currently managed by the launcher.")
                 return
             game = Path(state["installed_game_dir"])
             if not messagebox.askyesno("Restore originals", f"Restore pre-install files in:\n{game}\n\n"
@@ -386,7 +392,50 @@ class Launcher:
         self.root.destroy()
 
 
+def package_self_test(report: Path) -> int:
+    """Exercise the actual packaged UI/installer using temporary game fixtures."""
+    import json
+    from tempfile import TemporaryDirectory
+    result = {"frozen": bool(getattr(sys, "frozen", False)), "package_root": str(REPO)}
+    root = None
+    try:
+        with TemporaryDirectory(prefix="portal2vr-package-test-") as temporary:
+            folder = Path(temporary)
+            game, steam = folder / "Portal 2", folder / "steam.exe"
+            (game / "bin").mkdir(parents=True)
+            (game / "portal2.exe").write_bytes(b"fixture")
+            steam.write_bytes(b"fixture")
+            original = game / "bin/d3d9.dll"
+            original.write_bytes(b"fixture original")
+            state = folder / "state.json"
+            root = tk.Tk()
+            root.withdraw()
+            app = Launcher(root, REPO, folder / "preferences.json", state)
+            values = settings.recommended_settings()
+            app.game_var.set(str(game))
+            app.steam_var.set(str(steam))
+            app.config_preview()
+            root.update_idletasks()
+            planned = core.plan_install(REPO, game, "baseline", config_values=values)
+            core.stage_install(REPO, game, state, "baseline", config_values=values)
+            core.restore_install(game, state)
+            if original.read_bytes() != b"fixture original" or (game / "VR").exists():
+                raise RuntimeError("Packaged installer failed fixture restoration")
+            result.update(ok=True, payload_count=len(planned), tkinter=True, restored=True)
+    except Exception as error:
+        result.update(ok=False, error=str(error))
+    finally:
+        if root:
+            root.destroy()
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return 0 if result["ok"] else 1
+
+
 def main():
+    prepare_frozen_process()
+    if len(sys.argv) == 3 and sys.argv[1] == "--self-test":
+        return package_self_test(Path(sys.argv[2]))
     root = tk.Tk()
     root.withdraw()
     try:

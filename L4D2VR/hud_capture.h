@@ -21,6 +21,23 @@ inline std::optional<TextureCrop> WindowTextureCrop(int textureWidth, int textur
                        static_cast<float>(visibleHeight) / textureHeight};
 }
 
+struct MenuTextureLayout
+{
+    TextureCrop bounds;
+    float texelAspect;
+};
+
+inline std::optional<MenuTextureLayout> MenuTextureMapping(int textureWidth, int textureHeight,
+    int windowWidth, int windowHeight, bool cropToWindow)
+{
+    const auto crop = WindowTextureCrop(textureWidth, textureHeight, windowWidth, windowHeight);
+    if (!crop)
+        return std::nullopt;
+    if (!cropToWindow)
+        return MenuTextureLayout{{1.0f, 1.0f}, 1.0f};
+    return MenuTextureLayout{*crop, crop->vMax / crop->uMax};
+}
+
 class RouteState
 {
 public:

@@ -2,15 +2,31 @@
 #include "sigscanner.h"
 #include "game.h"
 #include "logger.h"
+#include "startup_symbol_policy.h"
+#include "verified_portal_symbols.h"
 
 
 struct Offset
 {
     std::string moduleName;
-    int offset;
+    int offset = 0;
     uintptr_t address = 0;
+    uintptr_t shootCaller = 0;
     std::string signature;
-    int sigOffset;
+    int sigOffset = 0;
+
+    explicit Offset(VerifiedPortalSymbols::Symbol symbol)
+    {
+        moduleName = symbol == VerifiedPortalSymbols::Symbol::ViewModelFov ? "client.dll" : "server.dll";
+        const auto resolved = VerifiedPortalSymbols::ResolveLoaded(symbol);
+        address = resolved.address;
+        shootCaller = resolved.shootCaller;
+        if (address) {
+            offset = static_cast<int>(address - reinterpret_cast<uintptr_t>(GetModuleHandleA(moduleName.c_str())));
+            Logger::Write(moduleName + " compatibility RVA " + std::to_string(offset) +
+                " accepted: exact build SHA-256 and loaded-image witnesses verified.");
+        }
+    }
 
     Offset(std::string moduleName, int currentOffset, std::string signature, int sigOffset = 0)
     {
@@ -70,7 +86,8 @@ public:
     Offset ReadUserCmd =                 { "server.dll", 0x205100, "55 8B EC 53 8B 5D 10 56 57 8B 7D 0C 53" };
     Offset ProcessUsercmds =             { "server.dll", 0x170300, "55 8B EC B8 ? ? ? ? E8 ? ? ? ? 0F 57 C0 53 56 57 B9 ? ? ? ? 8D 85 ? ? ? ? 33 DB" }; //?
     Offset CBaseEntity_entindex =        { "server.dll", 0x39F00, "8B 41 1C 85 C0 75 01 C3 8B 0D ? ? ? ? 2B 41 58 C1 F8 04 C3 CC"};
-    Offset EyePosition =                 { "server.dll", 0xF40E0, "55 8B EC 56 8B F1 8B 86 ? ? ? ? C1 E8 0B A8 01 74 05 E8 ? ? ? ? 8B 45 08 F3" };
+    // Audited Portal-player override; the old short pattern finds unrelated methods.
+    Offset EyePosition{VerifiedPortalSymbols::Symbol::EyePosition};
 
     /*Offset GetRenderTarget =             { "materialsystem.dll", 0x2CD30, "83 79 4C 00" };
     Offset Viewport =                    { "materialsystem.dll", 0x2E010, "55 8B EC 8B 45 0C 53 8B 5D" };
@@ -141,8 +158,9 @@ public:
     Offset GetModeHeight = { "engine.dll", 0x1F9F10, "8B 81 ? ? ? ? C3" };*/
 
     //Grababbles
-    //Offset Weapon_ShootPosition =        { "client.dll", 0x2A8A60, "55 8B EC 8B 01 8B 90 ? ? ? ? 56 8B 75 08 56 FF D2 8B C6 5E 5D C2 04 00" };
-    Offset Weapon_ShootPosition = { "server.dll", 0x1033C0, "55 8B EC 8B 01 8B 90 ? ? ? ? 56 8B 75 08 56 FF D2 8B C6 5E 5D C2 04 00" };
+    // Folded with another virtual method; the resolver also verifies the one
+    // FirePortal return address permitted to change the result in its detour.
+    Offset Weapon_ShootPosition{VerifiedPortalSymbols::Symbol::WeaponShootPosition};
     Offset ComputeError = { "server.dll", 0x3C8140, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 8B F1 8B 86 ? ? ? ? 57 83 F8 FF 74 2A" };
     Offset UpdateObject = { "server.dll", 0x3CA010, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 57 8B F9 8B 87 ? ? ? ? 89 BD" };
     Offset UpdateObjectVM = { "server.dll", 0x3CBB10, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 57 8B F9 8B 87 ? ? ? ? 83 F8" };
@@ -153,7 +171,7 @@ public:
     Offset MatrixBuildPerspectiveX = { "engine.dll", 0x2737E0, "55 8B EC 83 EC 08 F2 0F 10 45 ? F2 0F 59 05 ? ? ? ?" };
     Offset GetFOV = { "client.dll", 0x2772B0, "55 8B EC 51 56 8B F1 E8 ? ? ? ? D9 5D FC 8B 06 8B 90 ? ? ? ? 8B CE FF D2" };
     Offset GetDefaultFOV = { "client.dll", 0x279020, "A1 ? ? ? ? F3 0F 2C 40 ? C3" };
-    Offset GetViewModelFOV = { "client.dll", 0x28AB80, "A1 ? ? ? ? D9 40 2C C3" };
+    Offset GetViewModelFOV{VerifiedPortalSymbols::Symbol::ViewModelFov};
 
     // Multiplayer
     Offset GetOwner = { "server.dll", 0xD7550, "8B 81 ? ? ? ? 83 F8 FF 74 23 8B 15 ? ? ? ?" };
@@ -161,47 +179,47 @@ public:
 
     bool Validate()
     {
-        const struct Symbol { const char *name; const Offset *offset; bool required; } symbols[] = {
-            { "RenderView", &RenderView, true }, { "CreateMove", &CreateMove, true },
-            { "PlayerPortalled", &PlayerPortalled, true },
-            { "TraceFirePortalServer", &TraceFirePortalServer, true },
-            { "CWeaponPortalgun_FirePortal", &CWeaponPortalgun_FirePortal, true },
-            { "CalcViewModelView", &CalcViewModelView, true },
-            { "ProcessUsercmds", &ProcessUsercmds, true },
-            { "ReadUsercmd", &ReadUserCmd, true }, { "WriteUsercmd", &WriteUsercmd, true },
-            { "EyeAngles", &EyeAngles, true }, { "EyePosition", &EyePosition, true },
-            { "Weapon_ShootPosition", &Weapon_ShootPosition, true },
-            { "DrawSelf", &DrawSelf, true },
-            { "ClipTransform", &ClipTransform, true },
-            { "UpdateObject", &UpdateObject, true }, { "UpdateObjectVM", &UpdateObjectVM, true },
-            { "GetDefaultFOV", &GetDefaultFOV, true }, { "GetFOV", &GetFOV, true },
-            { "GetViewModelFOV", &GetViewModelFOV, true },
-            { "SetDrawOnlyForSplitScreenUser", &SetDrawOnlyForSplitScreenUser, true },
-            { "CHudCrosshair_ShouldDraw", &CHudCrosshair_ShouldDraw, true },
-            { "CBaseEntity_entindex", &CBaseEntity_entindex, true },
-            { "GetOwner", &GetOwner, true },
-            { "UTIL_Portal_FirstAlongRay", &UTIL_Portal_FirstAlongRay, true },
-            { "UTIL_IntersectRayWithPortal", &UTIL_IntersectRayWithPortal, true },
-            { "CreatePingPointer", &CreatePingPointer, false },
-            { "Precache", &Precache, false },
-            { "PrecacheParticleSystem", &PrecacheParticleSystem, false },
-            { "SetControlPoint", &SetControlPoint, false },
-            { "StopEmission", &StopEmission, false }
+        const struct Symbol { const char *name; const Offset *offset; } symbols[] = {
+            { "RenderView", &RenderView }, { "CreateMove", &CreateMove },
+            { "PlayerPortalled", &PlayerPortalled },
+            { "TraceFirePortalServer", &TraceFirePortalServer },
+            { "CWeaponPortalgun_FirePortal", &CWeaponPortalgun_FirePortal },
+            { "CalcViewModelView", &CalcViewModelView },
+            { "ProcessUsercmds", &ProcessUsercmds },
+            { "ReadUsercmd", &ReadUserCmd }, { "WriteUsercmd", &WriteUsercmd },
+            { "EyeAngles", &EyeAngles }, { "EyePosition", &EyePosition },
+            { "Weapon_ShootPosition", &Weapon_ShootPosition },
+            { "DrawSelf", &DrawSelf },
+            { "ClipTransform", &ClipTransform },
+            { "UpdateObject", &UpdateObject }, { "UpdateObjectVM", &UpdateObjectVM },
+            { "GetDefaultFOV", &GetDefaultFOV }, { "GetFOV", &GetFOV },
+            { "GetViewModelFOV", &GetViewModelFOV },
+            { "SetDrawOnlyForSplitScreenUser", &SetDrawOnlyForSplitScreenUser },
+            { "CHudCrosshair_ShouldDraw", &CHudCrosshair_ShouldDraw },
+            { "CBaseEntity_entindex", &CBaseEntity_entindex },
+            { "GetOwner", &GetOwner },
+            { "UTIL_Portal_FirstAlongRay", &UTIL_Portal_FirstAlongRay },
+            { "UTIL_IntersectRayWithPortal", &UTIL_IntersectRayWithPortal },
+            { "CreatePingPointer", &CreatePingPointer },
+            { "Precache", &Precache },
+            { "PrecacheParticleSystem", &PrecacheParticleSystem },
+            { "SetControlPoint", &SetControlPoint },
+            { "StopEmission", &StopEmission }
         };
 
-        bool requiredAvailable = true;
-        m_LaserAvailable = true;
+        StartupSymbolStatus status;
         for (const auto &symbol : symbols) {
+            const auto role = RoleForStartupSymbol(symbol.name);
             Logger::Write(std::string(symbol.name) + " ........ " +
                           (symbol.offset->address ? "OK" : "MISSING") +
-                          (symbol.required ? " [required]" : " [optional]"));
-            if (!symbol.offset->address) {
-                if (symbol.required) requiredAvailable = false;
-                else m_LaserAvailable = false;
-            }
+                          (role == StartupSymbolRole::Required ? " [required]" : " [optional]"));
+            InspectStartupSymbol(status, symbol.name, symbol.offset->address);
         }
+        for (const auto &name : status.warnings)
+            Logger::Write("Warning: " + name + " build or loaded-image verification failed; its VR hook is disabled.");
+        m_LaserAvailable = status.laserAvailable;
         if (!m_LaserAvailable)
             Logger::Write("Laser pointer disabled: optional symbol unavailable.");
-        return requiredAvailable;
+        return status.requiredAvailable;
     }
 };

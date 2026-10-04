@@ -13,6 +13,7 @@
 #include "render_target_readiness.h"
 #include "menu_overlay_placement.h"
 #include "muzzle_origin.h"
+#include "openvr_session.h"
 #include <filesystem>
 
 #define MAX_STR_LEN 256
@@ -21,6 +22,8 @@ class Game;
 class C_BasePlayer;
 struct IDirect3DTexture9;
 struct IDirect3DSurface9;
+struct IDirect3DDevice9;
+struct IDirect3DVR9;
 class ITexture;
 
 
@@ -45,6 +48,10 @@ class VR
 {
 public:
 	Game *m_Game = nullptr;
+    IDirect3DDevice9 *m_D3DDevice = nullptr;
+    IDirect3DVR9 *m_D3DVR = nullptr;
+    bool OwnsD3DDevice(const IDirect3DDevice9 *device) const { return m_D3DDevice == device; }
+    void InvalidateD3DResources();
 
 	vr::IVRSystem *m_System = nullptr;
 	vr::IVRInput *m_Input = nullptr;
@@ -67,6 +74,7 @@ public:
 	Haptics::ShotGate m_PortalShotHapticGate;
 	bool m_HapticOutputsAvailable = false;
 	bool m_OpenVRStarted = false;
+    Portal2VROpenVR::SessionLease m_OpenVRSession;
 	int m_LastPoseError = 0;
 	int m_LastInputError = 0;
 
@@ -193,12 +201,13 @@ public:
 
 	bool m_IsVREnabled = false;
 	RenderDiagnosticGate m_RenderDiagnostics;
+	RenderTargetDiagnosticGate m_RenderTargetDiagnostics;
 	MenuOverlayPlacement m_MenuOverlayPlacement;
 	bool m_IsInitialized = false;
 	bool m_RenderedNewFrame = false;
 	bool m_RenderedHud = false;
 	bool m_CreatedVRTextures = false;
-	bool m_RenderTargetsFailed = false;
+    RenderTargetRetryState m_RenderTargetRetry;
 	bool m_LaserRequestLogged = false;
 	bool m_LaserParticleObserved = false;
 	TextureID m_CreatingTextureID = Texture_None;

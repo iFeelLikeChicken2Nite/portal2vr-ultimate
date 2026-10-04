@@ -7,8 +7,10 @@
 #include "openvr.h"
 #include "d3d9_vr.h"
 #include "L4D2VR/viewport_readiness.h"
+#include "L4D2VR/openvr_session.h"
 
 #include <algorithm>
+#include <exception>
 
 namespace dxvk {
 
@@ -244,26 +246,8 @@ namespace dxvk {
 
     if (!pPresentationParameters || !ppReturnedDeviceInterface)
       return D3DERR_INVALIDCALL;
-
-	vr::HmdError error = vr::VRInitError_None;
-    vr::IVRSystem* system = vr::VR_Init(&error, vr::VRApplication_Scene);
-
-    uint32_t renderWidth = 0, renderHeight = 0;
-    const bool vrReady = error == vr::VRInitError_None && system;
-    if (vrReady)
-        system->GetRecommendedRenderTargetSize(&renderWidth, &renderHeight);
-    if (Portal2VRViewport::CanUseRecommendedVRSize(vrReady, renderWidth, renderHeight)) {
-        pPresentationParameters->BackBufferWidth = renderWidth;
-        pPresentationParameters->BackBufferHeight = renderHeight;
-    } else if (!vrReady) {
-        Logger::warn(str::format("Portal2VR: VR_Init unavailable during D3D9 setup: ",
-                                vr::VR_GetVRInitErrorAsEnglishDescription(error),
-                                "; keeping game backbuffer size"));
-    } else {
-        Logger::warn("Portal2VR: invalid OpenVR render target size; keeping game backbuffer size");
-    }
 	
-	auto result = this->CreateDeviceEx(
+    return this->CreateDeviceEx(
         Adapter,
         DeviceType,
         hFocusWindow,
@@ -271,12 +255,6 @@ namespace dxvk {
         pPresentationParameters,
         nullptr, // <-- pFullscreenDisplayMode
 	        reinterpret_cast<IDirect3DDevice9Ex**>(ppReturnedDeviceInterface));
-	  if (FAILED(result))
-	    return result;
-
-	Direct3DCreateVRImpl(*ppReturnedDeviceInterface, &g_D3DVR9);
-	  
-	return result;
   }
 
 
@@ -362,12 +340,33 @@ namespace dxvk {
     if (adapter == nullptr)
       return D3DERR_INVALIDCALL;
 
+    Portal2VROpenVR::SessionLease openVRSession;
+    vr::EVRInitError error = vr::VRInitError_None;
+    vr::IVRSystem* system = openVRSession.Acquire(error);
+    uint32_t renderWidth = 0, renderHeight = 0;
+    const bool vrReady = error == vr::VRInitError_None && system;
+    if (vrReady)
+      system->GetRecommendedRenderTargetSize(&renderWidth, &renderHeight);
+    if (pFullscreenDisplayMode == nullptr &&
+        Portal2VRViewport::CanUseRecommendedVRSize(vrReady, renderWidth, renderHeight)) {
+      pPresentationParameters->BackBufferWidth = renderWidth;
+      pPresentationParameters->BackBufferHeight = renderHeight;
+    } else if (!vrReady) {
+      Logger::warn(str::format("Portal2VR: VR_Init unavailable during D3D9 setup: ",
+                              vr::VR_GetVRInitErrorAsEnglishDescription(error),
+                              "; keeping game backbuffer size"));
+    } else if (pFullscreenDisplayMode != nullptr) {
+      Logger::warn("Portal2VR: explicit fullscreen display mode; keeping game backbuffer size");
+    } else {
+      Logger::warn("Portal2VR: invalid OpenVR render target size; keeping game backbuffer size");
+    }
+
     auto dxvkAdapter = adapter->GetDXVKAdapter();
 
     try {
       auto dxvkDevice = dxvkAdapter->createDevice(m_instance, D3D9DeviceEx::GetDeviceFeatures(dxvkAdapter));
 
-      auto* device = new D3D9DeviceEx(
+      Com<D3D9DeviceEx> device = new D3D9DeviceEx(
         this,
         adapter,
         DeviceType,
@@ -380,10 +379,22 @@ namespace dxvk {
       if (FAILED(hr))
         return hr;
 
-      *ppReturnedDeviceInterface = ref(device);
+      Com<IDirect3DVR9> bridge;
+      hr = Direct3DCreateVRImpl(device.ptr(), &bridge);
+      if (FAILED(hr))
+        return hr;
+      device->SetVRBridge(bridge.ptr());
+      if (!GetD3D9VRBridgeRegistry().Register(device.ptr(), device->GetVRBridge()))
+        return D3DERR_NOTAVAILABLE;
+
+      *ppReturnedDeviceInterface = device.ref();
     }
     catch (const DxvkError& e) {
       Logger::err(e.message());
+      return D3DERR_NOTAVAILABLE;
+    }
+    catch (const std::exception& e) {
+      Logger::err(str::format("D3D9InterfaceEx::CreateDeviceEx: ", e.what()));
       return D3DERR_NOTAVAILABLE;
     }
 

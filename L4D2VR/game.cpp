@@ -100,6 +100,7 @@ bool Game::Initialize()
     if (!m_VR->m_IsInitialized)
         return false;
     m_Hooks = new Hooks(this);
+    m_Hooks->Initialize();
     if (!m_Hooks->m_Ready) {
         errorMsg("A required Portal 2 hook could not be installed; see portal2vr.log.");
         return false;

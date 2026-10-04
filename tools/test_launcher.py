@@ -156,6 +156,7 @@ class TestLauncher:
                       "Continue?")
             if not messagebox.askyesno("Portal2VR — Confirm staging", prompt):
                 return
+            core.recover_pending_transaction(STATE_PATH)
             self.save()
             core.stage_install(REPO, game, STATE_PATH, self.selected_profile())
             self.state = core.load_state(STATE_PATH)
@@ -172,6 +173,7 @@ class TestLauncher:
         try:
             if game_is_running():
                 raise RuntimeError("Close Portal 2 before restoring files.")
+            core.recover_pending_transaction(STATE_PATH)
             self.save()
             game = Path(self.game_var.get().strip())
             restored = core.restore_install(game, STATE_PATH)

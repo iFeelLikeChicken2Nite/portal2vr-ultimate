@@ -403,11 +403,18 @@ FodyWeavers.xsd
 /tools/.launcher-state.json
 /tools/.launcher-state.json.tmp
 /tools/.launcher-state.json.lock
+/tools/.launcher-state.json.transaction.json
+/.package-venv/
+/dist/
+/build/
+/docs/independent-*.log
+/docs/package-*.log
+/docs/package-*.json
 /tools/.launcher-backups/
 /tools/.user-launcher-settings.json
 /tools/.user-launcher-settings.json.lock
 /tools/.user-launcher-settings.json.*.tmp
 /docs/user-launcher-*.png
-
+STABILIZATION_REPORT.md
 # Project notes are maintained locally, not published to origin.
 /docs/**/*.md
