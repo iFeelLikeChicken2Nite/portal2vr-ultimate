@@ -97,3 +97,9 @@ Open questions, in the order a first test session should answer them:
 5. The Perceptual Pack levels were built for camera gestures; the
    preservation package already remaps them to Hydra controls, so they ride
    on the same path.
+6. **Non-Emotional Manipulation**, the MotionPack's six-map co-op campaign
+   (`mp_coop_sx_*`), runs on the same `client_sixense.dll`, so the Hydra
+   emulation covers it. Co-op itself is the risk: portal2vr-ultimate makes no
+   co-op claim, and both players need the MotionPack. Test it with two
+   machines after single player works, starting with one VR player and one
+   flat-screen player.
