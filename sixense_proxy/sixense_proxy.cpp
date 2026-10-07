@@ -41,71 +41,165 @@ const Portal2VRSixenseApi *Api()
     return api;
 }
 
+// Call log (sixense_proxy.log beside this DLL): first call of each export,
+// then every 5 s the call counts and what the last data call returned. Shows
+// what the MotionPack asks for and where its Hydra setup stops.
+struct CallStat { const char *name; std::atomic<unsigned> count; };
+CallStat g_Calls[48];
+std::atomic<int> g_CallTypes{0};
+SRWLOCK g_LogLock = SRWLOCK_INIT;
+FILE *g_Log = nullptr;
+ULONGLONG g_NextSummary = 0;
+HMODULE g_Self = nullptr;
+
+void LogLine(const char *text)
+{
+    AcquireSRWLockExclusive(&g_LogLock);
+    if (!g_Log) {
+        char path[MAX_PATH];
+        const DWORD n = g_Self ? GetModuleFileNameA(g_Self, path, MAX_PATH) : 0;
+        if (n && n < MAX_PATH) {
+            char *slash = strrchr(path, '\\');
+            if (slash) {
+                strcpy_s(slash + 1, MAX_PATH - (slash + 1 - path), "sixense_proxy.log");
+                fopen_s(&g_Log, path, "w");
+            }
+        }
+    }
+    if (g_Log) {
+        SYSTEMTIME t; GetLocalTime(&t);
+        fprintf(g_Log, "%02d:%02d:%02d.%03d %s\n", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds, text);
+        fflush(g_Log);
+    }
+    ReleaseSRWLockExclusive(&g_LogLock);
+}
+
+void Trace(const char *name)
+{
+    const int types = g_CallTypes.load();
+    for (int i = 0; i < types; ++i)
+        if (g_Calls[i].name == name) { ++g_Calls[i].count; return; }
+    AcquireSRWLockExclusive(&g_LogLock);
+    int index = -1;
+    const int now = g_CallTypes.load();
+    for (int i = 0; i < now; ++i)
+        if (g_Calls[i].name == name) index = i;
+    if (index < 0 && now < 48) {
+        g_Calls[now].name = name;
+        g_Calls[now].count = 0;
+        g_CallTypes.store(now + 1);
+        index = now;
+    }
+    ReleaseSRWLockExclusive(&g_LogLock);
+    if (index >= 0) {
+        ++g_Calls[index].count;
+        if (g_Calls[index].count == 1) {
+            char line[128];
+            sprintf_s(line, "first call: %s", name);
+            LogLine(line);
+        }
+    }
+}
+
+void LogData(const char *what, int first, const SixenseBridge::LegacyControllerData *c, int count, int result)
+{
+    const auto now = GetTickCount64();
+    if (now < g_NextSummary) return;
+    g_NextSummary = now + 5000;
+    char line[1024];
+    int used = sprintf_s(line, "calls:");
+    for (int i = 0; i < g_CallTypes.load() && used < 900; ++i)
+        used += sprintf_s(line + used, sizeof(line) - used, " %s=%u", g_Calls[i].name, g_Calls[i].count.load());
+    LogLine(line);
+    for (int i = 0; i < count; ++i) {
+        sprintf_s(line, "%s[%d] -> %d: enabled=%d index=%d hand=%d docked=%d buttons=0x%X trigger=%u stick=%u,%u seq=%u fw=%u hw=%u pos=%.0f,%.0f,%.0f",
+            what, first + i, result, c[i].enabled, c[i].controller_index, c[i].which_hand, c[i].is_docked,
+            c[i].buttons, c[i].trigger, c[i].joystick_x, c[i].joystick_y, c[i].sequence_number,
+            c[i].firmware_revision, c[i].hardware_revision, c[i].pos[0], c[i].pos[1], c[i].pos[2]);
+        LogLine(line);
+    }
+}
+
 } // namespace
 
 extern "C" {
 
-int sixenseInit() { Api(); return kSuccess; }
-int sixenseExit() { return kSuccess; }
+int sixenseInit() { Trace(__func__); Api(); return kSuccess; }
+int sixenseExit() { Trace(__func__); return kSuccess; }
 
-int sixenseGetMaxBases() { return 1; }
-int sixenseSetActiveBase(int) { return kSuccess; }
-int sixenseIsBaseConnected(int) { return 1; }
+int sixenseGetMaxBases() { Trace(__func__); return 1; }
+int sixenseSetActiveBase(int) { Trace(__func__); return kSuccess; }
+int sixenseIsBaseConnected(int) { Trace(__func__); return 1; }
 
-int sixenseGetMaxControllers() { return SixenseBridge::kMaxControllers; }
-int sixenseGetHistorySize() { return SixenseBridge::kHistorySize; }
+int sixenseGetMaxControllers() { Trace(__func__); return SixenseBridge::kMaxControllers; }
+int sixenseGetHistorySize() { Trace(__func__); return SixenseBridge::kHistorySize; }
 
 int sixenseIsControllerEnabled(int which)
 {
+    Trace(__func__);
     const auto *api = Api();
     return api ? api->IsControllerEnabled(which) : 0;
 }
 
 int sixenseGetNumActiveControllers()
 {
+    Trace(__func__);
     const auto *api = Api();
     return api ? api->GetNumActiveControllers() : 0;
 }
 
 int sixenseGetData(int which, int indexBack, void *data)
 {
+    Trace(__func__);
     if (!data) return kFailure;
     if (const auto *api = Api())
-        return api->GetData(which, indexBack, data);
+    {
+        const int result = api->GetData(which, indexBack, data);
+        LogData("GetData", which, static_cast<const SixenseBridge::LegacyControllerData *>(data), 1, result);
+        return result;
+    }
     std::memset(data, 0, sizeof(SixenseBridge::LegacyControllerData));
     return kFailure;
 }
 
 int sixenseGetAllData(int indexBack, void *data)
 {
+    Trace(__func__);
     if (!data) return kFailure;
     if (const auto *api = Api())
-        return api->GetAllData(indexBack, data);
+    {
+        const int result = api->GetAllData(indexBack, data);
+        const auto *all = static_cast<const SixenseBridge::LegacyAllControllerData *>(data);
+        LogData("GetAllData", 0, all->controllers, SixenseBridge::kMaxControllers, result);
+        return result;
+    }
     std::memset(data, 0, sizeof(SixenseBridge::LegacyAllControllerData));
     return kSuccess;
 }
 
-int sixenseGetNewestData(int which, void *data) { return sixenseGetData(which, 0, data); }
-int sixenseGetAllNewestData(void *data) { return sixenseGetAllData(0, data); }
+int sixenseGetNewestData(int which, void *data) { Trace(__func__); return sixenseGetData(which, 0, data); }
+int sixenseGetAllNewestData(void *data) { Trace(__func__); return sixenseGetAllData(0, data); }
 
 int sixenseTriggerVibration(int which, int duration100ms, int pattern)
 {
+    Trace(__func__);
     const auto *api = Api();
     return api ? api->TriggerVibration(which, duration100ms, pattern) : kSuccess;
 }
 
-int sixenseSetHemisphereTrackingMode(int, int) { return kSuccess; }
-int sixenseGetHemisphereTrackingMode(int, int *state) { if (state) *state = 1; return kSuccess; }
-int sixenseAutoEnableHemisphereTracking(int) { return kSuccess; }
+int sixenseSetHemisphereTrackingMode(int, int) { Trace(__func__); return kSuccess; }
+int sixenseGetHemisphereTrackingMode(int, int *state) { Trace(__func__); if (state) *state = 1; return kSuccess; }
+int sixenseAutoEnableHemisphereTracking(int) { Trace(__func__); return kSuccess; }
 
-int sixenseSetHighPriorityBindingEnabled(int) { return kSuccess; }
-int sixenseGetHighPriorityBindingEnabled(int *on) { if (on) *on = 0; return kSuccess; }
+int sixenseSetHighPriorityBindingEnabled(int) { Trace(__func__); return kSuccess; }
+int sixenseGetHighPriorityBindingEnabled(int *on) { Trace(__func__); if (on) *on = 0; return kSuccess; }
 
-int sixenseSetFilterEnabled(int) { return kSuccess; }
-int sixenseGetFilterEnabled(int *on) { if (on) *on = 0; return kSuccess; }
-int sixenseSetFilterParams(float, float, float, float) { return kSuccess; }
+int sixenseSetFilterEnabled(int) { Trace(__func__); return kSuccess; }
+int sixenseGetFilterEnabled(int *on) { Trace(__func__); if (on) *on = 0; return kSuccess; }
+int sixenseSetFilterParams(float, float, float, float) { Trace(__func__); return kSuccess; }
 int sixenseGetFilterParams(float *nearRange, float *nearVal, float *farRange, float *farVal)
 {
+    Trace(__func__);
     if (nearRange) *nearRange = 0.0f;
     if (nearVal) *nearVal = 0.0f;
     if (farRange) *farRange = 0.0f;
@@ -113,9 +207,10 @@ int sixenseGetFilterParams(float *nearRange, float *nearVal, float *farRange, fl
     return kSuccess;
 }
 
-int sixenseSetBaseColor(unsigned char, unsigned char, unsigned char) { return kSuccess; }
+int sixenseSetBaseColor(unsigned char, unsigned char, unsigned char) { Trace(__func__); return kSuccess; }
 int sixenseGetBaseColor(unsigned char *r, unsigned char *g, unsigned char *b)
 {
+    Trace(__func__);
     if (r) *r = 0;
     if (g) *g = 0;
     if (b) *b = 0;
@@ -123,20 +218,20 @@ int sixenseGetBaseColor(unsigned char *r, unsigned char *g, unsigned char *b)
 }
 
 // Undocumented SDK exports the MotionPack may import; accepted and ignored.
-int sixenseSetDebugParam() { return kSuccess; }
-int sixenseGetDebugParam() { return kSuccess; }
-int sixenseSetCalibrationEnabled() { return kSuccess; }
-int sixenseGetCalibrationEnabled() { return kSuccess; }
-int sixenseSetHemisphereVector() { return kSuccess; }
-int sixenseGetHemisphereVector() { return kSuccess; }
-int sixenseGetRawData() { return kSuccess; }
-int sixenseGetRawDataSingle() { return kSuccess; }
-int sixenseGetSignalMatrix() { return kSuccess; }
-int sixenseGetSignalQuality() { return kSuccess; }
-int sixenseSetTestMode() { return kSuccess; }
-int sixenseGetTestMode() { return kSuccess; }
-int sixensePlaybackLogFile() { return kSuccess; }
-int sixenseSendTestCommand() { return kSuccess; }
+int sixenseSetDebugParam() { Trace(__func__); return kSuccess; }
+int sixenseGetDebugParam() { Trace(__func__); return kSuccess; }
+int sixenseSetCalibrationEnabled() { Trace(__func__); return kSuccess; }
+int sixenseGetCalibrationEnabled() { Trace(__func__); return kSuccess; }
+int sixenseSetHemisphereVector() { Trace(__func__); return kSuccess; }
+int sixenseGetHemisphereVector() { Trace(__func__); return kSuccess; }
+int sixenseGetRawData() { Trace(__func__); return kSuccess; }
+int sixenseGetRawDataSingle() { Trace(__func__); return kSuccess; }
+int sixenseGetSignalMatrix() { Trace(__func__); return kSuccess; }
+int sixenseGetSignalQuality() { Trace(__func__); return kSuccess; }
+int sixenseSetTestMode() { Trace(__func__); return kSuccess; }
+int sixenseGetTestMode() { Trace(__func__); return kSuccess; }
+int sixensePlaybackLogFile() { Trace(__func__); return kSuccess; }
+int sixenseSendTestCommand() { Trace(__func__); return kSuccess; }
 
 }
 
@@ -205,6 +300,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
 {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(module);
+        g_Self = module;
         DisableIntelCameraByDefault();
     }
     return TRUE;
