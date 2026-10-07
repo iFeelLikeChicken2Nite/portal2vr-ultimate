@@ -37,7 +37,10 @@ Hydra-shaped controller data to work.
   to `0` and, because the camera "reconnect" paths ignore that switch (they
   crashed the same way at +0x3FFAB0), turns the allocation check at every
   site that creates the camera object into the game's own "no camera"
-  branch. Launch with `-p2vr_intel_camera` to leave the camera code alone.
+  branch. A per-frame check that no convar reaches then raised "Connect
+  Senz3D camera to computer" in game and kept maps paused behind it; the
+  proxy skips that prompt too. Launch with `-p2vr_intel_camera` to leave the
+  camera code alone.
 
 While you are in gameplay (not in a menu), the Sixense action set outranks
 Portal2VR's main set, so controls bound to Hydra actions go to the

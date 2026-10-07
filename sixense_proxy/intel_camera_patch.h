@@ -104,6 +104,37 @@ inline std::size_t FindCameraAllocationChecks(const std::uint8_t *image, std::si
     return count;
 }
 
+// With no camera object, a per-frame check (run for each split-screen slot,
+// whatever sixense_intel_enabled says) raises "Connect Senz3D camera to
+// computer" once the player is in game, and keeps the map paused behind it:
+//
+//     call <camera ready?>
+//     test al, al
+//     jne  <skip prompt>        ; 75 rel8, patched to jmp (EB)
+//     cmp  [esi+838h], ebx      ; no prompt already pending
+//     jne  <skip prompt>
+//     mov  byte [esi+83Dh], 1   ; prompt showing
+//
+// Returns the offset of that first jne, or kNotFound.
+inline std::size_t FindCameraPromptBranch(const std::uint8_t *image, std::size_t size)
+{
+    static constexpr int kPattern[] = {
+        0xE8, -1, -1, -1, -1, 0x84, 0xC0, 0x75, -1,
+        0x39, 0x9E, 0x38, 0x08, 0x00, 0x00, 0x75, -1,
+        0xC6, 0x86, 0x3D, 0x08, 0x00, 0x00, 0x01 };
+    constexpr std::size_t length = sizeof(kPattern) / sizeof(kPattern[0]);
+    if (!image || size < length) return kNotFound;
+    std::size_t match = kNotFound;
+    for (std::size_t i = 0; i + length <= size; ++i) {
+        std::size_t j = 0;
+        while (j < length && (kPattern[j] < 0 || image[i + j] == kPattern[j])) ++j;
+        if (j != length) continue;
+        if (match != kNotFound) return kNotFound; // ambiguous: leave the game alone
+        match = i + 7;
+    }
+    return match;
+}
+
 // Rewrites `je rel32` at site as `jmp rel32; nop` to the same target.
 inline void JeToJmp(std::uint8_t *site)
 {

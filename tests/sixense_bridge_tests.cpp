@@ -262,6 +262,16 @@ void TestIntelCameraPatch()
         Expect(std::memcmp(&code[21], jmp, sizeof(jmp)) == 0, "je becomes jmp to the same target");
     }
 
+    const std::uint8_t prompt[] = {
+        0x90, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x84, 0xC0, 0x75, 0x22,
+        0x39, 0x9E, 0x38, 0x08, 0x00, 0x00, 0x75, 0x1A,
+        0xC6, 0x86, 0x3D, 0x08, 0x00, 0x00, 0x01, 0xCC };
+    Expect(IntelCameraPatch::FindCameraPromptBranch(prompt, sizeof(prompt)) == 8, "camera prompt branch found");
+    std::vector<std::uint8_t> twice(prompt, prompt + sizeof(prompt));
+    twice.insert(twice.end(), prompt, prompt + sizeof(prompt));
+    Expect(IntelCameraPatch::FindCameraPromptBranch(twice.data(), twice.size()) == IntelCameraPatch::kNotFound,
+           "ambiguous camera prompt left alone");
+
     code[1] = 0x50; // a different allocation size
     Expect(IntelCameraPatch::FindCameraAllocationChecks(code.data(), code.size(), sites) == 0,
            "other allocations ignored");

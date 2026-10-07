@@ -191,6 +191,12 @@ void DisableIntelCameraByDefault()
     wsprintfA(message, "sixense.dll proxy: Intel camera creation disabled at %u of %u sites\n",
               static_cast<unsigned>(patched), static_cast<unsigned>(count));
     OutputDebugStringA(message);
+
+    const std::size_t prompt = IntelCameraPatch::FindCameraPromptBranch(image, imageSize);
+    if (prompt == IntelCameraPatch::kNotFound)
+        OutputDebugStringA("sixense.dll proxy: camera prompt check not found\n");
+    else if (patch(image + prompt, 1, [](std::uint8_t *at) { *at = 0xEB; }))
+        OutputDebugStringA("sixense.dll proxy: \"Connect camera\" prompt disabled\n");
 }
 
 } // namespace
