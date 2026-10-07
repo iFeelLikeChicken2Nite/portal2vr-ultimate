@@ -10,8 +10,10 @@
 #include <windows.h>
 
 #include <atomic>
+#include <cstdint>
 #include <cstring>
 
+#include "intel_camera_patch.h"
 #include "../L4D2VR/sixense_api.h"
 #include "../L4D2VR/sixense_bridge.h"
 
@@ -138,9 +140,50 @@ int sixenseSendTestCommand() { return kSuccess; }
 
 }
 
+namespace {
+
+const char kIntelDisabled[] = "0";
+
+// See intel_camera_patch.h. Runs under the loader lock, before
+// client_sixense.dll's static constructors; only touches already-mapped memory.
+void DisableIntelCameraByDefault()
+{
+    if (std::strstr(GetCommandLineA(), "-p2vr_intel_camera")) {
+        OutputDebugStringA("sixense.dll proxy: -p2vr_intel_camera set, leaving Intel camera code on\n");
+        return;
+    }
+    const HMODULE client = GetModuleHandleA("client_sixense.dll");
+    if (!client) return;
+
+    const auto *image = reinterpret_cast<const std::uint8_t *>(client);
+    const auto *dos = reinterpret_cast<const IMAGE_DOS_HEADER *>(image);
+    const auto *nt = reinterpret_cast<const IMAGE_NT_HEADERS32 *>(image + dos->e_lfanew);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || nt->Signature != IMAGE_NT_SIGNATURE) return;
+
+    const std::size_t offset = IntelCameraPatch::FindEnabledDefaultOperand(
+        image, nt->OptionalHeader.SizeOfImage, static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(image)));
+    if (offset == IntelCameraPatch::kNotFound) {
+        OutputDebugStringA("sixense.dll proxy: sixense_intel_enabled registration not found; Intel camera code unchanged\n");
+        return;
+    }
+
+    void *target = const_cast<std::uint8_t *>(image + offset);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(target, sizeof(std::uint32_t), PAGE_EXECUTE_READWRITE, &oldProtect)) return;
+    const auto value = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(kIntelDisabled));
+    std::memcpy(target, &value, sizeof(value));
+    VirtualProtect(target, sizeof(std::uint32_t), oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), target, sizeof(std::uint32_t));
+    OutputDebugStringA("sixense.dll proxy: sixense_intel_enabled now defaults to 0 (no Intel camera)\n");
+}
+
+} // namespace
+
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
 {
-    if (reason == DLL_PROCESS_ATTACH)
+    if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(module);
+        DisableIntelCameraByDefault();
+    }
     return TRUE;
 }

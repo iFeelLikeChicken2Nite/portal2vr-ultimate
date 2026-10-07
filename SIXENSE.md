@@ -30,6 +30,12 @@ Hydra-shaped controller data to work.
   forwards every call to Portal2VR's `d3d9.dll`. It never opens its own VR
   session, which is what made stacking a Hydra shim on top of Portal2VR
   unstable. Without Portal2VR loaded the controllers read as disconnected.
+- **Intel camera crash fix** (`sixense_proxy/intel_camera_patch.h`): the
+  Steam build crashes at the Valve logo without its Creative Senz3D camera
+  (`client_sixense.dll`+0x402B87, a null capture device). Before
+  `client_sixense.dll` registers its convars, the proxy makes
+  `sixense_intel_enabled` default to `0`, the game's own switch for all
+  camera code. Launch with `-p2vr_intel_camera` to keep the camera code on.
 
 While you are in gameplay (not in a menu), the Sixense action set outranks
 Portal2VR's main set, so controls bound to Hydra actions go to the
@@ -69,7 +75,8 @@ The Steam app "Portal 2 Sixense Perceptual Pack" (247120) installs to
 Perceptual Pack levels (`sp_a1_sx_perc_*`) and the MotionPack levels
 (`sp_a2_sx_*` to `sp_a8_sx_*`), with the game DLLs in `portal2_sixense\bin`.
 
-1. Install it from Steam and check it starts on its own.
+1. Install it from Steam. Unmodified, it crashes at startup on any PC
+   without the Intel camera; the proxy from step 3 fixes that.
 2. Build `l4d2vr.sln` Release/x86 (on Visual Studio 2026 add
    `/p:PlatformToolset=v145`). In the install folder:
    - copy `Release\d3d9.dll` and `thirdparty\openvr\bin\win32\openvr_api.dll`

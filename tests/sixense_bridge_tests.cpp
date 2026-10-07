@@ -1,12 +1,15 @@
 #include "../L4D2VR/sixense_bridge.h"
 #include "../L4D2VR/game_modules.h"
 #include "../L4D2VR/config.h"
+#include "../sixense_proxy/intel_camera_patch.h"
 
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 using namespace SixenseBridge;
 
@@ -211,6 +214,39 @@ void TestConfig()
            rejected.value.sixenseHandSpace == HandSpace::HeadYaw, "invalid sixense options keep previous values");
 }
 
+// Builds a fake image laid out like client_sixense.dll's registration.
+std::vector<std::uint8_t> ConVarImage(const char *name, const char *defaultValue, std::uint32_t base)
+{
+    std::vector<std::uint8_t> image(0x100, 0xCC);
+    auto put32 = [&](std::size_t at, std::uint32_t value) { std::memcpy(&image[at], &value, 4); };
+    std::memcpy(&image[0x80], name, std::strlen(name) + 1);
+    std::memcpy(&image[0xC0], defaultValue, std::strlen(defaultValue) + 1);
+    image[0x10] = 0x68; put32(0x11, 0x2000);
+    image[0x15] = 0x68; put32(0x16, base + 0xC0);
+    image[0x1A] = 0x68; put32(0x1B, base + 0x80);
+    image[0x1F] = 0xB9; put32(0x20, base + 0xF0);
+    return image;
+}
+
+void TestIntelCameraPatch()
+{
+    using IntelCameraPatch::FindEnabledDefaultOperand;
+    using IntelCameraPatch::kNotFound;
+    const std::uint32_t base = 0x66180000;
+
+    const auto image = ConVarImage("sixense_intel_enabled", "1", base);
+    Expect(FindEnabledDefaultOperand(image.data(), image.size(), base) == 0x16, "intel convar default operand found");
+
+    const auto off = ConVarImage("sixense_intel_enabled", "0", base);
+    Expect(FindEnabledDefaultOperand(off.data(), off.size(), base) == kNotFound, "already-off default left alone");
+
+    const auto other = ConVarImage("sixense_intel_enabled_toggle", "1", base);
+    Expect(FindEnabledDefaultOperand(other.data(), other.size(), base) == kNotFound, "similar convar name ignored");
+
+    Expect(FindEnabledDefaultOperand(image.data(), image.size(), base + 0x1000) == kNotFound, "pointers outside image ignored");
+    Expect(FindEnabledDefaultOperand(nullptr, 0, base) == kNotFound, "empty image");
+}
+
 } // namespace
 
 int main()
@@ -225,6 +261,7 @@ int main()
     TestVibration();
     TestGameModules();
     TestConfig();
+    TestIntelCameraPatch();
     if (failures) {
         std::cerr << failures << " sixense bridge test(s) failed\n";
         return 1;

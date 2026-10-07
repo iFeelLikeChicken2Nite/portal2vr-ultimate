@@ -42,6 +42,7 @@
     <ClCompile Include="sixense_proxy.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="intel_camera_patch.h" />
     <ClInclude Include="..\L4D2VR\sixense_api.h" />
     <ClInclude Include="..\L4D2VR\sixense_bridge.h" />
   </ItemGroup>
