@@ -1,4 +1,4 @@
-# Portal 2 Sixense MotionPack in VR
+# The 6DOF Perceptual Pack: Portal 2 Sixense Perceptual Pack in VR
 
 Work in progress: running the Sixense MotionPack (the Razer Hydra DLC, with
 the Perceptual Pack levels from the community preservation package) under

@@ -45,9 +45,9 @@ Keep these local files together when moving the checkout or recovering an instal
 
 Do not delete install state/backups to fix an error. If only user preferences are malformed, copy that preferences file aside before replacing it; startup does not silently reset it. Open mod log accesses `bin/portal2vr.log` in the selected game folder. The older `python -m tools.test_launcher` remains available for manual tests using the same backups/transaction lock. Changing settings in one launcher does not silently synchronize the other launcher's form.
 
-## Sixense MotionPack (work in progress)
+## The 6DOF Perceptual Pack (work in progress)
 
-This branch adds experimental support for the Portal 2 Sixense MotionPack: Portal2VR emulates the Razer Hydra from your VR controllers and a small `sixense.dll` proxy hands that data to the MotionPack. It is not yet tested in a headset; see [SIXENSE.md](SIXENSE.md) for the design, manual install and open questions.
+This branch adds experimental support for the Portal 2 Sixense Perceptual Pack (its Perceptual and MotionPack levels): Portal2VR emulates the Razer Hydra from your VR controllers and a small `sixense.dll` proxy hands that data to the MotionPack. It is not yet tested in a headset; see [SIXENSE.md](SIXENSE.md) for the design, manual install and open questions.
 
 ## Changes from the original mod
 
