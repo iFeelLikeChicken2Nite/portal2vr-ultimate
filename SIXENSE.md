@@ -102,10 +102,13 @@ in-game behaviour are unverified.
 Open questions, in the order a first test session should answer them:
 
 1. Does Portal2VR start inside the MotionPack? `bin\portal2vr.log` lists the
-   game variant and each signature. The MotionPack's DLLs are an older build
-   than stock Portal 2, so required signatures may miss; those need new
-   patterns from the MotionPack's own `client_sixense.dll`,
-   `server_sixense.dll` and `engine.dll`.
+   game variant and each signature. On the Steam 247120 build the stock
+   patterns missed `TraceFirePortalServer`, `CWeaponPortalgun_FirePortal` and
+   `UpdateObject`, and `UpdateObjectVM`'s matched `ComputeError` instead;
+   `offsets.h` now carries a second RVA and pattern for those four, used only
+   when `client_sixense.dll` is running. Every other accepted pattern was
+   checked against that build; the ones far from their stock RVA were
+   confirmed by their callers. Still unverified in game.
 2. Does the MotionPack see two controllers and pass its calibration screen?
 3. Which `SixenseHandSpace` lines free aim up with what you see?
 4. Portal2VR's controller-aimed portal firing and the MotionPack's free aim

@@ -50,6 +50,18 @@ struct Offset
 
         this->address = (uintptr_t)GetModuleHandleA(this->moduleName.c_str()) + this->offset;
     }
+
+    // For symbols whose stock pattern misses, or matches the wrong function,
+    // in the MotionPack's older game DLLs: a second RVA and pattern taken from
+    // the Steam Perceptual Pack (247120) build, used when it is running.
+    Offset(std::string moduleName, int currentOffset, std::string signature,
+           int sixenseOffset, std::string sixenseSignature, int sixenseSigOffset = 0)
+        : Offset(std::move(moduleName),
+                 GameModules::IsSixense() ? sixenseOffset : currentOffset,
+                 GameModules::IsSixense() ? std::move(sixenseSignature) : std::move(signature),
+                 GameModules::IsSixense() ? sixenseSigOffset : 0)
+    {
+    }
 };
 
 class Offsets
@@ -103,8 +115,12 @@ public:
 
     //Offset TraceFirePortalClient =       { "client.dll", 0x3E0980, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 57 8B F1 6A" };
     // Firing Portals
-    Offset TraceFirePortalServer =       { "server.dll", 0x400D50, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 57 8B F1 6A" };
-    Offset CWeaponPortalgun_FirePortal = { "server.dll", 0x401370, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 57 8B F9 89 7D EC E8 ? ? ? ?" };
+    // MotionPack: FirePortal picks between this and a six-argument free-aim
+    // copy with the same prologue, so its pattern anchors where they differ.
+    Offset TraceFirePortalServer =       { "server.dll", 0x400D50, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 57 8B F1 6A",
+                                           0x40C560, "E8 ? ? ? ? 8B F8 83 C4 14 33 F6 89 7D F4 85 FF 0F 84 ? ? ? ? 8D 95 D4 F8 FF FF 89 55 F0", -0x147 };
+    Offset CWeaponPortalgun_FirePortal = { "server.dll", 0x401370, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 57 8B F9 89 7D EC E8 ? ? ? ?",
+                                           0x40D2C0, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 57 8B F9 89 7D C4 E8 ? ? ? ? 8B F0 89 75 90" };
 
     //53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 57 8B F1 6A 00 56 8D 4D C0 89 75 F8 E8
     //Offset DrawModelExecute =            { "engine.dll", 0xE05E0, "55 8B EC 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 FC 8B 45 10 56 8B 75 08 57 8B" }; //
@@ -166,8 +182,12 @@ public:
     // FirePortal return address permitted to change the result in its detour.
     Offset Weapon_ShootPosition{VerifiedPortalSymbols::Symbol::WeaponShootPosition};
     Offset ComputeError = { "server.dll", 0x3C8140, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 8B F1 8B 86 ? ? ? ? 57 83 F8 FF 74 2A" };
-    Offset UpdateObject = { "server.dll", 0x3CA010, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 57 8B F9 8B 87 ? ? ? ? 89 BD" };
-    Offset UpdateObjectVM = { "server.dll", 0x3CBB10, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 57 8B F9 8B 87 ? ? ? ? 83 F8" };
+    // MotionPack: UpdateObjectVM's stock pattern matches ComputeError there;
+    // the real one is the virtual UpdateObject calls through vtable+0x18.
+    Offset UpdateObject = { "server.dll", 0x3CA010, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 57 8B F9 8B 87 ? ? ? ? 89 BD",
+                            0x3D0200, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 8B F1 8B 86 ? ? ? ? 57 89 75 E0 83 F8 FF" };
+    Offset UpdateObjectVM = { "server.dll", 0x3CBB10, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 57 8B F9 8B 87 ? ? ? ? 83 F8",
+                              0x3D45E0, "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? 56 57 8B F9 8B 87 ? ? ? ? 83 CA FF 3B C2" };
     Offset RotateObject = { "server.dll", 0x3C7890, "55 8B EC 0F 57 C0 F3 0F 10 4D ? 81 EC ? ? ? ? 0F 2E C8 9F 57 8B F9 F6 C4 44 7A 12" };
     Offset EyeAngles = { "server.dll", 0x103A50, "55 8B EC 8B 81 ? ? ? ? 83 EC 60 56 57 8B 3D ? ? ? ? 83 F8 FF 74 1D" };
 
