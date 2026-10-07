@@ -141,3 +141,6 @@ Open questions, in the order a first test session should answer them:
    co-op claim, and both players need the MotionPack. Test it with two
    machines after single player works, starting with one VR player and one
    flat-screen player.
+7. The portal gun's blue glow effects do not line up with the gun model
+   after the viewmodel offset (low priority; `ExperimentalViewmodelAlignment`
+   is the existing option aimed at model/effect alignment, untested here).
