@@ -64,17 +64,26 @@ action can be rebound in SteamVR's controller binding UI under
 
 ## Manual install (the launcher does not handle the MotionPack yet)
 
-1. Install the MotionPack preservation package next to Portal 2 and check it
-   starts on its own.
-2. Build `l4d2vr.sln` Release/x86. Copy `Release\d3d9.dll` into the
-   MotionPack's `bin` folder (next to its `engine.dll`) and the `VR` folder
-   contents (config and `SteamVRActionManifest`) into a `VR` folder in the
-   MotionPack root, as the launcher does for Portal 2.
-3. Back up `portal2_sixense\bin\sixense.dll`, then copy
-   `Release\sixense\sixense.dll` over it.
-4. Start SteamVR, then launch the MotionPack's `portal2.exe` the way its own
-   shortcut does (for example `-game portal2_sixense`), adding `-insecure`
-   and your usual Portal2VR video options.
+The Steam app "Portal 2 Sixense Perceptual Pack" (247120) installs to
+`steamapps\common\Portal 2 Sixense Perceptual Pack` and contains both the
+Perceptual Pack levels (`sp_a1_sx_perc_*`) and the MotionPack levels
+(`sp_a2_sx_*` to `sp_a8_sx_*`), with the game DLLs in `portal2_sixense\bin`.
+
+1. Install it from Steam and check it starts on its own.
+2. Build `l4d2vr.sln` Release/x86 (on Visual Studio 2026 add
+   `/p:PlatformToolset=v145`). In the install folder:
+   - copy `Release\d3d9.dll` and `thirdparty\openvr\bin\win32\openvr_api.dll`
+     into `bin` (next to `engine.dll`);
+   - copy `L4D2VR\config.txt` and `L4D2VR\SteamVRActionManifest` into a new
+     `VR` folder in the install root.
+3. Rename `portal2_sixense\bin\sixense.dll` to `sixense.dll.orig`, then copy
+   `Release\sixense\sixense.dll` in its place.
+4. Start SteamVR, then launch from Steam with launch options
+   `-insecure -window -novid +mat_motion_blur_percent_of_screen_max 0 +mat_queue_mode 0 +mat_vsync 0 +mat_antialias 0 +mat_grain_scale_override 0 -width 1280 -height 720`
+   (add `-game portal2_sixense` if the stock Portal 2 menu appears).
+
+To undo: delete `bin\d3d9.dll`, `bin\openvr_api.dll` and `VR`, and rename
+`sixense.dll.orig` back.
 
 ## Status
 
@@ -98,7 +107,9 @@ Open questions, in the order a first test session should answer them:
    preservation package already remaps them to Hydra controls, so they ride
    on the same path.
 6. **Non-Emotional Manipulation**, the MotionPack's six-map co-op campaign
-   (`mp_coop_sx_*`), runs on the same `client_sixense.dll`, so the Hydra
+   (`mp_coop_sx_*`), is not in the Steam 247120 install (no co-op maps
+   there), so it has to come from elsewhere. It runs on the same
+   `client_sixense.dll`, so the Hydra
    emulation covers it. Co-op itself is the risk: portal2vr-ultimate makes no
    co-op claim, and both players need the MotionPack. Test it with two
    machines after single player works, starting with one VR player and one
