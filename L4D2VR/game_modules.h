@@ -27,11 +27,14 @@ bool SameName(const Char *a, const Char *b)
 
 // The Sixense client wins when both are present: the MotionPack is a separate
 // install, so a loaded client_sixense.dll means its game code is running.
+// Its portal2_sixense\bin also ships a small client.dll stub that loads
+// before client_sixense.dll; when the loaded client.dll has a
+// client_sixense.dll beside it, keep waiting instead of settling on Stock.
 template <typename IsLoaded>
-Variant DetectVariant(IsLoaded isLoaded)
+Variant DetectVariant(IsLoaded isLoaded, bool sixenseBesideClient = false)
 {
     if (isLoaded(kSixenseClient)) return Variant::Sixense;
-    if (isLoaded(kStockClient)) return Variant::Stock;
+    if (isLoaded(kStockClient)) return sixenseBesideClient ? Variant::Unknown : Variant::Stock;
     return Variant::Unknown;
 }
 

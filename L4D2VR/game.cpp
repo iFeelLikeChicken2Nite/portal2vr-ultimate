@@ -45,8 +45,17 @@ bool Game::Initialize()
     // settle which game variant is running before any module is named.
     const auto variantStart = GetTickCount64();
     GameModules::Variant variant = GameModules::Variant::Unknown;
+    const auto sixenseBesideClient = [] {
+        const HMODULE client = GetModuleHandleA(GameModules::kStockClient);
+        char path[MAX_PATH];
+        const DWORD length = client ? GetModuleFileNameA(client, path, MAX_PATH) : 0;
+        if (!length || length >= MAX_PATH) return false;
+        std::string sibling(path, length);
+        sibling = sibling.substr(0, sibling.find_last_of("\\/") + 1) + GameModules::kSixenseClient;
+        return GetFileAttributesA(sibling.c_str()) != INVALID_FILE_ATTRIBUTES;
+    };
     while ((variant = GameModules::DetectVariant([](const char *name) {
-               return GetModuleHandleA(name) != nullptr; })) == GameModules::Variant::Unknown) {
+               return GetModuleHandleA(name) != nullptr; }, sixenseBesideClient())) == GameModules::Variant::Unknown) {
         if (GetTickCount64() - variantStart > 30000) {
             errorMsg("Timed out waiting for client.dll or client_sixense.dll");
             return false;

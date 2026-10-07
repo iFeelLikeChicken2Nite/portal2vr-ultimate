@@ -184,6 +184,8 @@ void TestGameModules()
     Expect(DetectVariant(stock) == Variant::Stock, "stock client detected");
     Expect(DetectVariant(both) == Variant::Sixense, "sixense client wins");
     Expect(DetectVariant(none) == Variant::Unknown, "nothing loaded yet");
+    Expect(DetectVariant(stock, true) == Variant::Unknown, "sixense stub client.dll waits for client_sixense.dll");
+    Expect(DetectVariant(both, true) == Variant::Sixense, "sixense client after its stub");
 
     Expect(std::string(ResolveName("client.dll", Variant::Sixense)) == "client_sixense.dll" &&
            std::string(ResolveName("SERVER.DLL", Variant::Sixense)) == "server_sixense.dll",
