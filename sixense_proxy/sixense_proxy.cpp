@@ -11,7 +11,9 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <share.h>
 
 #include "intel_camera_patch.h"
 #include "../L4D2VR/sixense_api.h"
@@ -62,7 +64,7 @@ void LogLine(const char *text)
             char *slash = strrchr(path, '\\');
             if (slash) {
                 strcpy_s(slash + 1, MAX_PATH - (slash + 1 - path), "sixense_proxy.log");
-                fopen_s(&g_Log, path, "w");
+                g_Log = _fsopen(path, "w", _SH_DENYNO); // readable while the game runs
             }
         }
     }

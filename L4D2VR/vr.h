@@ -235,6 +235,8 @@ public:
 	// Sixense MotionPack: Razer Hydra emulation (optional action set)
 	bool m_SixenseActionsAvailable = false;
 	bool m_SixenseInputActive = false;
+	struct HeldSixensePose { SixenseBridge::Pose34 pose{}; unsigned long long time = 0; bool valid = false; };
+	HeldSixensePose m_SixenseHeldPose[2]{};
 	bool m_SixensePublishing = false;
 	std::uint8_t m_SixenseSequence = 0;
 	vr::VRActionSetHandle_t m_SixenseActionSet = vr::k_ulInvalidActionSetHandle;
@@ -316,6 +318,7 @@ public:
 	bool UpdatePosesAndActions();
 	void InitSixenseActions();
 	bool SixenseInputWanted() const;
+	bool SixenseEmulationOn() const;
 	SixenseBridge::HandInput ReadSixenseHand(vr::ETrackedControllerRole role,
 		vr::VRInputValueHandle_t source, bool readInputs);
 	void UpdateSixense(bool actionsReady);

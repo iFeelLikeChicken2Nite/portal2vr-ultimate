@@ -955,14 +955,18 @@ bool VR::UpdatePosesAndActions()
     const bool useHaptics = (m_Config.experimentalPortalShotHaptics || sixenseInput) && m_HapticOutputsAvailable;
     // The Sixense set outranks the main set, so a physical control bound to a
     // Hydra action is withheld from Portal2VR's own action on the same input.
+    // Outside gameplay (main menu, the MotionPack's Hydra setup screen, any
+    // cursor) the Hydra set still runs, at the main set's priority so both
+    // see the controls: the setup flow waits for a trigger pull on that screen.
+    const bool sixenseSetup = !sixenseInput && SixenseEmulationOn();
     vr::VRActiveActionSet_t sixenseSet{};
     sixenseSet.ulActionSet = m_SixenseActionSet;
-    sixenseSet.nPriority = 1;
+    sixenseSet.nPriority = sixenseInput ? 1 : 0;
     const auto updateActions = [&](bool haptics) {
         vr::VRActiveActionSet_t activeSets[3] = { m_ActiveActionSet };
         uint32_t count = 1;
         if (haptics) activeSets[count++] = m_ActiveHapticActionSet;
-        if (sixenseInput) activeSets[count++] = sixenseSet;
+        if (sixenseInput || sixenseSetup) activeSets[count++] = sixenseSet;
         return m_Input->UpdateActionState(activeSets, sizeof(vr::VRActiveActionSet_t), count);
     };
     auto inputError = updateActions(useHaptics);
@@ -1014,6 +1018,11 @@ void VR::DispatchPortalShotHaptic(bool actionsReady)
     }
 }
 
+bool VR::SixenseEmulationOn() const
+{
+    return m_IsInitialized && m_SixenseActionsAvailable && m_Config.sixenseEmulation && GameModules::IsSixense();
+}
+
 bool VR::SixenseInputWanted() const
 {
     return m_IsInitialized && m_SixenseActionsAvailable && m_Config.sixenseEmulation && GameModules::IsSixense() &&
@@ -1029,10 +1038,23 @@ SixenseBridge::HandInput VR::ReadSixenseHand(vr::ETrackedControllerRole role,
     if (!IsUsableTrackedDeviceIndex(index, vr::k_unMaxTrackedDeviceCount, vr::k_unTrackedDeviceIndexInvalid))
         return hand;
     const auto &pose = m_Poses[index];
-    if (!pose.bPoseIsValid || !pose.bDeviceIsConnected)
+    if (!pose.bDeviceIsConnected)
         return hand;
+    // A real Hydra never drops out, and the MotionPack's controller setup
+    // restarts whenever a controller reads as disabled. Bridge short tracking
+    // gaps (the Quest over Steam Link drops poses every few seconds) with the
+    // last good pose; inputs keep flowing meanwhile.
+    auto &held = m_SixenseHeldPose[role == vr::TrackedControllerRole_LeftHand ? 0 : 1];
+    const auto now = GetTickCount64();
+    if (pose.bPoseIsValid) {
+        std::memcpy(held.pose.m, pose.mDeviceToAbsoluteTracking.m, sizeof(held.pose.m));
+        held.time = now;
+        held.valid = true;
+    } else if (!held.valid || now - held.time > 2000) {
+        return hand;
+    }
     hand.valid = true;
-    std::memcpy(hand.pose.m, pose.mDeviceToAbsoluteTracking.m, sizeof(hand.pose.m));
+    std::memcpy(hand.pose.m, held.pose.m, sizeof(hand.pose.m));
     if (!readInputs)
         return hand;
 
@@ -1082,7 +1104,7 @@ void VR::UpdateSixense(bool actionsReady)
             (m_Config.sixenseHandSpace == SixenseBridge::HandSpace::HeadYaw ? "HeadYaw" : "Tracking") + ")");
     }
 
-    const bool readInputs = actionsReady && m_SixenseInputActive;
+    const bool readInputs = actionsReady && (m_SixenseInputActive || SixenseEmulationOn());
     SixenseBridge::FrameInput frame;
     frame.left = ReadSixenseHand(vr::TrackedControllerRole_LeftHand, m_SixenseLeftSource, readInputs);
     frame.right = ReadSixenseHand(vr::TrackedControllerRole_RightHand, m_SixenseRightSource, readInputs);
