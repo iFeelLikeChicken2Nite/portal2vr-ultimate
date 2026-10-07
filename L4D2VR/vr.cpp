@@ -26,6 +26,15 @@
 // Original Portal2VR viewmodel calibration, retained for compatibility.
 // The experimental launcher profile cancels it without changing shot origin.
 static const Vector kLegacyViewmodelPositionOffset{4.5f, -1.0f, 1.5f};
+// The Sixense Perceptual Pack's portal gun viewmodel sits elsewhere relative
+// to the controller; tuned in a Quest 2 headset (forward, right, up subtracted
+// along the controller axes, Source units at VRScale 43.2).
+static const Vector kSixenseViewmodelPositionOffset{11.7f, 8.2f, -9.6f};
+static Vector BaseViewmodelPositionOffset()
+{
+    return GameModules::IsSixense() ?
+        kLegacyViewmodelPositionOffset + kSixenseViewmodelPositionOffset : kLegacyViewmodelPositionOffset;
+}
 
 VR::VR(Game *game) 
 {
@@ -1799,7 +1808,7 @@ void VR::UpdateTracking()
     m_RightControllerAngAbs.Normalize();
 
     // Apply both hardcoded and custom (from config) viewmodel offsets here:
-    m_ViewmodelPosOffset = kLegacyViewmodelPositionOffset + m_ViewmodelPosCustomOffset;
+    m_ViewmodelPosOffset = BaseViewmodelPositionOffset() + m_ViewmodelPosCustomOffset;
     m_ViewmodelAngOffset = m_ViewmodelAngCustomOffset;
 
     m_ViewmodelForward = m_RightControllerForward;
@@ -2472,7 +2481,7 @@ void VR::ParseConfigFile()
         std::to_string(m_ViewmodelPosCustomOffset.y) + "," +
         std::to_string(m_ViewmodelPosCustomOffset.z) +
         " EffectiveViewmodelPosOffset=" +
-        std::to_string(kLegacyViewmodelPositionOffset.x + m_ViewmodelPosCustomOffset.x) + "," +
-        std::to_string(kLegacyViewmodelPositionOffset.y + m_ViewmodelPosCustomOffset.y) + "," +
-        std::to_string(kLegacyViewmodelPositionOffset.z + m_ViewmodelPosCustomOffset.z));
+        std::to_string(BaseViewmodelPositionOffset().x + m_ViewmodelPosCustomOffset.x) + "," +
+        std::to_string(BaseViewmodelPositionOffset().y + m_ViewmodelPosCustomOffset.y) + "," +
+        std::to_string(BaseViewmodelPositionOffset().z + m_ViewmodelPosCustomOffset.z));
 }

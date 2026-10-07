@@ -103,6 +103,14 @@ To undo: delete `bin\d3d9.dll`, `bin\openvr_api.dll` and `VR`, and rename
 
 ## Status
 
+Played in a Quest 2 (Steam Link, RTX 2060) on 2026-10-07: sp_a2_sx_intro
+renders in stereo, Portal2VR's controller aim places portals where the right
+controller points, and the portal gun sits in the hand
+(`kSixenseViewmodelPositionOffset` in `vr.cpp`). This uses `SixenseMode=Off`:
+with `Auto` and the game's `sixense_mode 1`, the trigger reached the emulated
+Hydra but the game did not react (no calibration screen either), so the
+MotionPack's own free aim is still open.
+
 Done: module aliasing, Hydra data conversion, proxy, action set and default
 bindings, config keys, unit tests (pass as a 32-bit Windows build). The
 changed Portal2VR files pass a MinGW syntax check; the MSVC build and every
