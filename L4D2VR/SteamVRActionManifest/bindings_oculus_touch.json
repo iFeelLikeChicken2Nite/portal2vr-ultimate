@@ -119,7 +119,7 @@
             {
                "inputs" : {
                   "click" : {
-                     "output" : "/actions/sixense/in/Button2"
+                     "output" : "/actions/sixense/in/Button3"
                   }
                },
                "mode" : "button",
