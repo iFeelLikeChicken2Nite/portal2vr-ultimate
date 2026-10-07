@@ -37,3 +37,4 @@ SixenseMode=Off # Off (default for now): Portal2VR aims and fires from your cont
 SixenseHandSpace=Tracking # Tracking matches the flat-screen Hydra-OpenVR shims; HeadYaw keeps the virtual Hydra base in front of the headset as you turn
 KeepWindowResolution=false # Diagnostic, restart required: true keeps the game back buffer and menu viewports at window size instead of the headset eye size
 MenuSubmitMode=Full # Diagnostic: Full sends blank eyes and the menu overlay; BlankOnly skips the overlay; None sends nothing to SteamVR while in the main menu
+ShowSourceCrosshair=true # false hides the flat 2D crosshair in the headset (the gun still aims where the controller points)

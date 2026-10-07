@@ -57,6 +57,8 @@ struct ConfigSnapshot {
     // Diagnostic: what the main menu sends to SteamVR. 0 Full (blank eyes +
     // menu overlay), 1 BlankOnly (no overlay), 2 None (nothing submitted).
     int menuSubmitMode = 0;
+    // false hides Source's 2D crosshair in VR (it is drawn flat in the eye view).
+    bool showSourceCrosshair = true;
 };
 
 struct ConfigParseResult {
@@ -179,6 +181,7 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
 
     readFloat("TurnSpeed", result.value.turnSpeed, 0.01f, 2.0f);
     readBool("KeepWindowResolution", result.value.keepWindowResolution);
+    readBool("ShowSourceCrosshair", result.value.showSourceCrosshair);
     const auto menuSubmit = entries.find("MenuSubmitMode");
     if (menuSubmit != entries.end()) {
         if (menuSubmit->second == "Full") result.value.menuSubmitMode = 0;

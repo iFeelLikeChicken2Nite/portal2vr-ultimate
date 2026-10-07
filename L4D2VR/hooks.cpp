@@ -893,6 +893,8 @@ bool __fastcall Hooks::dCHudCrosshair_ShouldDraw(void* ecx, void* edx) {
 		Logger::Write(std::string("Crosshair ShouldDraw: Source returned ") +
 			(shouldDraw ? "true" : "false") + " (actual pixels unverified)");
 
+	if (!m_VR->m_Config.showSourceCrosshair && RuntimePublished() && m_VR->m_IsVREnabled)
+		return false;
 	// Keep the Source crosshair as a fallback until the optional laser is
 	// confirmed visible by a real VR test. Symbol resolution alone is not proof.
 	return shouldDraw;
