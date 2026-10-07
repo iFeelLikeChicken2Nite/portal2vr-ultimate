@@ -1,6 +1,7 @@
 #pragma once
 #include "sigscanner.h"
 #include "game.h"
+#include "game_modules.h"
 #include "logger.h"
 #include "startup_symbol_policy.h"
 #include "verified_portal_symbols.h"
@@ -17,7 +18,8 @@ struct Offset
 
     explicit Offset(VerifiedPortalSymbols::Symbol symbol)
     {
-        moduleName = symbol == VerifiedPortalSymbols::Symbol::ViewModelFov ? "client.dll" : "server.dll";
+        moduleName = GameModules::Resolve(
+            symbol == VerifiedPortalSymbols::Symbol::ViewModelFov ? "client.dll" : "server.dll");
         const auto resolved = VerifiedPortalSymbols::ResolveLoaded(symbol);
         address = resolved.address;
         shootCaller = resolved.shootCaller;
@@ -30,12 +32,14 @@ struct Offset
 
     Offset(std::string moduleName, int currentOffset, std::string signature, int sigOffset = 0)
     {
-        this->moduleName = moduleName;
+        // Signatures are written against the stock module names; the Sixense
+        // MotionPack's game DLLs are scanned under their own names.
+        this->moduleName = GameModules::Resolve(moduleName);
         this->offset = currentOffset;
         this->signature = signature;
         this->sigOffset = sigOffset;
 
-        int newOffset = SigScanner::VerifyOffset(moduleName, currentOffset, signature, sigOffset);
+        int newOffset = SigScanner::VerifyOffset(this->moduleName, currentOffset, signature, sigOffset);
         if (newOffset > 0)
         {
             this->offset = newOffset;
@@ -44,7 +48,7 @@ struct Offset
         if (newOffset == -1)
             return;
 
-        this->address = (uintptr_t)GetModuleHandleA(moduleName.c_str()) + this->offset;
+        this->address = (uintptr_t)GetModuleHandleA(this->moduleName.c_str()) + this->offset;
     }
 };
 

@@ -368,6 +368,10 @@
     <ClInclude Include="tracked_device.h" />
     <ClInclude Include="logger.h" />
     <ClInclude Include="game.h" />
+    <ClInclude Include="game_modules.h" />
+    <ClInclude Include="sixense_api.h" />
+    <ClInclude Include="sixense_bridge.h" />
+    <ClInclude Include="sixense_mode.h" />
     <ClInclude Include="hooks.h" />
     <ClInclude Include="offsets.h" />
     <ClInclude Include="sdk\bitbuf.h" />
@@ -523,6 +527,7 @@
     <ClCompile Include="..\dxvk\src\vulkan\vulkan_presenter.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="game.cpp" />
+    <ClCompile Include="sixense_mode.cpp" />
     <ClCompile Include="hooks.cpp" />
     <ClCompile Include="sdk\bitbuf.cpp" />
     <ClCompile Include="sdk\checksum_crc.cpp" />

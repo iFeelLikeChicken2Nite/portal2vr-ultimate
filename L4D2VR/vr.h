@@ -14,6 +14,7 @@
 #include "menu_overlay_placement.h"
 #include "muzzle_origin.h"
 #include "openvr_session.h"
+#include "sixense_bridge.h"
 #include <filesystem>
 
 #define MAX_STR_LEN 256
@@ -230,6 +231,24 @@ public:
 	vr::VRActionHandle_t m_HapticLeft = vr::k_ulInvalidActionHandle;
 	vr::VRActionHandle_t m_HapticRight = vr::k_ulInvalidActionHandle;
 
+	// Sixense MotionPack: Razer Hydra emulation (optional action set)
+	bool m_SixenseActionsAvailable = false;
+	bool m_SixenseInputActive = false;
+	bool m_SixensePublishing = false;
+	std::uint8_t m_SixenseSequence = 0;
+	vr::VRActionSetHandle_t m_SixenseActionSet = vr::k_ulInvalidActionSetHandle;
+	vr::VRInputValueHandle_t m_SixenseLeftSource = vr::k_ulInvalidInputValueHandle;
+	vr::VRInputValueHandle_t m_SixenseRightSource = vr::k_ulInvalidInputValueHandle;
+	vr::VRActionHandle_t m_SixenseTrigger = vr::k_ulInvalidActionHandle;
+	vr::VRActionHandle_t m_SixenseJoystick = vr::k_ulInvalidActionHandle;
+	vr::VRActionHandle_t m_SixenseJoystickClick = vr::k_ulInvalidActionHandle;
+	vr::VRActionHandle_t m_SixenseBumper = vr::k_ulInvalidActionHandle;
+	vr::VRActionHandle_t m_SixenseButton1 = vr::k_ulInvalidActionHandle;
+	vr::VRActionHandle_t m_SixenseButton2 = vr::k_ulInvalidActionHandle;
+	vr::VRActionHandle_t m_SixenseButton3 = vr::k_ulInvalidActionHandle;
+	vr::VRActionHandle_t m_SixenseButton4 = vr::k_ulInvalidActionHandle;
+	vr::VRActionHandle_t m_SixenseStart = vr::k_ulInvalidActionHandle;
+
 	// actions
 	vr::VRActionHandle_t m_ActionJump;
 	vr::VRActionHandle_t m_ActionPrimaryAttack;
@@ -294,6 +313,11 @@ public:
 	void SubmitExperimentalHUDOverlay();
 	void GetPoses();
 	bool UpdatePosesAndActions();
+	void InitSixenseActions();
+	bool SixenseInputWanted() const;
+	SixenseBridge::HandInput ReadSixenseHand(vr::ETrackedControllerRole role,
+		vr::VRInputValueHandle_t source, bool readInputs);
+	void UpdateSixense(bool actionsReady);
 	void GetViewParameters();
 	void ProcessMenuInput();
 	void SendMenuMouse(UiInput::MouseTransition transition);

@@ -6,6 +6,7 @@
 #include "sdk_server.h"
 #include "vr.h"
 #include "offsets.h"
+#include "game_modules.h"
 #include "logger.h"
 #include "runtime_publication.h"
 #include "hook_startup_rollback.h"
@@ -459,7 +460,7 @@ void Hooks::InitNativeBeam()
 {
     if (!m_Game->m_Offsets->m_LaserAvailable)
         return;
-    const auto module = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(L"client.dll"));
+    const auto module = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(GameModules::ResolveWide(L"client.dll")));
     const auto read = [](std::uintptr_t address, void *output, std::size_t size) {
         SIZE_T bytesRead = 0;
         return address && ReadProcessMemory(GetCurrentProcess(),

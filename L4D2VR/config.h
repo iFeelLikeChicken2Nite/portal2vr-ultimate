@@ -3,6 +3,7 @@
 #include "tracking_space.h"
 #include "roomscale_motion.h"
 #include "portal_orientation.h"
+#include "sixense_bridge.h"
 
 #include <array>
 #include <cmath>
@@ -46,6 +47,10 @@ struct ConfigSnapshot {
     uint32_t renderWindow = 0;
     std::array<float, 3> viewmodelPosOffset{};
     std::array<float, 3> viewmodelAngOffset{};
+    // Sixense MotionPack: emulate Razer Hydra controllers when the game runs
+    // client_sixense.dll (Auto) or never (Off).
+    bool sixenseEmulation = true;
+    SixenseBridge::HandSpace sixenseHandSpace = SixenseBridge::HandSpace::Tracking;
 };
 
 struct ConfigParseResult {
@@ -210,6 +215,24 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
             result.value.portalOrientationMode = PortalOrientation::Mode::PreserveHorizon;
         else
             result.errors.push_back("PortalOrientationMode is invalid; keeping previous value");
+    }
+    const auto sixenseMode = entries.find("SixenseMode");
+    if (sixenseMode != entries.end()) {
+        if (sixenseMode->second == "Auto")
+            result.value.sixenseEmulation = true;
+        else if (sixenseMode->second == "Off")
+            result.value.sixenseEmulation = false;
+        else
+            result.errors.push_back("SixenseMode is invalid; expected Auto or Off");
+    }
+    const auto sixenseHandSpace = entries.find("SixenseHandSpace");
+    if (sixenseHandSpace != entries.end()) {
+        if (sixenseHandSpace->second == "Tracking")
+            result.value.sixenseHandSpace = SixenseBridge::HandSpace::Tracking;
+        else if (sixenseHandSpace->second == "HeadYaw")
+            result.value.sixenseHandSpace = SixenseBridge::HandSpace::HeadYaw;
+        else
+            result.errors.push_back("SixenseHandSpace is invalid; expected Tracking or HeadYaw");
     }
     readBool("VerboseDiagnostics", result.value.verboseDiagnostics);
     readBool("ExperimentalHUDOverlay", result.value.experimentalHudOverlay);

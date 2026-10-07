@@ -21,6 +21,18 @@
     <ClInclude Include="game.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="game_modules.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="sixense_api.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="sixense_bridge.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="sixense_mode.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
     <ClInclude Include="vr.h">
       <Filter>Source Files</Filter>
     </ClInclude>
@@ -840,6 +852,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="game.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sixense_mode.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="sdk\checksum_crc.cpp">

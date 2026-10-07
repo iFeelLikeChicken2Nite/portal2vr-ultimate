@@ -36,6 +36,152 @@
          ],
          "sources" : []
       },
+      "/actions/sixense" : {
+         "sources" : [
+            {
+               "inputs" : {
+                  "click" : {
+                     "output" : "/actions/sixense/in/JoystickClick"
+                  },
+                  "position" : {
+                     "output" : "/actions/sixense/in/Joystick"
+                  }
+               },
+               "mode" : "joystick",
+               "parameters" : {
+                  "deadzone_pct" : "10"
+               },
+               "path" : "/user/hand/left/input/thumbstick"
+            },
+            {
+               "inputs" : {
+                  "click" : {
+                     "output" : "/actions/sixense/in/JoystickClick"
+                  },
+                  "position" : {
+                     "output" : "/actions/sixense/in/Joystick"
+                  }
+               },
+               "mode" : "joystick",
+               "parameters" : {
+                  "deadzone_pct" : "10"
+               },
+               "path" : "/user/hand/right/input/thumbstick"
+            },
+            {
+               "inputs" : {
+                  "pull" : {
+                     "output" : "/actions/sixense/in/Trigger"
+                  }
+               },
+               "mode" : "trigger",
+               "path" : "/user/hand/left/input/trigger"
+            },
+            {
+               "inputs" : {
+                  "pull" : {
+                     "output" : "/actions/sixense/in/Trigger"
+                  }
+               },
+               "mode" : "trigger",
+               "path" : "/user/hand/right/input/trigger"
+            },
+            {
+               "inputs" : {
+                  "click" : {
+                     "output" : "/actions/sixense/in/Bumper"
+                  }
+               },
+               "mode" : "button",
+               "path" : "/user/hand/left/input/grip",
+               "parameters" : {
+                  "force_input" : "force",
+                  "click_activate_threshold" : "0.45",
+                  "click_deactivate_threshold" : "0.4"
+               }
+            },
+            {
+               "inputs" : {
+                  "click" : {
+                     "output" : "/actions/sixense/in/Bumper"
+                  }
+               },
+               "mode" : "button",
+               "path" : "/user/hand/right/input/grip",
+               "parameters" : {
+                  "force_input" : "force",
+                  "click_activate_threshold" : "0.45",
+                  "click_deactivate_threshold" : "0.4"
+               }
+            },
+            {
+               "inputs" : {
+                  "click" : {
+                     "output" : "/actions/sixense/in/Start"
+                  }
+               },
+               "mode" : "button",
+               "path" : "/user/hand/left/input/b"
+            },
+            {
+               "inputs" : {
+                  "click" : {
+                     "output" : "/actions/sixense/in/Button2"
+                  }
+               },
+               "mode" : "button",
+               "path" : "/user/hand/left/input/a"
+            },
+            {
+               "inputs" : {
+                  "click" : {
+                     "output" : "/actions/sixense/in/Button1"
+                  }
+               },
+               "mode" : "button",
+               "path" : "/user/hand/right/input/b"
+            },
+            {
+               "inputs" : {
+                  "click" : {
+                     "output" : "/actions/sixense/in/Button2"
+                  }
+               },
+               "mode" : "button",
+               "path" : "/user/hand/right/input/a"
+            },
+            {
+               "inputs" : {
+                  "north" : {
+                     "output" : "/actions/sixense/in/Button3"
+                  },
+                  "south" : {
+                     "output" : "/actions/sixense/in/Button4"
+                  }
+               },
+               "mode" : "dpad",
+               "parameters" : {
+                  "sub_mode" : "click"
+               },
+               "path" : "/user/hand/left/input/trackpad"
+            },
+            {
+               "inputs" : {
+                  "north" : {
+                     "output" : "/actions/sixense/in/Button3"
+                  },
+                  "south" : {
+                     "output" : "/actions/sixense/in/Button4"
+                  }
+               },
+               "mode" : "dpad",
+               "parameters" : {
+                  "sub_mode" : "click"
+               },
+               "path" : "/user/hand/right/input/trackpad"
+            }
+         ]
+      },
       "/actions/main" : {
          "sources" : [
             {

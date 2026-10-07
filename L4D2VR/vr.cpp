@@ -9,6 +9,8 @@
 #include "aim_feedback.h"
 #include "native_beam.h"
 #include "hud_capture.h"
+#include "game_modules.h"
+#include "sixense_mode.h"
 #include "sdk/ivdebugoverlay.h"
 #include <iostream>
 #include <fstream>
@@ -16,6 +18,7 @@
 #include <string>
 #include <filesystem>
 #include <algorithm>
+#include <cstring>
 #include <d3d9_vr.h>
 
 // Original Portal2VR viewmodel calibration, retained for compatibility.
@@ -299,7 +302,33 @@ bool VR::SetActionManifest(const char *fileName)
             std::to_string(baseError) + "/" + std::to_string(leftError) + "/" +
             std::to_string(rightError) + "); haptics disabled");
     }
+    InitSixenseActions();
     return true;
+}
+
+void VR::InitSixenseActions()
+{
+    const auto setError = m_Input->GetActionSetHandle("/actions/sixense", &m_SixenseActionSet);
+    bool ok = setError == vr::VRInputError_None && m_SixenseActionSet != vr::k_ulInvalidActionSetHandle;
+    const auto action = [&](const char *name, vr::VRActionHandle_t &handle) {
+        const auto error = m_Input->GetActionHandle(name, &handle);
+        ok = ok && error == vr::VRInputError_None && handle != vr::k_ulInvalidActionHandle;
+    };
+    action("/actions/sixense/in/Trigger", m_SixenseTrigger);
+    action("/actions/sixense/in/Joystick", m_SixenseJoystick);
+    action("/actions/sixense/in/JoystickClick", m_SixenseJoystickClick);
+    action("/actions/sixense/in/Bumper", m_SixenseBumper);
+    action("/actions/sixense/in/Button1", m_SixenseButton1);
+    action("/actions/sixense/in/Button2", m_SixenseButton2);
+    action("/actions/sixense/in/Button3", m_SixenseButton3);
+    action("/actions/sixense/in/Button4", m_SixenseButton4);
+    action("/actions/sixense/in/Start", m_SixenseStart);
+    // One action per Hydra control; the hand is chosen when reading it.
+    ok = ok && m_Input->GetInputSourceHandle("/user/hand/left", &m_SixenseLeftSource) == vr::VRInputError_None &&
+        m_Input->GetInputSourceHandle("/user/hand/right", &m_SixenseRightSource) == vr::VRInputError_None;
+    m_SixenseActionsAvailable = ok;
+    Logger::Write(ok ? "Optional OpenVR Sixense (Razer Hydra) actions available" :
+        "Optional OpenVR Sixense actions unavailable; MotionPack controllers will track without buttons");
 }
 
 bool VR::InstallApplicationManifest(const char *fileName)
@@ -403,6 +432,7 @@ void VR::Update()
     SubmitVRTextures();
     const bool actionsReady = UpdatePosesAndActions();
     GetPoses();
+    UpdateSixense(actionsReady);
     if (!actionsReady) {
         m_PrevFrameTime = std::chrono::steady_clock::now();
         UpdateTracking();
@@ -864,16 +894,30 @@ bool VR::UpdatePosesAndActions()
         m_LastPoseError = 0;
         ++m_PoseFetchSequence;
     }
-    const bool useHaptics = m_Config.experimentalPortalShotHaptics && m_HapticOutputsAvailable;
-    vr::VRActiveActionSet_t activeSets[] = { m_ActiveActionSet, m_ActiveHapticActionSet };
-    auto inputError = m_Input->UpdateActionState(activeSets,
-        sizeof(vr::VRActiveActionSet_t), useHaptics ? 2 : 1);
+    const bool sixenseInput = SixenseInputWanted();
+    if (sixenseInput != m_SixenseInputActive)
+        Logger::Write(sixenseInput ? "Sixense controls active: Hydra bindings take priority over Portal2VR's" :
+            "Sixense controls inactive");
+    m_SixenseInputActive = sixenseInput;
+    const bool useHaptics = (m_Config.experimentalPortalShotHaptics || sixenseInput) && m_HapticOutputsAvailable;
+    // The Sixense set outranks the main set, so a physical control bound to a
+    // Hydra action is withheld from Portal2VR's own action on the same input.
+    vr::VRActiveActionSet_t sixenseSet{};
+    sixenseSet.ulActionSet = m_SixenseActionSet;
+    sixenseSet.nPriority = 1;
+    const auto updateActions = [&](bool haptics) {
+        vr::VRActiveActionSet_t activeSets[3] = { m_ActiveActionSet };
+        uint32_t count = 1;
+        if (haptics) activeSets[count++] = m_ActiveHapticActionSet;
+        if (sixenseInput) activeSets[count++] = sixenseSet;
+        return m_Input->UpdateActionState(activeSets, sizeof(vr::VRActiveActionSet_t), count);
+    };
+    auto inputError = updateActions(useHaptics);
     if (inputError != vr::VRInputError_None && useHaptics) {
         Logger::Write("OpenVR haptic action set update failed (error " +
             std::to_string(inputError) + "); disabling optional haptics");
         m_HapticOutputsAvailable = false;
-        inputError = m_Input->UpdateActionState(&m_ActiveActionSet,
-            sizeof(vr::VRActiveActionSet_t), 1);
+        inputError = updateActions(false);
     }
     if (inputError != vr::VRInputError_None) {
         if (m_LastInputError != inputError)
@@ -914,6 +958,92 @@ void VR::DispatchPortalShotHaptic(bool actionsReady)
             Logger::Write("OpenVR portal-shot haptic failed (error " + std::to_string(result) + ")");
             m_NextHapticErrorLog = now + std::chrono::seconds(5);
         }
+    }
+}
+
+bool VR::SixenseInputWanted() const
+{
+    return m_SixenseActionsAvailable && m_Config.sixenseEmulation && GameModules::IsSixense() &&
+        m_Game->m_EngineClient->IsInGame() && !m_Game->m_VguiSurface->IsCursorVisible();
+}
+
+SixenseBridge::HandInput VR::ReadSixenseHand(vr::ETrackedControllerRole role,
+    vr::VRInputValueHandle_t source, bool readInputs)
+{
+    // Physical hands: the Hydra is held left/right regardless of LeftHanded.
+    SixenseBridge::HandInput hand;
+    const auto index = m_System->GetTrackedDeviceIndexForControllerRole(role);
+    if (!IsUsableTrackedDeviceIndex(index, vr::k_unMaxTrackedDeviceCount, vr::k_unTrackedDeviceIndexInvalid))
+        return hand;
+    const auto &pose = m_Poses[index];
+    if (!pose.bPoseIsValid || !pose.bDeviceIsConnected)
+        return hand;
+    hand.valid = true;
+    std::memcpy(hand.pose.m, pose.mDeviceToAbsoluteTracking.m, sizeof(hand.pose.m));
+    if (!readInputs)
+        return hand;
+
+    vr::InputAnalogActionData_t analog{};
+    if (m_Input->GetAnalogActionData(m_SixenseTrigger, &analog, sizeof(analog), source) == vr::VRInputError_None &&
+        analog.bActive)
+        hand.trigger = analog.x;
+    analog = {};
+    if (m_Input->GetAnalogActionData(m_SixenseJoystick, &analog, sizeof(analog), source) == vr::VRInputError_None &&
+        analog.bActive) {
+        hand.joystickX = analog.x;
+        hand.joystickY = analog.y;
+    }
+    const auto pressed = [&](vr::VRActionHandle_t action) {
+        vr::InputDigitalActionData_t digital{};
+        return m_Input->GetDigitalActionData(action, &digital, sizeof(digital), source) == vr::VRInputError_None &&
+            digital.bActive && digital.bState;
+    };
+    const struct { vr::VRActionHandle_t action; std::uint32_t bit; } buttons[] = {
+        { m_SixenseBumper, SixenseBridge::kButtonBumper },
+        { m_SixenseJoystickClick, SixenseBridge::kButtonJoystick },
+        { m_SixenseButton1, SixenseBridge::kButton1 },
+        { m_SixenseButton2, SixenseBridge::kButton2 },
+        { m_SixenseButton3, SixenseBridge::kButton3 },
+        { m_SixenseButton4, SixenseBridge::kButton4 },
+        { m_SixenseStart, SixenseBridge::kButtonStart },
+    };
+    for (const auto &button : buttons)
+        if (pressed(button.action))
+            hand.buttons |= button.bit;
+    return hand;
+}
+
+void VR::UpdateSixense(bool actionsReady)
+{
+    if (!m_Config.sixenseEmulation || !GameModules::IsSixense()) {
+        if (m_SixensePublishing) {
+            SixenseMode::History().Clear();
+            m_SixensePublishing = false;
+            Logger::Write("Sixense emulation stopped; MotionPack controllers read as disconnected");
+        }
+        return;
+    }
+    if (!m_SixensePublishing) {
+        m_SixensePublishing = true;
+        Logger::Write(std::string("Sixense emulation serving Razer Hydra data from OpenVR (hand space ") +
+            (m_Config.sixenseHandSpace == SixenseBridge::HandSpace::HeadYaw ? "HeadYaw" : "Tracking") + ")");
+    }
+
+    const bool readInputs = actionsReady && m_SixenseInputActive;
+    SixenseBridge::FrameInput frame;
+    frame.left = ReadSixenseHand(vr::TrackedControllerRole_LeftHand, m_SixenseLeftSource, readInputs);
+    frame.right = ReadSixenseHand(vr::TrackedControllerRole_RightHand, m_SixenseRightSource, readInputs);
+    const auto &hmd = m_Poses[vr::k_unTrackedDeviceIndex_Hmd];
+    frame.headValid = hmd.bPoseIsValid && hmd.bDeviceIsConnected;
+    std::memcpy(frame.head.m, hmd.mDeviceToAbsoluteTracking.m, sizeof(frame.head.m));
+    SixenseMode::History().Publish(SixenseBridge::BuildFrame(frame, m_Config.sixenseHandSpace, m_SixenseSequence++));
+
+    for (int which = 0; which < 2; ++which) {
+        const int pulseMs = SixenseMode::Vibrations().Take(which);
+        if (!pulseMs || !m_HapticOutputsAvailable || !m_SixenseInputActive)
+            continue;
+        m_Input->TriggerHapticVibrationAction(which == 0 ? m_HapticLeft : m_HapticRight, 0.0f,
+            pulseMs / 1000.0f, 150.0f, 0.5f, vr::k_ulInvalidInputValueHandle);
     }
 }
 

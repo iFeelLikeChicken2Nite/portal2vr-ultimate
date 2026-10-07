@@ -7,6 +7,7 @@
 #include "offsets.h"
 #include "sigscanner.h"
 #include "logger.h"
+#include "game_modules.h"
 #include <vector>
 #include <winver.h>
 
@@ -40,9 +41,26 @@ Game::~Game()
 
 bool Game::Initialize()
 {
+    // The Sixense MotionPack loads client_sixense.dll instead of client.dll;
+    // settle which game variant is running before any module is named.
+    const auto variantStart = GetTickCount64();
+    GameModules::Variant variant = GameModules::Variant::Unknown;
+    while ((variant = GameModules::DetectVariant([](const char *name) {
+               return GetModuleHandleA(name) != nullptr; })) == GameModules::Variant::Unknown) {
+        if (GetTickCount64() - variantStart > 30000) {
+            errorMsg("Timed out waiting for client.dll or client_sixense.dll");
+            return false;
+        }
+        Sleep(50);
+    }
+    GameModules::SetVariant(variant);
+    Logger::Write(variant == GameModules::Variant::Sixense ?
+        "Game variant: Sixense MotionPack (client_sixense.dll/server_sixense.dll)" :
+        "Game variant: stock Portal 2 (client.dll/server.dll)");
+
     const struct Module { const char *name; uintptr_t *base; } modules[] = {
-        { "client.dll", &m_BaseClient }, { "engine.dll", &m_BaseEngine },
-        { "materialsystem.dll", &m_BaseMaterialSystem }, { "server.dll", &m_BaseServer },
+        { GameModules::Resolve("client.dll"), &m_BaseClient }, { "engine.dll", &m_BaseEngine },
+        { "materialsystem.dll", &m_BaseMaterialSystem }, { GameModules::Resolve("server.dll"), &m_BaseServer },
         { "vgui2.dll", &m_BaseVgui2 }
     };
     for (const auto &module : modules) {
@@ -113,6 +131,7 @@ bool Game::Initialize()
 
 void *Game::GetInterface(const char *dllname, const char *interfacename)
 {
+    dllname = GameModules::Resolve(dllname);
     HMODULE module = GetModuleHandleA(dllname);
     if (!module) return nullptr;
     tCreateInterface CreateInterface = (tCreateInterface)GetProcAddress(module, "CreateInterface");

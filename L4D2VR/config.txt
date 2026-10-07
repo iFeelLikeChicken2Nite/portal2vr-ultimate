@@ -33,3 +33,5 @@ ViewmodelPosCustomOffsetZ=0.0
 ViewmodelAngCustomOffsetX=0.0
 ViewmodelAngCustomOffsetY=0.0
 ViewmodelAngCustomOffsetZ=0.0
+SixenseMode=Auto # Auto emulates Razer Hydra controllers when the Sixense MotionPack (client_sixense.dll) is running; Off disables it. Needs the sixense.dll proxy in portal2_sixense\bin
+SixenseHandSpace=Tracking # Tracking matches the flat-screen Hydra-OpenVR shims; HeadYaw keeps the virtual Hydra base in front of the headset as you turn

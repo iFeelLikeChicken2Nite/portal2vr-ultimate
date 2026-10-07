@@ -45,6 +45,10 @@ Keep these local files together when moving the checkout or recovering an instal
 
 Do not delete install state/backups to fix an error. If only user preferences are malformed, copy that preferences file aside before replacing it; startup does not silently reset it. Open mod log accesses `bin/portal2vr.log` in the selected game folder. The older `python -m tools.test_launcher` remains available for manual tests using the same backups/transaction lock. Changing settings in one launcher does not silently synchronize the other launcher's form.
 
+## Sixense MotionPack (work in progress)
+
+This branch adds experimental support for the Portal 2 Sixense MotionPack: Portal2VR emulates the Razer Hydra from your VR controllers and a small `sixense.dll` proxy hands that data to the MotionPack. It is not yet tested in a headset; see [SIXENSE.md](SIXENSE.md) for the design, manual install and open questions.
+
 ## Changes from the original mod
 
 - Digital inputs send press/release commands on state transitions instead of repeating release commands every frame. One-shot actions trigger only on press transitions.
@@ -78,6 +82,8 @@ From a Developer Command Prompt in the repository root:
 msbuild l4d2vr.sln /t:Build /p:Configuration=Release /p:Platform=x86 /p:PORTAL2_DIR=
 msbuild tests\stabilization_tests.vcxproj /t:Build /p:Configuration=Release /p:Platform=Win32
 tests\bin\stabilization_tests.exe
+msbuild tests\sixense_bridge_tests.vcxproj /t:Build /p:Configuration=Release /p:Platform=Win32
+tests\bin\sixense_bridge_tests.exe
 python -m unittest discover -s tests -p test_*.py
 ```
 
