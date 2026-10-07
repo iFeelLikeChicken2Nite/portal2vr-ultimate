@@ -1948,6 +1948,7 @@ double __fastcall Hooks::dComputeError(void* ecx, void* edx) {
 
 bool __fastcall Hooks::dUpdateObject(void* ecx, void* edx, void* pPlayer, float flError, bool bIsTeleport) {
 	if (!RuntimePublished()) return hkUpdateObject.fOriginal(ecx, pPlayer, flError, bIsTeleport);
+	m_VR->m_LastHoldTick.store(GetTickCount64()); // something is held this tick
 	bool wasTrue = m_VR->m_OverrideEyeAngles;
 
 	m_VR->m_OverrideEyeAngles = true;

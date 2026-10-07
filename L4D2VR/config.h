@@ -66,6 +66,12 @@ struct ConfigSnapshot {
     // so hands read as relative to a base at waist height in front of the
     // player rather than to the head or tracking origin. Live-tunable.
     std::array<float, 3> sixenseBaseOffset{0.0f, 550.0f, 450.0f};
+    // Hydra mode: apply VR-friendly MotionPack settings on entering a map.
+    bool sixenseVRDefaults = true;
+    // Hydra mode: right stick up/down while holding adds virtual reach (mm).
+    float sixenseHoldDepthSpeed = 400.0f; // mm per second at full stick
+    float sixenseHoldDepthMin = -250.0f;
+    float sixenseHoldDepthMax = 600.0f;
 };
 
 struct ConfigParseResult {
@@ -193,6 +199,10 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
     readFloat("SixenseBaseOffsetX", result.value.sixenseBaseOffset[0], -2000.0f, 2000.0f);
     readFloat("SixenseBaseOffsetY", result.value.sixenseBaseOffset[1], -2000.0f, 2000.0f);
     readFloat("SixenseBaseOffsetZ", result.value.sixenseBaseOffset[2], -2000.0f, 2000.0f);
+    readBool("SixenseVRDefaults", result.value.sixenseVRDefaults);
+    readFloat("SixenseHoldDepthSpeed", result.value.sixenseHoldDepthSpeed, 0.0f, 3000.0f);
+    readFloat("SixenseHoldDepthMin", result.value.sixenseHoldDepthMin, -2000.0f, 0.0f);
+    readFloat("SixenseHoldDepthMax", result.value.sixenseHoldDepthMax, 0.0f, 3000.0f);
     const auto menuSubmit = entries.find("MenuSubmitMode");
     if (menuSubmit != entries.end()) {
         if (menuSubmit->second == "Full") result.value.menuSubmitMode = 0;

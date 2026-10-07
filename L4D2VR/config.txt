@@ -42,3 +42,7 @@ SixenseOrangeOnRightGrip=true # Hydra mode: right grip fires the orange portal (
 SixenseBaseOffsetX=0.0 # Hydra mode, mm: shifts where the game thinks your hands are relative to the Hydra base (+ = right)
 SixenseBaseOffsetY=550.0 # mm, + = up; default puts the virtual base at waist height (HeadYaw hand space)
 SixenseBaseOffsetZ=450.0 # mm, + = toward you; default puts the virtual base about 45 cm in front of you
+SixenseVRDefaults=true # Hydra mode: on entering a map, set hold multiplier 2, 1:1 wrist rotation, no hold spin, no tilt gestures (jump/crouch)
+SixenseHoldDepthSpeed=400.0 # Hydra mode: mm per second the right stick (up/down) pushes a held object away or pulls it in
+SixenseHoldDepthMin=-250.0 # mm, closest the stick can pull a held object
+SixenseHoldDepthMax=600.0 # mm, furthest the stick can push a held object

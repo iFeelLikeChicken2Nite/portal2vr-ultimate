@@ -1018,6 +1018,45 @@ void VR::DispatchPortalShotHaptic(bool actionsReady)
     }
 }
 
+// Hydra mode: the MotionPack sets a held object's distance from how far the
+// right Hydra reaches toward its base. While something is held (the server's
+// grab controller updates it every tick), right stick up/down adds virtual
+// reach, so distance is controlled with the stick instead of a long arm.
+// Also applies VR-friendly MotionPack settings once per map.
+void VR::ApplySixenseHoldDepth(SixenseBridge::LegacyAllControllerData &hydra)
+{
+    const auto now = GetTickCount64();
+    const float dt = m_LastHydraFrameTick ? (std::min)(0.1f, (now - m_LastHydraFrameTick) / 1000.0f) : 0.0f;
+    m_LastHydraFrameTick = now;
+
+    const bool inGame = m_Game->m_EngineClient->IsInGame();
+    if (!inGame) {
+        m_SixenseGameDefaultsApplied = false;
+    } else if (!m_SixenseGameDefaultsApplied && m_Config.sixenseVRDefaults && m_SixenseInputActive) {
+        m_Game->ClientCmd_Unrestricted("sixense_hold_multiplier 2; sixense_aim_1to1_heading_multiplier 1; "
+            "sixense_aim_1to1_pitch_multiplier 1; sixense_hold_spin_speed 0; sixense_disable_gestures 1");
+        m_SixenseGameDefaultsApplied = true;
+        Logger::Write("Sixense: applied VR defaults (hold multiplier 2, 1:1 rotation, no hold spin, no tilt gestures)");
+    }
+
+    const bool holding = now - m_LastHoldTick.load() < 250;
+    if (holding && !m_SixenseHoldLogged) {
+        m_SixenseHoldLogged = true;
+        Logger::Write("Sixense: held object detected; right stick up/down now sets its distance");
+    }
+    if (!holding || !m_SixenseInputActive) {
+        m_SixenseHoldDepth = 0.0f;
+        return;
+    }
+    vr::InputAnalogActionData_t stick{};
+    if (GetAnalogActionData(m_ActionTurn, stick) && std::fabs(stick.y) > 0.2f)
+        m_SixenseHoldDepth += stick.y * m_Config.sixenseHoldDepthSpeed * dt;
+    m_SixenseHoldDepth = (std::max)(m_Config.sixenseHoldDepthMin, (std::min)(m_Config.sixenseHoldDepthMax, m_SixenseHoldDepth));
+    auto &right = hydra.controllers[1];
+    if (right.enabled)
+        right.pos[2] -= m_SixenseHoldDepth; // -Z is away from the player
+}
+
 bool VR::SixenseEmulationOn() const
 {
     return m_IsInitialized && m_SixenseActionsAvailable && m_Config.sixenseEmulation && GameModules::IsSixense();
@@ -1129,6 +1168,7 @@ void VR::UpdateSixense(bool actionsReady)
         for (int axis = 0; axis < 3; ++axis)
             controller.pos[axis] += m_Config.sixenseBaseOffset[axis];
     }
+    ApplySixenseHoldDepth(hydra);
     SixenseMode::History().Publish(hydra);
 
     for (int which = 0; which < 2; ++which) {

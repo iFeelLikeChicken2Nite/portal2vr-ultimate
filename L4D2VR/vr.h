@@ -319,6 +319,12 @@ public:
 	void InitSixenseActions();
 	bool SixenseInputWanted() const;
 	bool SixenseEmulationOn() const;
+	void ApplySixenseHoldDepth(SixenseBridge::LegacyAllControllerData &hydra);
+	std::atomic<unsigned long long> m_LastHoldTick{0};
+	unsigned long long m_LastHydraFrameTick = 0;
+	float m_SixenseHoldDepth = 0.0f;
+	bool m_SixenseGameDefaultsApplied = false;
+	bool m_SixenseHoldLogged = false;
 	SixenseBridge::HandInput ReadSixenseHand(vr::ETrackedControllerRole role,
 		vr::VRInputValueHandle_t source, bool readInputs);
 	void UpdateSixense(bool actionsReady);
