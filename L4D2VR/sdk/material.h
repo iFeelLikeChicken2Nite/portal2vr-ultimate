@@ -162,7 +162,7 @@ public:
 	virtual void GetVideoCardIdentifierEv() = 0; //CMaterialSystem::GetVideoCardIdentifier(void)
 	virtual void SpewDriverInfoEv() = 0; //CMaterialSystem::SpewDriverInfo(void)
 	virtual void GetBackBufferDimensions(int &, int &) = 0; //CMaterialSystem::GetBackBufferDimensions(int &,int &)
-	virtual ImageFormat GetBackBufferFormat() = 0; //CMaterialSystem::GetBackBufferFormat(void)
+	virtual ImageFormat GetBackBufferFormat_Slot() = 0; //CMaterialSystem::GetBackBufferFormat(void)
 	virtual void GetAspectRatioInfo() = 0; //CMaterialSystem::GetAspectRatioInfo(void)const
 	virtual void SupportsHDRModeE9HDRType_t() = 0; //CMaterialSystem::SupportsHDRMode(HDRType_t)
 	virtual void AddViewEPv() = 0; //CMaterialSystem::AddView(void *)
@@ -209,7 +209,7 @@ public:
 	virtual void ReloadTexturesEv() = 0; //CMaterialSystem::ReloadTextures(void)
 	virtual void ReloadMaterialsEPKc() = 0; //CMaterialSystem::ReloadMaterials(char const*)
 	virtual void CreateMaterialEPKcP9KeyValues() = 0; //CMaterialSystem::CreateMaterial(char const*,KeyValues *)
-	virtual IMaterial *FindMaterial(char const *pMaterialName, const char *pTextureGroupName, bool complain = true, const char *pComplainPrefix = NULL) = 0; //CMaterialSystem::FindMaterial(char const*,char const*,bool,char const*)
+	virtual IMaterial *FindMaterial_Slot(char const *pMaterialName, const char *pTextureGroupName, bool complain, const char *pComplainPrefix) = 0; //CMaterialSystem::FindMaterial(char const*,char const*,bool,char const*)
 	virtual void IsMaterialLoaded() = 0; //CMaterialSystem::IsMaterialLoaded(char const*)
 	virtual void FirstMaterialEv() = 0; //CMaterialSystem::FirstMaterial(void)
 	virtual void NextMaterialEt() = 0; //CMaterialSystem::NextMaterial(ushort)
@@ -219,17 +219,17 @@ public:
 	virtual ITexture  *FindTexture(char const* pTextureName, const char* pTextureGroupName, bool complain = true, int nAdditionalCreationFlags = 0) = 0; //CMaterialSystem::FindTexture(char const*,char const*,bool,int)
 	virtual void IsTextureLoadedEPKc() = 0; //CMaterialSystem::IsTextureLoaded(char const*)
 	virtual void CreateProceduralTextureEPKcS1_ii11ImageFormati() = 0; //CMaterialSystem::CreateProceduralTexture(char const*,char const*,int,int,ImageFormat,int)
-	virtual void BeginRenderTargetAllocation() = 0; //CMaterialSystem::BeginRenderTargetAllocation(void)
-	virtual void EndRenderTargetAllocation() = 0; //CMaterialSystem::EndRenderTargetAllocation(void)
+	virtual void BeginRenderTargetAllocation_Slot() = 0; //CMaterialSystem::BeginRenderTargetAllocation(void)
+	virtual void EndRenderTargetAllocation_Slot() = 0; //CMaterialSystem::EndRenderTargetAllocation(void)
 	virtual void *CreateRenderTargetTexture(int, int, RenderTargetSizeMode_t, ImageFormat, MaterialRenderTargetDepth_t) = 0; //CMaterialSystem::CreateRenderTargetTexture(int,int,RenderTargetSizeMode_t,ImageFormat,MaterialRenderTargetDepth_t)
-	virtual ITexture *CreateNamedRenderTargetTextureEx(const char *pRTName,				// Pass in NULL here for an unnamed render target.
+	virtual ITexture *CreateNamedRenderTargetTextureEx_Slot(const char *pRTName,
 														int w,
 														int h,
-														RenderTargetSizeMode_t sizeMode,	// Controls how size is generated (and regenerated on video mode change).
+														RenderTargetSizeMode_t sizeMode,
 														ImageFormat format,
-														MaterialRenderTargetDepth_t depth = MATERIAL_RT_DEPTH_SHARED,
-														unsigned int textureFlags = TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT,
-														unsigned int renderTargetFlags = 0) = 0; //CMaterialSystem::CreateNamedRenderTargetTextureEx(char const*,int,int,RenderTargetSizeMode_t,ImageFormat,MaterialRenderTargetDepth_t,uint,uint)
+														MaterialRenderTargetDepth_t depth,
+														unsigned int textureFlags,
+														unsigned int renderTargetFlags) = 0; //CMaterialSystem::CreateNamedRenderTargetTextureEx(char const*,int,int,RenderTargetSizeMode_t,ImageFormat,MaterialRenderTargetDepth_t,uint,uint)
 	virtual void *CreateNamedRenderTargetTexture(char const *, int, int, RenderTargetSizeMode_t, ImageFormat, MaterialRenderTargetDepth_t, bool, bool) = 0; //CMaterialSystem::CreateNamedRenderTargetTexture(char const*,int,int,RenderTargetSizeMode_t,ImageFormat,MaterialRenderTargetDepth_t,bool,bool)
 	virtual ITexture *CreateNamedRenderTargetTextureEx2(const char *pRTName,				// Pass in NULL here for an unnamed render target.
 														int w,
@@ -254,8 +254,57 @@ public:
 	virtual void NVStereoUpdate() = 0;//CMaterialSystem::NVStereoUpdate(void)
 	virtual void ClearBuffersEbbb() = 0; //CMaterialSystem::ClearBuffers(bool,bool,bool)
 	virtual void SpinPresent() = 0; //CMaterialSystem::SpinPresent(unsigned int)
-	virtual IMatRenderContext *GetRenderContext() = 0; //CMaterialSystem::GetRenderContext(void)
-	
+	virtual IMatRenderContext *GetRenderContext_Slot() = 0; //CMaterialSystem::GetRenderContext(void)
+
+	// The Sixense Perceptual Pack's older materialsystem.dll exports the same
+	// VMaterialSystem080 interface with one fewer virtual early in the table,
+	// so every method Portal2VR calls sits one slot lower there (verified for
+	// GetBackBufferFormat 34, FindMaterial 81, Begin/EndRenderTargetAllocation
+	// 91/92, CreateNamedRenderTargetTextureEx 94, GetRenderContext 112).
+	// Calls go through these wrappers, which apply that shift; the data
+	// member below is at the same offset in both builds.
+	static inline int slotShift = 0;
+
+	template <typename Fn, typename... Args>
+	auto CallSlot(int stockSlot, Args... args)
+	{
+		Fn *table = *reinterpret_cast<Fn **>(this);
+		return table[stockSlot + slotShift](this, args...);
+	}
+
+	ImageFormat GetBackBufferFormat()
+	{
+		return CallSlot<ImageFormat(__thiscall *)(IMaterialSystem *)>(35);
+	}
+	IMaterial *FindMaterial(char const *pMaterialName, const char *pTextureGroupName,
+							bool complain = true, const char *pComplainPrefix = NULL)
+	{
+		return CallSlot<IMaterial *(__thiscall *)(IMaterialSystem *, char const *, const char *, bool, const char *)>(
+			82, pMaterialName, pTextureGroupName, complain, pComplainPrefix);
+	}
+	void BeginRenderTargetAllocation()
+	{
+		CallSlot<void(__thiscall *)(IMaterialSystem *)>(92);
+	}
+	void EndRenderTargetAllocation()
+	{
+		CallSlot<void(__thiscall *)(IMaterialSystem *)>(93);
+	}
+	ITexture *CreateNamedRenderTargetTextureEx(const char *pRTName, int w, int h,
+		RenderTargetSizeMode_t sizeMode, ImageFormat format,
+		MaterialRenderTargetDepth_t depth = MATERIAL_RT_DEPTH_SHARED,
+		unsigned int textureFlags = TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT,
+		unsigned int renderTargetFlags = 0)
+	{
+		return CallSlot<ITexture *(__thiscall *)(IMaterialSystem *, const char *, int, int,
+			RenderTargetSizeMode_t, ImageFormat, MaterialRenderTargetDepth_t, unsigned int, unsigned int)>(
+			95, pRTName, w, h, sizeMode, format, depth, textureFlags, renderTargetFlags);
+	}
+	IMatRenderContext *GetRenderContext()
+	{
+		return CallSlot<IMatRenderContext *(__thiscall *)(IMaterialSystem *)>(113);
+	}
+
 	char pad_0004[11180]; //0x0004
 	bool isGameRunning; //0x2AB8 -> 0x2BB0
 }; //Size: 0x2ABC
