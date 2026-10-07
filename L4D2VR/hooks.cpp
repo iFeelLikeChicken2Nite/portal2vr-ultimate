@@ -1430,8 +1430,18 @@ void Hooks::dVGui_Paint(void *ecx, void *edx, int mode)
 		logPaintState("first call");
 	if (inGame && m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::HudPaintInGame))
 		logPaintState("first in-game call");
-	if (!capture)
+	if (!capture) {
+		// The HUD overlay's capture paints the in-game panels itself; painting
+		// them here as well puts a window-sized copy into each eye's top-left
+		// corner (seen on the Sixense Perceptual Pack's older engine).
+		if (inGame && !cursorVisible && m_Game->m_Hooks->m_HudCaptureHooksReady &&
+			m_VR->m_CreatedVRTextures && targetReady && (mode & PAINT_INGAMEPANELS)) {
+			mode &= ~PAINT_INGAMEPANELS;
+			if (!mode)
+				return;
+		}
 		return hkVgui_Paint.fOriginal(ecx, mode);
+	}
 	if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::HudPaintEligible))
 		logPaintState("first eligible call");
 	const bool explicitCapture = m_HudCaptureRoute.ShouldCaptureExplicitly(
