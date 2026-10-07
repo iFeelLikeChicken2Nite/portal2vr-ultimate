@@ -33,9 +33,11 @@ Hydra-shaped controller data to work.
 - **Intel camera crash fix** (`sixense_proxy/intel_camera_patch.h`): the
   Steam build crashes at the Valve logo without its Creative Senz3D camera
   (`client_sixense.dll`+0x402B87, a null capture device). Before
-  `client_sixense.dll` registers its convars, the proxy makes
-  `sixense_intel_enabled` default to `0`, the game's own switch for all
-  camera code. Launch with `-p2vr_intel_camera` to keep the camera code on.
+  `client_sixense.dll` runs, the proxy makes `sixense_intel_enabled` default
+  to `0` and, because the camera "reconnect" paths ignore that switch (they
+  crashed the same way at +0x3FFAB0), turns the allocation check at every
+  site that creates the camera object into the game's own "no camera"
+  branch. Launch with `-p2vr_intel_camera` to leave the camera code alone.
 
 While you are in gameplay (not in a menu), the Sixense action set outranks
 Portal2VR's main set, so controls bound to Hydra actions go to the
@@ -81,8 +83,12 @@ Perceptual Pack levels (`sp_a1_sx_perc_*`) and the MotionPack levels
    `/p:PlatformToolset=v145`). In the install folder:
    - copy `Release\d3d9.dll` and `thirdparty\openvr\bin\win32\openvr_api.dll`
      into `bin` (next to `engine.dll`);
-   - copy `L4D2VR\config.txt` and `L4D2VR\SteamVRActionManifest` into a new
-     `VR` folder in the install root.
+   - copy `L4D2VR\config.txt`, `L4D2VR\portal2vr_capsule_main.png` and
+     `L4D2VR\SteamVRActionManifest` into a new `VR` folder in the install
+     root, and `L4D2VR\manifest_sixense.vrmanifest` there as
+     `manifest.vrmanifest` (without it Portal2VR stops with
+     `VRApplicationError_InvalidManifest`). It registers app 247120, so the
+     stock `manifest.vrmanifest` (app 620) stays with your Portal 2 install.
 3. Rename `portal2_sixense\bin\sixense.dll` to `sixense.dll.orig`, then copy
    `Release\sixense\sixense.dll` in its place.
 4. Start SteamVR, then launch from Steam with launch options

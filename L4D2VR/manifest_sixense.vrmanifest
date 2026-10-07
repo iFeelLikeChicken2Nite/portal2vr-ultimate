@@ -1,0 +1,18 @@
+{
+	"source" : "builtin",
+	"applications": [{
+		"app_key": "steam.app.247120",
+		
+		"launch_type": "url",
+		"url": "steam://launch/247120/VR",
+		"action_manifest_path" : "SteamVRActionManifest/action_manifest.json",
+		"image_path" : "portal2vr_capsule_main.png",
+
+		"strings": {
+			"en_us": {
+				"name": "6DOF Perceptual Pack",
+				"description": "Portal 2 Sixense Perceptual Pack in VR (Portal2VR)"
+			}
+		}
+	}]
+}

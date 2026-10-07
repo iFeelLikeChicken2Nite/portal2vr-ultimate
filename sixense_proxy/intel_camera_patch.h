@@ -17,7 +17,8 @@
 //
 // and the patch repoints the default-value operand at a "0" string. Matching
 // on the strings (not on fixed offsets) keeps it valid for any build of
-// client_sixense.dll that registers the convar this way.
+// client_sixense.dll that registers the convar this way. The convar does not
+// guard every path, so FindCameraAllocationChecks below covers the rest.
 
 #include <cstddef>
 #include <cstdint>
@@ -58,6 +59,60 @@ inline std::size_t FindEnabledDefaultOperand(const std::uint8_t *image, std::siz
         return i + 6;
     }
     return kNotFound;
+}
+
+// The camera is also (re)created outside the convar's reach, e.g. by the
+// "connect camera" retry, and every path makes the same null-device
+// dereference. Each site allocates the 0x2948-byte camera object and checks
+// the allocation before constructing it:
+//
+//     push 2948h            ; (a store may sit between push and call)
+//     call <operator new>
+//     add  esp, 4
+//     cmp  eax, <reg>       ; reg holds 0
+//     je   <no camera>      ; 0F 84 rel32
+//     mov  ecx, eax
+//     call <camera ctor>
+//
+// Turning each je into a jmp takes the game's own "no camera" path, so the
+// camera object is never created. Returns the offsets of those je opcodes.
+inline constexpr std::uint32_t kCameraSize = 0x2948;
+inline constexpr std::size_t kMaxCameraSites = 8;
+
+inline std::size_t FindCameraAllocationChecks(const std::uint8_t *image, std::size_t size,
+                                              std::size_t (&sites)[kMaxCameraSites])
+{
+    if (!image) return 0;
+    std::size_t count = 0;
+    for (std::size_t i = 0; i + 5 <= size && count < kMaxCameraSites; ++i) {
+        if (image[i] != 0x68) continue;
+        std::uint32_t pushed;
+        std::memcpy(&pushed, image + i + 1, sizeof(pushed));
+        if (pushed != kCameraSize) continue;
+        // The call to operator new follows within a few instructions.
+        for (std::size_t at = i + 5; at <= i + 21 && at + 24 <= size; ++at) {
+            const std::uint8_t *p = image + at;
+            if (p[0] == 0xE8 && p[5] == 0x83 && p[6] == 0xC4 && p[7] == 0x04 &&
+                p[8] == 0x3B && (p[9] & 0xF8) == 0xC0 &&     // cmp eax, r32
+                p[10] == 0x0F && p[11] == 0x84 &&               // je rel32
+                p[16] == 0x8B && p[17] == 0xC8 && p[18] == 0xE8) { // mov ecx,eax; call
+                sites[count++] = at + 10;
+                break;
+            }
+        }
+    }
+    return count;
+}
+
+// Rewrites `je rel32` at site as `jmp rel32; nop` to the same target.
+inline void JeToJmp(std::uint8_t *site)
+{
+    std::int32_t rel;
+    std::memcpy(&rel, site + 2, sizeof(rel));
+    rel += 1; // jmp rel32 is one byte shorter than je rel32
+    site[0] = 0xE9;
+    std::memcpy(site + 1, &rel, sizeof(rel));
+    site[5] = 0x90;
 }
 
 } // namespace IntelCameraPatch

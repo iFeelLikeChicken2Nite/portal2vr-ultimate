@@ -160,21 +160,37 @@ void DisableIntelCameraByDefault()
     const auto *nt = reinterpret_cast<const IMAGE_NT_HEADERS32 *>(image + dos->e_lfanew);
     if (dos->e_magic != IMAGE_DOS_SIGNATURE || nt->Signature != IMAGE_NT_SIGNATURE) return;
 
+    const std::size_t imageSize = nt->OptionalHeader.SizeOfImage;
+    auto patch = [](const std::uint8_t *at, std::size_t length, auto &&write) {
+        void *target = const_cast<std::uint8_t *>(at);
+        DWORD oldProtect = 0;
+        if (!VirtualProtect(target, length, PAGE_EXECUTE_READWRITE, &oldProtect)) return false;
+        write(static_cast<std::uint8_t *>(target));
+        VirtualProtect(target, length, oldProtect, &oldProtect);
+        FlushInstructionCache(GetCurrentProcess(), target, length);
+        return true;
+    };
+
     const std::size_t offset = IntelCameraPatch::FindEnabledDefaultOperand(
-        image, nt->OptionalHeader.SizeOfImage, static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(image)));
+        image, imageSize, static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(image)));
     if (offset == IntelCameraPatch::kNotFound) {
-        OutputDebugStringA("sixense.dll proxy: sixense_intel_enabled registration not found; Intel camera code unchanged\n");
-        return;
+        OutputDebugStringA("sixense.dll proxy: sixense_intel_enabled registration not found\n");
+    } else if (patch(image + offset, sizeof(std::uint32_t), [](std::uint8_t *at) {
+                   const auto value = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(kIntelDisabled));
+                   std::memcpy(at, &value, sizeof(value));
+               })) {
+        OutputDebugStringA("sixense.dll proxy: sixense_intel_enabled now defaults to 0 (no Intel camera)\n");
     }
 
-    void *target = const_cast<std::uint8_t *>(image + offset);
-    DWORD oldProtect = 0;
-    if (!VirtualProtect(target, sizeof(std::uint32_t), PAGE_EXECUTE_READWRITE, &oldProtect)) return;
-    const auto value = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(kIntelDisabled));
-    std::memcpy(target, &value, sizeof(value));
-    VirtualProtect(target, sizeof(std::uint32_t), oldProtect, &oldProtect);
-    FlushInstructionCache(GetCurrentProcess(), target, sizeof(std::uint32_t));
-    OutputDebugStringA("sixense.dll proxy: sixense_intel_enabled now defaults to 0 (no Intel camera)\n");
+    std::size_t sites[IntelCameraPatch::kMaxCameraSites];
+    const std::size_t count = IntelCameraPatch::FindCameraAllocationChecks(image, imageSize, sites);
+    std::size_t patched = 0;
+    for (std::size_t i = 0; i < count; ++i)
+        patched += patch(image + sites[i], 6, IntelCameraPatch::JeToJmp) ? 1 : 0;
+    char message[96];
+    wsprintfA(message, "sixense.dll proxy: Intel camera creation disabled at %u of %u sites\n",
+              static_cast<unsigned>(patched), static_cast<unsigned>(count));
+    OutputDebugStringA(message);
 }
 
 } // namespace

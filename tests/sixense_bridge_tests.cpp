@@ -245,6 +245,26 @@ void TestIntelCameraPatch()
 
     Expect(FindEnabledDefaultOperand(image.data(), image.size(), base + 0x1000) == kNotFound, "pointers outside image ignored");
     Expect(FindEnabledDefaultOperand(nullptr, 0, base) == kNotFound, "empty image");
+
+    // push 2948h; mov [x],esi; call new; add esp,4; cmp eax,esi; je +0x95; mov ecx,eax; call ctor
+    const std::uint8_t site[] = {
+        0x68, 0x48, 0x29, 0x00, 0x00, 0x89, 0x35, 0x9C, 0x3E, 0xA6, 0x10,
+        0xE8, 0x00, 0x00, 0x00, 0x00, 0x83, 0xC4, 0x04, 0x3B, 0xC6,
+        0x0F, 0x84, 0x95, 0x00, 0x00, 0x00, 0x8B, 0xC8, 0xE8, 0x00, 0x00, 0x00, 0x00,
+        0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC };
+    std::vector<std::uint8_t> code(site, site + sizeof(site));
+    std::size_t sites[IntelCameraPatch::kMaxCameraSites];
+    const std::size_t found = IntelCameraPatch::FindCameraAllocationChecks(code.data(), code.size(), sites);
+    Expect(found == 1 && sites[0] == 21, "camera allocation check found");
+    if (found == 1) {
+        IntelCameraPatch::JeToJmp(&code[sites[0]]);
+        const std::uint8_t jmp[] = { 0xE9, 0x96, 0x00, 0x00, 0x00, 0x90 };
+        Expect(std::memcmp(&code[21], jmp, sizeof(jmp)) == 0, "je becomes jmp to the same target");
+    }
+
+    code[1] = 0x50; // a different allocation size
+    Expect(IntelCameraPatch::FindCameraAllocationChecks(code.data(), code.size(), sites) == 0,
+           "other allocations ignored");
 }
 
 } // namespace
