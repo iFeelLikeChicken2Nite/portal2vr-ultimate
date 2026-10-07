@@ -2,6 +2,7 @@
 #include "../L4D2VR/game_modules.h"
 #include "../L4D2VR/config.h"
 #include "../sixense_proxy/intel_camera_patch.h"
+#include "../L4D2VR/view_setup_layout.h"
 
 #include <cmath>
 #include <cstdint>
@@ -224,6 +225,22 @@ void TestConfig()
            rejected.value.sixenseHandSpace == HandSpace::HeadYaw, "invalid sixense options keep previous values");
 }
 
+void TestViewSetupLayout()
+{
+    std::uint8_t sixense[ViewSetupLayout::kSixenseSize];
+    for (std::size_t i = 0; i < sizeof(sixense); ++i) sixense[i] = static_cast<std::uint8_t>(i * 7 + 1);
+    std::uint8_t stock[ViewSetupLayout::kStockSize];
+    ViewSetupLayout::FromSixense(sixense, stock);
+    auto int32At = [](const std::uint8_t *p, std::size_t at) { std::int32_t v; std::memcpy(&v, p + at, 4); return v; };
+    Expect(int32At(stock, 0x10) == int32At(sixense, 0x08) && int32At(stock, 0x14) == int32At(sixense, 0x08) &&
+           int32At(stock, 0x18) == int32At(sixense, 0x0C), "view width/height land on stock offsets");
+    Expect(std::memcmp(stock + 0x68, sixense + 0x58, 4) == 0, "view fov lands on stock offset");
+    Expect(std::memcmp(stock + 0x98, sixense + 0x88, 4) == 0, "view aspect lands on stock offset");
+    std::uint8_t back[ViewSetupLayout::kSixenseSize];
+    ViewSetupLayout::ToSixense(stock, back);
+    Expect(std::memcmp(back, sixense, sizeof(back)) == 0, "view setup round-trips");
+}
+
 // Builds a fake image laid out like client_sixense.dll's registration.
 std::vector<std::uint8_t> ConVarImage(const char *name, const char *defaultValue, std::uint32_t base)
 {
@@ -302,6 +319,7 @@ int main()
     TestGameModules();
     TestConfig();
     TestIntelCameraPatch();
+    TestViewSetupLayout();
     if (failures) {
         std::cerr << failures << " sixense bridge test(s) failed\n";
         return 1;

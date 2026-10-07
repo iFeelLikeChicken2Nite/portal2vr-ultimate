@@ -427,8 +427,17 @@ void VR::Update()
             }
 
             m_Game->m_CachedArmsModel = false;
-            m_CreatedVRTextures = false; // Have to recreate textures otherwise some workshop maps won't render
-        } 
+            // Have to recreate textures otherwise some workshop maps won't render.
+            // Once per return to the menu: recreating every frame freed the
+            // textures SteamVR had just been given while its copy could still
+            // be pending, which faulted the GPU (Sixense Perceptual Pack).
+            if (!m_RecreatedForMenu) {
+                m_CreatedVRTextures = false;
+                m_RecreatedForMenu = true;
+            }
+        } else {
+            m_RecreatedForMenu = false;
+        }
     }
 
     SubmitVRTextures();

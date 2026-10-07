@@ -208,6 +208,7 @@ public:
 	bool m_RenderedNewFrame = false;
 	bool m_RenderedHud = false;
 	bool m_CreatedVRTextures = false;
+	bool m_RecreatedForMenu = false;
     RenderTargetRetryState m_RenderTargetRetry;
 	bool m_LaserRequestLogged = false;
 	bool m_LaserParticleObserved = false;

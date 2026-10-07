@@ -7,6 +7,7 @@
 #include "vr.h"
 #include "offsets.h"
 #include "game_modules.h"
+#include "view_setup_layout.h"
 #include "logger.h"
 #include "runtime_publication.h"
 #include "hook_startup_rollback.h"
@@ -923,16 +924,42 @@ ITexture* __fastcall Hooks::dGetRenderTarget(void* ecx, void* edx)
 	return result;
 }
 
+// The Sixense Perceptual Pack passes its shorter CViewSetup (see
+// view_setup_layout.h); everything below works on the stock layout.
 void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CViewSetup &hudViewSetup, int nClearFlags, int whatToDraw)
+{
+	if (!Portal2VRRuntime::IsPublished(g_Game, m_Game))
+		return hkRenderView.fOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
+	if (!GameModules::IsSixense())
+		return RenderViewStockLayout(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
+	CViewSetup stockSetup, stockHud;
+	ViewSetupLayout::FromSixense(&setup, &stockSetup);
+	ViewSetupLayout::FromSixense(&hudViewSetup, &stockHud);
+	RenderViewStockLayout(ecx, stockSetup, stockHud, nClearFlags, whatToDraw);
+}
+
+void Hooks::CallRenderViewOriginal(void *ecx, CViewSetup &setup, CViewSetup &hudViewSetup, int nClearFlags, int whatToDraw)
+{
+	if (!GameModules::IsSixense())
+		return hkRenderView.fOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
+	alignas(16) std::uint8_t sixenseSetup[ViewSetupLayout::kSixenseSize];
+	alignas(16) std::uint8_t sixenseHud[ViewSetupLayout::kSixenseSize];
+	ViewSetupLayout::ToSixense(&setup, sixenseSetup);
+	ViewSetupLayout::ToSixense(&hudViewSetup, sixenseHud);
+	hkRenderView.fOriginal(ecx, *reinterpret_cast<CViewSetup *>(sixenseSetup),
+		*reinterpret_cast<CViewSetup *>(sixenseHud), nClearFlags, whatToDraw);
+}
+
+void Hooks::RenderViewStockLayout(void *ecx, CViewSetup &setup, CViewSetup &hudViewSetup, int nClearFlags, int whatToDraw)
 {
 	// MinHook may dispatch this while Game::Initialize is still enabling hooks.
 	if (!Portal2VRRuntime::IsPublished(g_Game, m_Game))
-		return hkRenderView.fOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
+		return CallRenderViewOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
 	m_VR->ApplyPendingPortalOrientation(setup.origin);
     if (!m_VR->m_TrackingOutputValid) {
         if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::TrackingBypass))
             Logger::Write("RenderView: stereo bypassed because tracking output is invalid");
-        return hkRenderView.fOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
+        return CallRenderViewOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
 	}
 	if (!m_VR->m_CreatedVRTextures) {
 		m_VR->CreateVRTextures();
@@ -940,13 +967,13 @@ void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CVie
 	if (!m_VR->m_CreatedVRTextures) {
         if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::RenderTargetBypass))
             Logger::Write("RenderView: stereo bypassed because VR render targets are unavailable");
-        return hkRenderView.fOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
+        return CallRenderViewOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
     }
 
 	if (m_Game->m_VguiSurface->IsCursorVisible()) {
         if (m_VR->m_RenderDiagnostics.First(RenderDiagnosticEvent::CursorBypass))
             Logger::Write("RenderView: stereo bypassed while VGUI cursor is visible");
-		return hkRenderView.fOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
+		return CallRenderViewOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
 	}
 
 	//VPanel* g_pFullscreenRootPanel = *(VPanel**)(m_Game->m_Offsets->g_pFullscreenRootPanel.address);
@@ -1029,7 +1056,7 @@ void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CVie
 	m_ActiveAimEyeView = &leftEyeView;
 	m_ActiveAimEye = 1;
 	m_ActiveReticleScale = reticleScale;
-	hkRenderView.fOriginal(ecx, leftEyeView, hudViewSetup, nClearFlags, whatToDraw);
+	CallRenderViewOriginal(ecx, leftEyeView, hudViewSetup, nClearFlags, whatToDraw);
 	m_ActiveAimEyeView = previousAimEyeView;
 	m_ActiveAimEye = previousAimEye;
 	m_ActiveReticleScale = previousReticleScale;
@@ -1049,7 +1076,7 @@ void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CVie
 	m_ActiveAimEyeView = &rightEyeView;
 	m_ActiveAimEye = 2;
 	m_ActiveReticleScale = reticleScale;
-	hkRenderView.fOriginal(ecx, rightEyeView, hudViewSetup, nClearFlags, whatToDraw);
+	CallRenderViewOriginal(ecx, rightEyeView, hudViewSetup, nClearFlags, whatToDraw);
 	m_ActiveAimEyeView = previousAimEyeView;
 	m_ActiveAimEye = previousAimEye;
 	m_ActiveReticleScale = previousReticleScale;
@@ -1090,7 +1117,7 @@ void __fastcall Hooks::dRenderView(void *ecx, void *edx, CViewSetup &setup, CVie
 		setup.m_flAspectRatio = aspect;
 
 		//setup.width, setup.height
-		hkRenderView.fOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
+		CallRenderViewOriginal(ecx, setup, hudViewSetup, nClearFlags, whatToDraw);
 	}
 
 

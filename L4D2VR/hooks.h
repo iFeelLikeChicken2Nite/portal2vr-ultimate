@@ -287,6 +287,8 @@ public:
 	// Detour functions
 	static ITexture *__fastcall dGetRenderTarget(void *ecx, void *edx);
 	static void __fastcall dRenderView(void *ecx, void *edx, CViewSetup &setup, CViewSetup &hudViewSetup, int nClearFlags, int whatToDraw);
+	static void RenderViewStockLayout(void *ecx, CViewSetup &setup, CViewSetup &hudViewSetup, int nClearFlags, int whatToDraw);
+	static void CallRenderViewOriginal(void *ecx, CViewSetup &setup, CViewSetup &hudViewSetup, int nClearFlags, int whatToDraw);
 	static bool __fastcall dCreateMove(void *ecx, void *edx, float flInputSampleTime, CUserCmd *cmd);
 	static void __fastcall dEndFrame(void *ecx, void *edx);
 	static void __fastcall dCalcViewModelView(void *ecx, void *edx, const Vector &eyePosition, const QAngle &eyeAngles);

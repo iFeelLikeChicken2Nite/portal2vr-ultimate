@@ -369,6 +369,7 @@
     <ClInclude Include="logger.h" />
     <ClInclude Include="game.h" />
     <ClInclude Include="game_modules.h" />
+    <ClInclude Include="view_setup_layout.h" />
     <ClInclude Include="sixense_api.h" />
     <ClInclude Include="sixense_bridge.h" />
     <ClInclude Include="sixense_mode.h" />
