@@ -958,12 +958,12 @@ public:
 	virtual void sub_10029100();
 	virtual void sub_1002A400();
 	virtual void sub_10024150();
-	virtual void GetWindowSize_Slot(int &, int &);
-	virtual void DrawScreenSpaceRectangle_Slot(IMaterial *material,
+	virtual void GetWindowSize(int &, int &);
+	virtual void DrawScreenSpaceRectangle(IMaterial *material,
 		int destX, int destY, int width, int height,
 		float sourceX0, float sourceY0, float sourceX1, float sourceY1,
-		int sourceWidth, int sourceHeight, void *clientRenderable,
-		int xDice, int yDice) = 0;
+		int sourceWidth, int sourceHeight, void *clientRenderable = nullptr,
+		int xDice = 1, int yDice = 1) = 0;
 	virtual void sub_10027EA0() = 0;
 	virtual void PushRenderTargetAndViewport() = 0;
 	virtual void PushRenderTargetAndViewport(ITexture*) = 0;
@@ -971,7 +971,7 @@ public:
 	virtual void PushRenderTargetAndViewport(ITexture*, ITexture*, int, int, int, int) = 0;
 	virtual void PopRenderTargetAndViewport() = 0;
 	virtual void sub_10017610() = 0;
-	virtual void CopyRenderTargetToTextureEx_Slot(ITexture*, int, Rect_t*, Rect_t*) = 0;
+	virtual void CopyRenderTargetToTextureEx(ITexture*, int, Rect_t*, Rect_t*) = 0;
 	virtual void sub_10028030() = 0;
 	virtual void sub_10028770() = 0;
 	virtual void sub_10017640() = 0;
@@ -1043,44 +1043,7 @@ public:
 	virtual void sub_10028B00_2() = 0;
 	virtual void sub_10028B00_3() = 0;
 	virtual void sub_10028B00_4() = 0;
-	virtual void OverrideAlphaWriteEnable_Slot(bool bEnable, bool bAlphaWriteEnable) = 0;
-
-	// Like IMaterialSystem, the Sixense Perceptual Pack's render context has
-	// one fewer virtual between GetViewport (39, unchanged) and GetWindowSize,
-	// so these sit one slot lower there (verified: 104, 105, 113, 185).
-	static inline int slotShift = 0;
-
-	template <typename Fn, typename... Args>
-	auto CallSlot(int stockSlot, Args... args)
-	{
-		Fn *table = *reinterpret_cast<Fn **>(this);
-		return table[stockSlot + slotShift](this, args...);
-	}
-
-	void GetWindowSize(int &width, int &height)
-	{
-		CallSlot<void(__thiscall *)(IMatRenderContext *, int &, int &), int &, int &>(105, width, height);
-	}
-	void DrawScreenSpaceRectangle(IMaterial *material,
-		int destX, int destY, int width, int height,
-		float sourceX0, float sourceY0, float sourceX1, float sourceY1,
-		int sourceWidth, int sourceHeight, void *clientRenderable = nullptr,
-		int xDice = 1, int yDice = 1)
-	{
-		CallSlot<void(__thiscall *)(IMatRenderContext *, IMaterial *, int, int, int, int,
-			float, float, float, float, int, int, void *, int, int)>(106, material,
-			destX, destY, width, height, sourceX0, sourceY0, sourceX1, sourceY1,
-			sourceWidth, sourceHeight, clientRenderable, xDice, yDice);
-	}
-	void CopyRenderTargetToTextureEx(ITexture *texture, int renderTargetNum, Rect_t *src, Rect_t *dst)
-	{
-		CallSlot<void(__thiscall *)(IMatRenderContext *, ITexture *, int, Rect_t *, Rect_t *)>(
-			114, texture, renderTargetNum, src, dst);
-	}
-	void OverrideAlphaWriteEnable(bool bEnable, bool bAlphaWriteEnable)
-	{
-		CallSlot<void(__thiscall *)(IMatRenderContext *, bool, bool)>(186, bEnable, bAlphaWriteEnable);
-	}
+	virtual void OverrideAlphaWriteEnable(bool bEnable, bool bAlphaWriteEnable) = 0;
 };
 
 class CMatRenderContextPtr : public CRefPtr<IMatRenderContext>

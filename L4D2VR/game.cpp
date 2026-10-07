@@ -105,7 +105,6 @@ bool Game::Initialize()
     m_DebugOverlay = (IVDebugOverlay *)GetInterface("engine.dll", "VDebugOverlay004");
     m_MaterialSystem = (IMaterialSystem *)GetInterface("MaterialSystem.dll", "VMaterialSystem080");
     IMaterialSystem::slotShift = variant == GameModules::Variant::Sixense ? -1 : 0;
-    IMatRenderContext::slotShift = IMaterialSystem::slotShift;
     m_EngineViewRender = (IViewRender *)GetInterface("engine.dll", "VEngineRenderView013");
     m_ModelInfo = (IModelInfo *)GetInterface("engine.dll", "VModelInfoClient004");
     m_ModelRender = (IModelRender *)GetInterface("engine.dll", "VEngineModel016");
