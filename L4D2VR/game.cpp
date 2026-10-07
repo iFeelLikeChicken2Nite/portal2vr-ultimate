@@ -8,6 +8,9 @@
 #include "sigscanner.h"
 #include "logger.h"
 #include "game_modules.h"
+#include "../sixense_proxy/intel_camera_patch.h"
+#include <cstdint>
+#include <cstring>
 #include <vector>
 #include <winver.h>
 
@@ -37,6 +40,44 @@ Game::~Game()
     delete m_Hooks;
     delete m_VR;
     delete m_Offsets;
+}
+
+// sixense_intel_enabled is replicated, and server_sixense.dll registers its
+// own copy defaulting to "1"; once a map loads the client takes the server's
+// value, which skips the MotionPack's Hydra input frame (and re-arms the
+// Intel camera code). The sixense.dll proxy only reaches the client copy, so
+// switch the server's off here, after its constructors have run.
+static void DisableServerIntelCamera(uintptr_t serverBase)
+{
+    const auto *image = reinterpret_cast<const std::uint8_t *>(serverBase);
+    const auto *dos = reinterpret_cast<const IMAGE_DOS_HEADER *>(image);
+    const auto *nt = reinterpret_cast<const IMAGE_NT_HEADERS32 *>(image + dos->e_lfanew);
+    const std::size_t size = nt->OptionalHeader.SizeOfImage;
+    const std::size_t at = IntelCameraPatch::FindEnabledDefaultOperand(image, size, static_cast<std::uint32_t>(serverBase));
+    // push flags; push <default>; push <name>; mov ecx, <ConVar>
+    if (at == IntelCameraPatch::kNotFound || at + 14 > size || image[at + 9] != 0xB9) {
+        Logger::Write("Sixense: server sixense_intel_enabled not found; Hydra input may stay off in maps");
+        return;
+    }
+    std::uint32_t object, name;
+    std::memcpy(&object, image + at + 10, 4);
+    std::memcpy(&name, image + at + 5, 4);
+    auto *conVar = reinterpret_cast<std::uint8_t *>(static_cast<uintptr_t>(object));
+    std::uint32_t storedName;
+    std::memcpy(&storedName, conVar + 0x0C, 4);
+    if (storedName != name) {
+        Logger::Write("Sixense: server sixense_intel_enabled layout unexpected; left unchanged");
+        return;
+    }
+    std::uint8_t *parent = *reinterpret_cast<std::uint8_t **>(conVar + 0x1C);
+    if (!parent) parent = conVar;
+    static const char kOff[] = "0";
+    *reinterpret_cast<const char **>(parent + 0x20) = kOff; // m_pszDefaultValue
+    if (char *value = *reinterpret_cast<char **>(parent + 0x24))   // m_pszString
+        if (value[0] && !value[1]) value[0] = '0';
+    *reinterpret_cast<float *>(parent + 0x2C) = 0.0f;               // m_fValue
+    *reinterpret_cast<int *>(parent + 0x30) = 0;                    // m_nValue
+    Logger::Write("Sixense: server sixense_intel_enabled set to 0 (Hydra input instead of Intel camera)");
 }
 
 bool Game::Initialize()
@@ -86,6 +127,8 @@ bool Game::Initialize()
         Logger::Write(std::string("Loaded ") + module.name + ": " + path +
                       " (" + ModuleVersion(path) + ")");
     }
+    if (variant == GameModules::Variant::Sixense)
+        DisableServerIntelCamera(m_BaseServer);
     const auto surfaceStart = GetTickCount64();
     while (!GetModuleHandleA("vguimatsurface.dll")) {
         if (GetTickCount64() - surfaceStart > 30000) {
