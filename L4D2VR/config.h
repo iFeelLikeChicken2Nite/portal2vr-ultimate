@@ -51,6 +51,9 @@ struct ConfigSnapshot {
     // client_sixense.dll (Auto) or never (Off).
     bool sixenseEmulation = true;
     SixenseBridge::HandSpace sixenseHandSpace = SixenseBridge::HandSpace::Tracking;
+    // Diagnostic: leave the game's back buffer and menu viewports at window
+    // size instead of the headset's eye size. Read at startup only.
+    bool keepWindowResolution = false;
 };
 
 struct ConfigParseResult {
@@ -172,6 +175,7 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
     };
 
     readFloat("TurnSpeed", result.value.turnSpeed, 0.01f, 2.0f);
+    readBool("KeepWindowResolution", result.value.keepWindowResolution);
     const auto trackingMode = entries.find("TrackingMode");
     if (trackingMode != entries.end()) {
         if (trackingMode->second == "Seated")

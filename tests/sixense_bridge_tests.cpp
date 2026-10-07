@@ -210,6 +210,10 @@ void TestConfig()
     Expect(parsed.errors.empty() && !parsed.value.sixenseEmulation &&
            parsed.value.sixenseHandSpace == HandSpace::HeadYaw, "sixense options parse");
 
+    Expect(!unchanged.value.keepWindowResolution, "window resolution diagnostic off by default");
+    std::istringstream keep("KeepWindowResolution=true # diagnostic\n");
+    Expect(ParseConfig(keep, ConfigSnapshot{}).value.keepWindowResolution, "window resolution diagnostic parses");
+
     std::istringstream bad("SixenseMode=On\nSixenseHandSpace=Room\n");
     const auto rejected = ParseConfig(bad, parsed.value);
     Expect(rejected.errors.size() == 2 && !rejected.value.sixenseEmulation &&

@@ -2428,6 +2428,7 @@ void VR::ParseConfigFile()
     m_ViewmodelPosCustomOffset = {m_Config.viewmodelPosOffset[0], m_Config.viewmodelPosOffset[1], m_Config.viewmodelPosOffset[2]};
     m_ViewmodelAngCustomOffset = {m_Config.viewmodelAngOffset[0], m_Config.viewmodelAngOffset[1], m_Config.viewmodelAngOffset[2]};
     Logger::Write("Config applied: VerboseDiagnostics=" + std::to_string(m_Config.verboseDiagnostics) +
+        " KeepWindowResolution=" + std::to_string(m_Config.keepWindowResolution) +
         " TurnSpeed=" + std::to_string(m_TurnSpeed) +
         " SnapTurnAngle=" + std::to_string(m_SnapTurnAngle) +
         " VRScale=" + std::to_string(m_VRScale) +

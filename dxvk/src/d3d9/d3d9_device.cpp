@@ -395,7 +395,8 @@ namespace dxvk {
       if (m_vrBridge != nullptr)
         m_vrBridge->InvalidateBackBufferData();
     }
-    if (Portal2VRViewport::HasInitializedVR(game) && game->m_VR->OwnsD3DDevice(this))
+    if (Portal2VRViewport::HasInitializedVR(game) && game->m_VR->OwnsD3DDevice(this) &&
+        !game->m_VR->m_Config.keepWindowResolution)
     {
         pPresentationParameters->BackBufferWidth = game->m_VR->m_RenderWidth;
         pPresentationParameters->BackBufferHeight = game->m_VR->m_RenderHeight;
@@ -1710,7 +1711,8 @@ namespace dxvk {
   HRESULT STDMETHODCALLTYPE D3D9DeviceEx::SetViewport(const D3DVIEWPORT9* pViewport) {
     Game* const game = g_Game.load(std::memory_order_acquire);
      // TODO: Overriding the viewport in-game will mess up the shadows, so only do it in the menu for now.
-    if (Portal2VRViewport::CanOverrideMenuViewport(game) && game->m_VR->OwnsD3DDevice(this))
+    if (Portal2VRViewport::CanOverrideMenuViewport(game) && game->m_VR->OwnsD3DDevice(this) &&
+        !game->m_VR->m_Config.keepWindowResolution)
     {
         D3DVIEWPORT9 *newViewport = const_cast<D3DVIEWPORT9 *>(pViewport);
         newViewport->Width = game->m_VR->m_RenderWidth;
