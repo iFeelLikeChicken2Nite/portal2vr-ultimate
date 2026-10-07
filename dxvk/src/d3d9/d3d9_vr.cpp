@@ -166,6 +166,10 @@ namespace dxvk {
                 m_backBufferImage = texture->Desc()->MultiSample != D3DMULTISAMPLE_NONE
                     ? texture->GetResolveImage() : texture->GetImage();
                 m_hasBackBufferData = true;
+            } else if (!m_loggedCaptureFailure) {
+                m_loggedCaptureFailure = true;
+                Logger::warn(str::format("D3D9VR: back buffer capture failed (multisample ",
+                    uint32_t(texture->Desc()->MultiSample), ")"));
             }
             surface->Release();
             return result;
@@ -222,6 +226,7 @@ namespace dxvk {
         D3D9_TEXTURE_VR_DESC m_backBufferDesc{};
         bool m_hasBackBufferData = false;
         bool m_backBufferCaptureStarted = false;
+        bool m_loggedCaptureFailure = false;
     };
 
 }

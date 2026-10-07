@@ -19,6 +19,8 @@
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
+#include <utility>
 #include <d3d9_vr.h>
 
 // Original Portal2VR viewmodel calibration, retained for compatibility.
@@ -496,13 +498,31 @@ void VR::InvalidateD3DResources()
 void VR::CreateVRTextures()
 {
     const auto now = GetTickCount64();
-    if (!m_D3DVR || !m_RenderTargetRetry.CanAttempt(now, true))
+    // These early outs used to be silent, which hid why stereo never started.
+    static bool loggedNoBridge = false, loggedBackBuffer = false, loggedNoContext = false;
+    if (!m_D3DVR) {
+        if (!std::exchange(loggedNoBridge, true))
+            Logger::Write("VR render targets not created: no DXVK VR bridge");
+        return;
+    }
+    if (!m_RenderTargetRetry.CanAttempt(now, true))
         return;
     SharedTextureHolder currentBackBuffer;
-    if (FAILED(m_D3DVR->GetBackBufferData(&currentBackBuffer)) ||
+    const HRESULT backBufferResult = m_D3DVR->GetBackBufferData(&currentBackBuffer);
+    if (FAILED(backBufferResult) ||
         !currentBackBuffer.m_VulkanData.m_nImage ||
-        !currentBackBuffer.m_VulkanData.m_nWidth || !currentBackBuffer.m_VulkanData.m_nHeight)
+        !currentBackBuffer.m_VulkanData.m_nWidth || !currentBackBuffer.m_VulkanData.m_nHeight) {
+        if (!std::exchange(loggedBackBuffer, true)) {
+            char line[160];
+            snprintf(line, sizeof(line),
+                "VR render targets not created: back buffer unavailable (hr=0x%08lX image=%d %ux%u)",
+                static_cast<unsigned long>(backBufferResult),
+                currentBackBuffer.m_VulkanData.m_nImage ? 1 : 0,
+                currentBackBuffer.m_VulkanData.m_nWidth, currentBackBuffer.m_VulkanData.m_nHeight);
+            Logger::Write(line);
+        }
         return;
+    }
     // Preserve retry history when replacing partial resources from an attempt.
     const auto retryState = m_RenderTargetRetry;
     InvalidateD3DResources();
@@ -515,6 +535,8 @@ void VR::CreateVRTextures()
         rndrContext->GetWindowSize(windowWidth, windowHeight);
         rndrContext->Release();
     } else {
+        if (!std::exchange(loggedNoContext, true))
+            Logger::Write("VR render targets not created: material system render context unavailable");
         m_RenderTargetRetry.RecordFailure(now);
         return;
     }

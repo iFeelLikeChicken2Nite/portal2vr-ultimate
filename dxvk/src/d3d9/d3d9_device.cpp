@@ -3571,6 +3571,12 @@ namespace dxvk {
     D3D9DeviceLock lock = LockDevice();
     Game* const game = g_Game.load(std::memory_order_acquire);
     const bool ownedVR = game && game->m_VR && game->m_VR->OwnsD3DDevice(this);
+    if (game && game->m_VR && (!ownedVR || m_vrBridge == nullptr)) {
+      static std::atomic<bool> logged{false};
+      if (!logged.exchange(true))
+        Logger::warn(str::format("D3D9: Present on a device without the Portal2VR bridge (owned=",
+          ownedVR, " bridge=", m_vrBridge != nullptr, ")"));
+    }
     if (ownedVR && m_vrBridge != nullptr) {
       IDirect3DSurface9* backBuffer = nullptr;
       if (SUCCEEDED(GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) && backBuffer) {
