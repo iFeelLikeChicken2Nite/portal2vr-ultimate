@@ -1122,7 +1122,14 @@ void VR::UpdateSixense(bool actionsReady)
     const auto &hmd = m_Poses[vr::k_unTrackedDeviceIndex_Hmd];
     frame.headValid = hmd.bPoseIsValid && hmd.bDeviceIsConnected;
     std::memcpy(frame.head.m, hmd.mDeviceToAbsoluteTracking.m, sizeof(frame.head.m));
-    SixenseMode::History().Publish(SixenseBridge::BuildFrame(frame, m_Config.sixenseHandSpace, m_SixenseSequence++));
+    auto hydra = SixenseBridge::BuildFrame(frame, m_Config.sixenseHandSpace, m_SixenseSequence++);
+    for (int which = 0; which < 2; ++which) {
+        auto &controller = hydra.controllers[which];
+        if (!controller.enabled) continue;
+        for (int axis = 0; axis < 3; ++axis)
+            controller.pos[axis] += m_Config.sixenseBaseOffset[axis];
+    }
+    SixenseMode::History().Publish(hydra);
 
     for (int which = 0; which < 2; ++which) {
         const int pulseMs = SixenseMode::Vibrations().Take(which);
@@ -2494,6 +2501,8 @@ void VR::ParseConfigFile()
     Logger::Write("Config applied: VerboseDiagnostics=" + std::to_string(m_Config.verboseDiagnostics) +
         " KeepWindowResolution=" + std::to_string(m_Config.keepWindowResolution) +
         " MenuSubmitMode=" + std::to_string(m_Config.menuSubmitMode) +
+        " SixenseBaseOffset=" + std::to_string(m_Config.sixenseBaseOffset[0]) + "," +
+        std::to_string(m_Config.sixenseBaseOffset[1]) + "," + std::to_string(m_Config.sixenseBaseOffset[2]) +
         " TurnSpeed=" + std::to_string(m_TurnSpeed) +
         " SnapTurnAngle=" + std::to_string(m_SnapTurnAngle) +
         " VRScale=" + std::to_string(m_VRScale) +

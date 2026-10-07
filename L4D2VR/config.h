@@ -62,6 +62,10 @@ struct ConfigSnapshot {
     // Hydra mode: right grip fires orange (left Hydra trigger) and the left
     // trigger takes the right Hydra bumper's job, like Portal2VR's layout.
     bool sixenseOrangeOnRightGrip = true;
+    // Added to emulated Hydra positions (mm, after the hand-space conversion)
+    // so hands read as relative to a base at waist height in front of the
+    // player rather than to the head or tracking origin. Live-tunable.
+    std::array<float, 3> sixenseBaseOffset{0.0f, 550.0f, 450.0f};
 };
 
 struct ConfigParseResult {
@@ -186,6 +190,9 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
     readBool("KeepWindowResolution", result.value.keepWindowResolution);
     readBool("ShowSourceCrosshair", result.value.showSourceCrosshair);
     readBool("SixenseOrangeOnRightGrip", result.value.sixenseOrangeOnRightGrip);
+    readFloat("SixenseBaseOffsetX", result.value.sixenseBaseOffset[0], -2000.0f, 2000.0f);
+    readFloat("SixenseBaseOffsetY", result.value.sixenseBaseOffset[1], -2000.0f, 2000.0f);
+    readFloat("SixenseBaseOffsetZ", result.value.sixenseBaseOffset[2], -2000.0f, 2000.0f);
     const auto menuSubmit = entries.find("MenuSubmitMode");
     if (menuSubmit != entries.end()) {
         if (menuSubmit->second == "Full") result.value.menuSubmitMode = 0;
