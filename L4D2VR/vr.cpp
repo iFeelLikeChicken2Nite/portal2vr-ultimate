@@ -963,7 +963,7 @@ void VR::DispatchPortalShotHaptic(bool actionsReady)
 
 bool VR::SixenseInputWanted() const
 {
-    return m_SixenseActionsAvailable && m_Config.sixenseEmulation && GameModules::IsSixense() &&
+    return m_IsInitialized && m_SixenseActionsAvailable && m_Config.sixenseEmulation && GameModules::IsSixense() &&
         m_Game->m_EngineClient->IsInGame() && !m_Game->m_VguiSurface->IsCursorVisible();
 }
 
