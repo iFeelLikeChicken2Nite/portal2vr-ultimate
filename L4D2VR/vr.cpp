@@ -1108,6 +1108,17 @@ void VR::UpdateSixense(bool actionsReady)
     SixenseBridge::FrameInput frame;
     frame.left = ReadSixenseHand(vr::TrackedControllerRole_LeftHand, m_SixenseLeftSource, readInputs);
     frame.right = ReadSixenseHand(vr::TrackedControllerRole_RightHand, m_SixenseRightSource, readInputs);
+    if (m_Config.sixenseOrangeOnRightGrip && m_SixenseInputActive && frame.left.valid && frame.right.valid) {
+        // Gameplay only: the Hydra setup screen needs the real left trigger.
+        // Portal2VR's layout: orange portal on the right grip. The MotionPack
+        // fires orange with the left Hydra trigger, so swap: right grip ->
+        // left trigger, left trigger -> right bumper (whatever that does).
+        const bool rightGrip = (frame.right.buttons & SixenseBridge::kButtonBumper) != 0;
+        const bool leftTrigger = frame.left.trigger > 0.5f;
+        frame.left.trigger = rightGrip ? 1.0f : 0.0f;
+        frame.right.buttons = leftTrigger ? (frame.right.buttons | SixenseBridge::kButtonBumper) :
+            (frame.right.buttons & ~SixenseBridge::kButtonBumper);
+    }
     const auto &hmd = m_Poses[vr::k_unTrackedDeviceIndex_Hmd];
     frame.headValid = hmd.bPoseIsValid && hmd.bDeviceIsConnected;
     std::memcpy(frame.head.m, hmd.mDeviceToAbsoluteTracking.m, sizeof(frame.head.m));

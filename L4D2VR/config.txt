@@ -38,3 +38,4 @@ SixenseHandSpace=Tracking # Tracking matches the flat-screen Hydra-OpenVR shims;
 KeepWindowResolution=false # Diagnostic, restart required: true keeps the game back buffer and menu viewports at window size instead of the headset eye size
 MenuSubmitMode=Full # Diagnostic: Full sends blank eyes and the menu overlay; BlankOnly skips the overlay; None sends nothing to SteamVR while in the main menu
 ShowSourceCrosshair=true # false hides the flat 2D crosshair in the headset (the gun still aims where the controller points)
+SixenseOrangeOnRightGrip=true # Hydra mode: right grip fires the orange portal (the MotionPack uses the left trigger); the left trigger then does what the right grip did

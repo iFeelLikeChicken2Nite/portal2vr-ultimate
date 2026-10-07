@@ -59,6 +59,9 @@ struct ConfigSnapshot {
     int menuSubmitMode = 0;
     // false hides Source's 2D crosshair in VR (it is drawn flat in the eye view).
     bool showSourceCrosshair = true;
+    // Hydra mode: right grip fires orange (left Hydra trigger) and the left
+    // trigger takes the right Hydra bumper's job, like Portal2VR's layout.
+    bool sixenseOrangeOnRightGrip = true;
 };
 
 struct ConfigParseResult {
@@ -182,6 +185,7 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
     readFloat("TurnSpeed", result.value.turnSpeed, 0.01f, 2.0f);
     readBool("KeepWindowResolution", result.value.keepWindowResolution);
     readBool("ShowSourceCrosshair", result.value.showSourceCrosshair);
+    readBool("SixenseOrangeOnRightGrip", result.value.sixenseOrangeOnRightGrip);
     const auto menuSubmit = entries.find("MenuSubmitMode");
     if (menuSubmit != entries.end()) {
         if (menuSubmit->second == "Full") result.value.menuSubmitMode = 0;
