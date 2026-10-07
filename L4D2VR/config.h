@@ -54,6 +54,9 @@ struct ConfigSnapshot {
     // Diagnostic: leave the game's back buffer and menu viewports at window
     // size instead of the headset's eye size. Read at startup only.
     bool keepWindowResolution = false;
+    // Diagnostic: what the main menu sends to SteamVR. 0 Full (blank eyes +
+    // menu overlay), 1 BlankOnly (no overlay), 2 None (nothing submitted).
+    int menuSubmitMode = 0;
 };
 
 struct ConfigParseResult {
@@ -176,6 +179,13 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
 
     readFloat("TurnSpeed", result.value.turnSpeed, 0.01f, 2.0f);
     readBool("KeepWindowResolution", result.value.keepWindowResolution);
+    const auto menuSubmit = entries.find("MenuSubmitMode");
+    if (menuSubmit != entries.end()) {
+        if (menuSubmit->second == "Full") result.value.menuSubmitMode = 0;
+        else if (menuSubmit->second == "BlankOnly") result.value.menuSubmitMode = 1;
+        else if (menuSubmit->second == "None") result.value.menuSubmitMode = 2;
+        else result.errors.push_back("MenuSubmitMode is invalid; expected Full, BlankOnly or None");
+    }
     const auto trackingMode = entries.find("TrackingMode");
     if (trackingMode != entries.end()) {
         if (trackingMode->second == "Seated")

@@ -576,6 +576,10 @@ namespace dxvk {
                   textureTarget->m_VRTexture.handle = &textureTarget->m_VulkanData;
                   textureTarget->m_VRTexture.eColorSpace = vr::ColorSpace_Auto;
                   textureTarget->m_VRTexture.eType = vr::TextureType_Vulkan;
+                  Logger::info(str::format("Portal2VR shared texture ", texID, ": d3d format ",
+                      uint32_t(desc.Format), " vk format ", uint32_t(texDesc.Format), " ",
+                      texDesc.Width, "x", texDesc.Height, " samples ", texDesc.SampleCount,
+                      " usage ", uint32_t(Usage)));
               } else {
                   Logger::err(str::format("Portal2VR texture sharing failed: ", texID,
                                           " surface=", surfaceResult, " descriptor=", shareResult));

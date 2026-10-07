@@ -166,6 +166,12 @@ namespace dxvk {
                 m_backBufferImage = texture->Desc()->MultiSample != D3DMULTISAMPLE_NONE
                     ? texture->GetResolveImage() : texture->GetImage();
                 m_hasBackBufferData = true;
+                if (!m_loggedCapture) {
+                    m_loggedCapture = true;
+                    Logger::info(str::format("D3D9VR: back buffer vk format ", uint32_t(m_backBufferDesc.Format),
+                        " ", m_backBufferDesc.Width, "x", m_backBufferDesc.Height,
+                        " samples ", m_backBufferDesc.SampleCount));
+                }
             } else if (!m_loggedCaptureFailure) {
                 m_loggedCaptureFailure = true;
                 Logger::warn(str::format("D3D9VR: back buffer capture failed (multisample ",
@@ -227,6 +233,7 @@ namespace dxvk {
         bool m_hasBackBufferData = false;
         bool m_backBufferCaptureStarted = false;
         bool m_loggedCaptureFailure = false;
+        bool m_loggedCapture = false;
     };
 
 }

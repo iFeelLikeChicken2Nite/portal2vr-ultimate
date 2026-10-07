@@ -214,6 +214,10 @@ void TestConfig()
     std::istringstream keep("KeepWindowResolution=true # diagnostic\n");
     Expect(ParseConfig(keep, ConfigSnapshot{}).value.keepWindowResolution, "window resolution diagnostic parses");
 
+    std::istringstream submit("MenuSubmitMode=None\n");
+    Expect(ParseConfig(submit, ConfigSnapshot{}).value.menuSubmitMode == 2 &&
+           unchanged.value.menuSubmitMode == 0, "menu submit diagnostic parses");
+
     std::istringstream bad("SixenseMode=On\nSixenseHandSpace=Room\n");
     const auto rejected = ParseConfig(bad, parsed.value);
     Expect(rejected.errors.size() == 2 && !rejected.value.sixenseEmulation &&

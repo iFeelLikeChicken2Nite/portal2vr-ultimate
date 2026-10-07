@@ -681,6 +681,19 @@ void VR::SubmitVRTextures()
             ReleaseMenuMouse();
             return;
         }
+        if (m_Config.menuSubmitMode != 0) {
+            // Diagnostic modes: no menu overlay; None also skips the eye submits.
+            m_Overlay->HideOverlay(m_MainMenuHandle);
+            vr::EVRCompositorError leftError = vr::VRCompositorError_None, rightError = vr::VRCompositorError_None;
+            if (m_Config.menuSubmitMode == 1) {
+                leftError = vr::VRCompositor()->Submit(vr::Eye_Left, &m_VKBlankTexture.m_VRTexture, NULL, vr::Submit_Default);
+                rightError = vr::VRCompositor()->Submit(vr::Eye_Right, &m_VKBlankTexture.m_VRTexture, NULL, vr::Submit_Default);
+            }
+            if (m_RenderDiagnostics.First(RenderDiagnosticEvent::MenuSubmission))
+                Logger::Write("VR menu submit (diagnostic mode " + std::to_string(m_Config.menuSubmitMode) +
+                    "): compositor=" + std::to_string(leftError) + "," + std::to_string(rightError));
+            return;
+        }
         // Translation follows physical HMD; heading locks until reopening.
         const bool menuPositioned = RepositionOverlays();
         const vr::VRTextureBounds_t bounds{0, 0, mapping->bounds.uMax, mapping->bounds.vMax};
@@ -2429,6 +2442,7 @@ void VR::ParseConfigFile()
     m_ViewmodelAngCustomOffset = {m_Config.viewmodelAngOffset[0], m_Config.viewmodelAngOffset[1], m_Config.viewmodelAngOffset[2]};
     Logger::Write("Config applied: VerboseDiagnostics=" + std::to_string(m_Config.verboseDiagnostics) +
         " KeepWindowResolution=" + std::to_string(m_Config.keepWindowResolution) +
+        " MenuSubmitMode=" + std::to_string(m_Config.menuSubmitMode) +
         " TurnSpeed=" + std::to_string(m_TurnSpeed) +
         " SnapTurnAngle=" + std::to_string(m_SnapTurnAngle) +
         " VRScale=" + std::to_string(m_VRScale) +
