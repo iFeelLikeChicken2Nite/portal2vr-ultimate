@@ -80,6 +80,32 @@ static void DisableServerIntelCamera(uintptr_t serverBase)
     Logger::Write("Sixense: server sixense_intel_enabled set to 0 (Hydra input instead of Intel camera)");
 }
 
+// Native VR grab: player_held_object_distance sets how far ahead a held
+// object floats. Keep a pointer to its live float so the right stick can
+// change it while holding (ConVar m_fValue at +0x2C of the parent).
+void Game::FindHeldObjectDistance()
+{
+    const auto *image = reinterpret_cast<const std::uint8_t *>(m_BaseServer);
+    const auto *nt = reinterpret_cast<const IMAGE_NT_HEADERS32 *>(
+        image + reinterpret_cast<const IMAGE_DOS_HEADER *>(image)->e_lfanew);
+    const std::size_t size = nt->OptionalHeader.SizeOfImage;
+    const std::size_t at = IntelCameraPatch::FindConVarRegistration(
+        image, size, static_cast<std::uint32_t>(m_BaseServer), "player_held_object_distance");
+    if (at == IntelCameraPatch::kNotFound) {
+        Logger::Write("Native grab: player_held_object_distance not found; stick distance disabled");
+        return;
+    }
+    std::uint32_t object;
+    std::memcpy(&object, image + at + 10, 4);
+    auto *conVar = reinterpret_cast<std::uint8_t *>(static_cast<uintptr_t>(object));
+    std::uint8_t *parent = *reinterpret_cast<std::uint8_t **>(conVar + 0x1C);
+    if (!parent) parent = conVar;
+    m_HeldObjectDistance = reinterpret_cast<float *>(parent + 0x2C);
+    m_HeldObjectDistanceDefault = *m_HeldObjectDistance;
+    Logger::Write("Native grab: player_held_object_distance found (default " +
+        std::to_string(m_HeldObjectDistanceDefault) + "); right stick up/down sets it while holding");
+}
+
 bool Game::Initialize()
 {
     // The Sixense MotionPack loads client_sixense.dll instead of client.dll;
@@ -129,6 +155,7 @@ bool Game::Initialize()
     }
     if (variant == GameModules::Variant::Sixense)
         DisableServerIntelCamera(m_BaseServer);
+    FindHeldObjectDistance();
     const auto surfaceStart = GetTickCount64();
     while (!GetModuleHandleA("vguimatsurface.dll")) {
         if (GetTickCount64() - surfaceStart > 30000) {

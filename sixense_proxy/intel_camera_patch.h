@@ -61,6 +61,27 @@ inline std::size_t FindEnabledDefaultOperand(const std::uint8_t *image, std::siz
     return kNotFound;
 }
 
+// Any ConVar registered as `push flags; push <default>; push <name>;
+// mov ecx, <ConVar>`: returns the offset of the default-value push operand
+// (name at +5, ConVar object at +10), or kNotFound.
+inline std::size_t FindConVarRegistration(const std::uint8_t *image, std::size_t size,
+                                          std::uint32_t base, const char *name)
+{
+    if (!image || size < 16 || !name) return kNotFound;
+    const std::size_t length = std::strlen(name) + 1;
+    for (std::size_t i = 0; i + 15 <= size; ++i) {
+        if (image[i] != 0x68 || image[i + 5] != 0x68 || image[i + 10] != 0x68 || image[i + 15] != 0xB9)
+            continue;
+        std::uint32_t nameAddress;
+        std::memcpy(&nameAddress, image + i + 11, sizeof(nameAddress));
+        if (nameAddress < base) continue;
+        const std::size_t at = nameAddress - base;
+        if (at >= size || length > size - at || std::memcmp(image + at, name, length) != 0) continue;
+        return i + 6;
+    }
+    return kNotFound;
+}
+
 // The camera is also (re)created outside the convar's reach, e.g. by the
 // "connect camera" retry, and every path makes the same null-device
 // dereference. Each site allocates the 0x2948-byte camera object and checks

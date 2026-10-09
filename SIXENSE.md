@@ -144,3 +144,31 @@ Open questions, in the order a first test session should answer them:
 7. The portal gun's blue glow effects do not line up with the gun model
    after the viewmodel offset (low priority; `ExperimentalViewmodelAlignment`
    is the existing option aimed at model/effect alignment, untested here).
+
+## native-vr branch: rebuilding the mechanics on VR controllers
+
+Decision (2026-10-09): drop the Hydra emulation as the way to play and
+rebuild the pack's mechanics directly on the VR controllers. The emulation
+state is preserved on branch `sixense-vr-hydra-backup` / tag
+`hydra-backup-2026-10-09` (beb406a). On this branch the game runs with
+`SixenseMode=Off` and `sixense_mode 0`; the `sixense.dll` proxy stays only
+for the Intel-camera startup patches, and Portal2VR's own aim, fire and
+grab are active.
+
+### Mechanics inventory
+
+From the server's `sixense_*` convars and the map list
+(`sp_a1_sx_perc_*`, `sp_a2_sx_*` to `sp_a8_sx_*`):
+
+| Mechanic | What the pack does | Levels | Native plan |
+|---|---|---|---|
+| Distance grab | Held object floats ahead; Hydra reach sets distance | all | **Done (first step):** Portal2VR aims the held object along the right controller; right stick up/down changes `player_held_object_distance` while holding (`NativeHoldDistance*` in config.txt) |
+| 1:1 manipulation | Reach out while holding to move/rotate the object with the wrist (`sixense_one_to_one*`, `sixense_auto_one_to_one_*`, `sixense_dist_one_to_one_*`) | sp_a2_sx_reaching, tutorials | Rotate the held object with the controller's rotation (grab controller target angles) |
+| Ratcheting | Hold a button to re-grip without turning the object (`sixense_ratchet*`) | 1:1 levels | Comes free with 1:1 rotation: ignore wrist rotation while a button is held |
+| Cube scaling | Hold SCALE and move the other hand left/right to grow/shrink, per axis; double-tap resets (`sixense_scaling_*`) | sp_a1_sx_perc_scaling, sp_a8_sx_mass | Investigate the Intel path first: `sixense_intel_scale_key` / `sixense_intel_reset_scale_key` were keyboard-driven scaling for camera mode |
+| Turret scaling | Same for turrets (`sixense_scaling_turret_*`) | sp_a8_sx_turrets | Same as cube scaling |
+| Portal tweaking / surfing | Aim at a placed portal, hold the trigger to grab it, move/rotate it (`sixense_portal_tweaking_*`) | sp_a1_sx_perc_surfing, sp_a8_sx_tb_surf, sp_a4_sx_thru_portals | Investigate `sixense_intel_portal_tweak_key` (camera mode's key) and the tweaking server code |
+| Throwing | Release with hand velocity (`sixense_throw_*`) | throwing levels | Use controller velocity on release |
+
+Order: distance grab (done), then 1:1 rotation and ratchet, then scaling and
+portal tweaking once their server-side entry points are mapped.

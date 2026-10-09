@@ -453,6 +453,7 @@ void VR::Update()
     const bool actionsReady = UpdatePosesAndActions();
     GetPoses();
     UpdateSixense(actionsReady);
+    UpdateNativeHoldDistance();
     if (!actionsReady) {
         m_PrevFrameTime = std::chrono::steady_clock::now();
         UpdateTracking();
@@ -1055,6 +1056,41 @@ void VR::ApplySixenseHoldDepth(SixenseBridge::LegacyAllControllerData &hydra)
     auto &right = hydra.controllers[1];
     if (right.enabled)
         right.pos[2] -= m_SixenseHoldDepth; // -Z is away from the player
+}
+
+// Native VR grab (no Hydra emulation): Portal2VR already aims a held object
+// along the right controller; right stick up/down pushes it away or pulls it
+// in by changing player_held_object_distance while something is held. The
+// game's default comes back on release.
+void VR::UpdateNativeHoldDistance()
+{
+    float *distance = m_Game->m_HeldObjectDistance;
+    if (!distance || SixenseEmulationOn() || !m_Config.nativeHoldDistance)
+        return;
+    const auto now = GetTickCount64();
+    const float dt = m_LastNativeHoldTick ? (std::min)(0.1f, (now - m_LastNativeHoldTick) / 1000.0f) : 0.0f;
+    m_LastNativeHoldTick = now;
+    const bool holding = now - m_LastHoldTick.load() < 250;
+    if (!holding) {
+        if (m_NativeHoldActive) {
+            *distance = m_Game->m_HeldObjectDistanceDefault;
+            m_NativeHoldActive = false;
+        }
+        return;
+    }
+    if (!m_NativeHoldActive) {
+        m_NativeHoldActive = true;
+        *distance = m_Game->m_HeldObjectDistanceDefault;
+        if (!m_SixenseHoldLogged) {
+            m_SixenseHoldLogged = true;
+            Logger::Write("Native grab: held object detected; right stick up/down sets its distance");
+        }
+    }
+    vr::InputAnalogActionData_t stick{};
+    if (GetAnalogActionData(m_ActionTurn, stick) && std::fabs(stick.y) > 0.2f) {
+        const float next = *distance + stick.y * m_Config.nativeHoldDistanceSpeed * dt;
+        *distance = (std::max)(m_Config.nativeHoldDistanceMin, (std::min)(m_Config.nativeHoldDistanceMax, next));
+    }
 }
 
 bool VR::SixenseEmulationOn() const

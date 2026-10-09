@@ -72,6 +72,12 @@ struct ConfigSnapshot {
     float sixenseHoldDepthSpeed = 400.0f; // mm per second at full stick
     float sixenseHoldDepthMin = -250.0f;
     float sixenseHoldDepthMax = 600.0f;
+    // Native VR grab: right stick up/down changes a held object's distance
+    // (player_held_object_distance, game units) while it is held.
+    bool nativeHoldDistance = true;
+    float nativeHoldDistanceSpeed = 120.0f; // units per second at full stick
+    float nativeHoldDistanceMin = 30.0f;
+    float nativeHoldDistanceMax = 250.0f;
 };
 
 struct ConfigParseResult {
@@ -203,6 +209,10 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
     readFloat("SixenseHoldDepthSpeed", result.value.sixenseHoldDepthSpeed, 0.0f, 3000.0f);
     readFloat("SixenseHoldDepthMin", result.value.sixenseHoldDepthMin, -2000.0f, 0.0f);
     readFloat("SixenseHoldDepthMax", result.value.sixenseHoldDepthMax, 0.0f, 3000.0f);
+    readBool("NativeHoldDistance", result.value.nativeHoldDistance);
+    readFloat("NativeHoldDistanceSpeed", result.value.nativeHoldDistanceSpeed, 0.0f, 1000.0f);
+    readFloat("NativeHoldDistanceMin", result.value.nativeHoldDistanceMin, 10.0f, 500.0f);
+    readFloat("NativeHoldDistanceMax", result.value.nativeHoldDistanceMax, 10.0f, 1000.0f);
     const auto menuSubmit = entries.find("MenuSubmitMode");
     if (menuSubmit != entries.end()) {
         if (menuSubmit->second == "Full") result.value.menuSubmitMode = 0;

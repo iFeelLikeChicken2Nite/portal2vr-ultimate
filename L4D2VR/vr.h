@@ -320,6 +320,9 @@ public:
 	bool SixenseInputWanted() const;
 	bool SixenseEmulationOn() const;
 	void ApplySixenseHoldDepth(SixenseBridge::LegacyAllControllerData &hydra);
+	void UpdateNativeHoldDistance();
+	unsigned long long m_LastNativeHoldTick = 0;
+	bool m_NativeHoldActive = false;
 	std::atomic<unsigned long long> m_LastHoldTick{0};
 	unsigned long long m_LastHydraFrameTick = 0;
 	float m_SixenseHoldDepth = 0.0f;
