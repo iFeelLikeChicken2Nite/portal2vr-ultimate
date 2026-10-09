@@ -103,7 +103,11 @@ public:
     Offset ProcessUsercmds =             { "server.dll", 0x170300, "55 8B EC B8 ? ? ? ? E8 ? ? ? ? 0F 57 C0 53 56 57 B9 ? ? ? ? 8D 85 ? ? ? ? 33 DB" }; //?
     Offset CBaseEntity_entindex =        { "server.dll", 0x39F00, "8B 41 1C 85 C0 75 01 C3 8B 0D ? ? ? ? 2B 41 58 C1 F8 04 C3 CC"};
     // Audited Portal-player override; the old short pattern finds unrelated methods.
-    Offset EyePosition{VerifiedPortalSymbols::Symbol::EyePosition};
+    // Sixense build: CPortal_Player::EyePosition (vtable slot before EyeAngles, 0x1067F570),
+    // same shape as retail; retail resolves through the SHA-pinned symbol.
+    Offset EyePosition = GameModules::IsSixense() ?
+        Offset("server.dll", 0x36ACB0, "55 8B EC 83 EC 18 56 8B F1 8B 86 90 15 00 00 8B 16 F3 0F 7E 86 88 15 00 00") :
+        Offset(VerifiedPortalSymbols::Symbol::EyePosition);
 
     /*Offset GetRenderTarget =             { "materialsystem.dll", 0x2CD30, "83 79 4C 00" };
     Offset Viewport =                    { "materialsystem.dll", 0x2E010, "55 8B EC 8B 45 0C 53 8B 5D" };

@@ -1064,6 +1064,15 @@ void VR::ApplySixenseHoldDepth(SixenseBridge::LegacyAllControllerData &hydra)
 // game's default comes back on release.
 void VR::UpdateNativeHoldDistance()
 {
+    if (m_Config.nativeHandGrab && !SixenseEmulationOn() && m_Game->m_EngineClient->IsInGame()) {
+        if (!m_NativeGrabDefaultsApplied) {
+            m_Game->ClientCmd_Unrestricted("player_held_object_look_down_adjustment 0");
+            m_NativeGrabDefaultsApplied = true;
+            Logger::Write("Native grab: hand-anchored holding on, look-down pull-in off");
+        }
+    } else if (!m_Game->m_EngineClient->IsInGame()) {
+        m_NativeGrabDefaultsApplied = false;
+    }
     float *distanceVM = m_Game->m_HeldObjectDistanceVM;
     float *distance = m_Game->m_HeldObjectDistance;
     if (!distanceVM || !distance || SixenseEmulationOn() || !m_Config.nativeHoldDistance)

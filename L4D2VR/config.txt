@@ -49,6 +49,7 @@ SixenseHoldDepthMax=600.0 # mm, furthest the stick can push a held object
 HUDInEyeCentered=true # With ExperimentalHUDOverlay=false: draw hints, titles and crosshair centred in the view instead of the top-left corner
 HUDInEyeScale=0.45 # 0.2-1.0, share of the view width the HUD covers (bigger = larger text)
 HUDInEyeVerticalOffset=0.05 # -0.4 to 0.4, share of view height; + moves the HUD down
+NativeHandGrab=true # Without Hydra emulation: a held object hangs off your right hand along where it points (not your head), and looking or pointing down no longer pulls it in
 NativeHoldDistance=true # Without Hydra emulation: while holding something, right stick up/down pushes it away or pulls it closer
 NativeHoldDistanceSpeed=250.0 # game units per second at full stick
 NativeHoldDistanceMin=30.0 # closest a held object can be pulled (game units)

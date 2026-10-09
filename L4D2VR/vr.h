@@ -285,6 +285,7 @@ public:
 	QAngle m_PortalRotationOffset = {0, 0, 0};
 	QAngle m_RotationOffset = { 0, 0, 0 };
 	bool m_OverrideEyeAngles = false;
+	bool m_OverrideEyePosition = false; // native grab: hold from the right controller
 	std::chrono::steady_clock::time_point m_PrevFrameTime;
 
 	float m_TurnSpeed = 0.15f;
@@ -323,6 +324,7 @@ public:
 	void UpdateNativeHoldDistance();
 	unsigned long long m_LastNativeHoldTick = 0;
 	bool m_NativeHoldActive = false;
+	bool m_NativeGrabDefaultsApplied = false;
 	std::atomic<unsigned long long> m_LastHoldTick{0};
 	unsigned long long m_LastHydraFrameTick = 0;
 	float m_SixenseHoldDepth = 0.0f;

@@ -79,6 +79,9 @@ struct ConfigSnapshot {
     float hudInEyeScale = 0.45f;          // share of the eye width the HUD spans
     float hudInEyeVerticalOffset = 0.05f; // share of eye height, + = lower
     bool nativeHoldDistance = true;
+    // Native grab: a held object hangs off the right controller (position
+    // and aim) instead of the head; no look-down pull-in.
+    bool nativeHandGrab = true;
     float nativeHoldDistanceSpeed = 250.0f; // units per second at full stick
     float nativeHoldDistanceMin = 30.0f;
     float nativeHoldDistanceMax = 100.0f; // the game stops held objects about here
@@ -217,6 +220,7 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
     readFloat("HUDInEyeScale", result.value.hudInEyeScale, 0.2f, 1.0f);
     readFloat("HUDInEyeVerticalOffset", result.value.hudInEyeVerticalOffset, -0.4f, 0.4f);
     readBool("NativeHoldDistance", result.value.nativeHoldDistance);
+    readBool("NativeHandGrab", result.value.nativeHandGrab);
     readFloat("NativeHoldDistanceSpeed", result.value.nativeHoldDistanceSpeed, 0.0f, 1000.0f);
     readFloat("NativeHoldDistanceMin", result.value.nativeHoldDistanceMin, 10.0f, 500.0f);
     readFloat("NativeHoldDistanceMax", result.value.nativeHoldDistanceMax, 10.0f, 1000.0f);

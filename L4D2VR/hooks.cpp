@@ -1303,6 +1303,10 @@ int Hooks::dGetPrimaryAttackActivity(void *ecx, void *edx, void *meleeInfo)
 Vector *Hooks::dEyePosition(void *ecx, void *edx, Vector *eyePos)
 {
 	Vector *result = hkEyePosition.fOriginal(ecx, eyePos);
+	// Native grab: while the server places a held object, the "eye" is the
+	// right controller, so the object hangs off the hand along its aim.
+	if (result && RuntimePublished() && m_VR->m_OverrideEyePosition && m_VR->m_RightControllerPose.valid)
+		*result = m_VR->GetRightControllerAbsPos();
 	return result;
 }
 
@@ -1989,14 +1993,18 @@ double __fastcall Hooks::dComputeError(void* ecx, void* edx) {
 bool __fastcall Hooks::dUpdateObject(void* ecx, void* edx, void* pPlayer, float flError, bool bIsTeleport) {
 	if (!RuntimePublished()) return hkUpdateObject.fOriginal(ecx, pPlayer, flError, bIsTeleport);
 	m_VR->m_LastHoldTick.store(GetTickCount64()); // something is held this tick
-	bool wasTrue = m_VR->m_OverrideEyeAngles;
+	const bool wasTrue = m_VR->m_OverrideEyeAngles;
+	const bool wasPosition = m_VR->m_OverrideEyePosition;
 
 	m_VR->m_OverrideEyeAngles = true;
+	if (m_VR->m_Config.nativeHandGrab && !m_VR->SixenseEmulationOn())
+		m_VR->m_OverrideEyePosition = true;
 
 	bool value = hkUpdateObject.fOriginal(ecx, pPlayer, flError, bIsTeleport);
 
 	if (!wasTrue)
 		m_VR->m_OverrideEyeAngles = false;
+	m_VR->m_OverrideEyePosition = wasPosition;
 
 	return value;
 }
