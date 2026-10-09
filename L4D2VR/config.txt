@@ -46,6 +46,9 @@ SixenseVRDefaults=true # Hydra mode: on entering a map, set hold multiplier 2, 1
 SixenseHoldDepthSpeed=400.0 # Hydra mode: mm per second the right stick (up/down) pushes a held object away or pulls it in
 SixenseHoldDepthMin=-250.0 # mm, closest the stick can pull a held object
 SixenseHoldDepthMax=600.0 # mm, furthest the stick can push a held object
+HUDInEyeCentered=true # With ExperimentalHUDOverlay=false: draw hints, titles and crosshair centred in the view instead of the top-left corner
+HUDInEyeScale=0.45 # 0.2-1.0, share of the view width the HUD covers (bigger = larger text)
+HUDInEyeVerticalOffset=0.05 # -0.4 to 0.4, share of view height; + moves the HUD down
 NativeHoldDistance=true # Without Hydra emulation: while holding something, right stick up/down pushes it away or pulls it closer
 NativeHoldDistanceSpeed=120.0 # game units per second at full stick
 NativeHoldDistanceMin=30.0 # closest a held object can be pulled (game units)

@@ -67,6 +67,8 @@ public:
     uintptr_t m_BaseServer = 0;
     float *m_HeldObjectDistance = nullptr;   // live player_held_object_distance
     float m_HeldObjectDistanceDefault = 0.0f;
+    float *m_HeldObjectDistanceVM = nullptr; // live player_held_object_distance_vm
+    float m_HeldObjectDistanceVMDefault = 0.0f;
     void FindHeldObjectDistance();
     uintptr_t m_BaseMaterialSystem = 0;
     uintptr_t m_BaseVgui2 = 0;

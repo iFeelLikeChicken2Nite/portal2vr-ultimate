@@ -89,21 +89,31 @@ void Game::FindHeldObjectDistance()
     const auto *nt = reinterpret_cast<const IMAGE_NT_HEADERS32 *>(
         image + reinterpret_cast<const IMAGE_DOS_HEADER *>(image)->e_lfanew);
     const std::size_t size = nt->OptionalHeader.SizeOfImage;
-    const std::size_t at = IntelCameraPatch::FindConVarRegistration(
-        image, size, static_cast<std::uint32_t>(m_BaseServer), "player_held_object_distance");
-    if (at == IntelCameraPatch::kNotFound) {
-        Logger::Write("Native grab: player_held_object_distance not found; stick distance disabled");
+    const auto find = [&](const char *name) -> float * {
+        const std::size_t at = IntelCameraPatch::FindConVarRegistration(
+            image, size, static_cast<std::uint32_t>(m_BaseServer), name);
+        if (at == IntelCameraPatch::kNotFound) return nullptr;
+        std::uint32_t object;
+        std::memcpy(&object, image + at + 10, 4);
+        auto *conVar = reinterpret_cast<std::uint8_t *>(static_cast<uintptr_t>(object));
+        std::uint8_t *parent = *reinterpret_cast<std::uint8_t **>(conVar + 0x1C);
+        if (!parent) parent = conVar;
+        return reinterpret_cast<float *>(parent + 0x2C);
+    };
+    // Portal 2 holds objects on the viewmodel path (player_held_object_
+    // use_view_model -1), which uses the _vm distance; drive both.
+    m_HeldObjectDistance = find("player_held_object_distance");
+    m_HeldObjectDistanceVM = find("player_held_object_distance_vm");
+    if (!m_HeldObjectDistance || !m_HeldObjectDistanceVM) {
+        m_HeldObjectDistance = m_HeldObjectDistanceVM = nullptr;
+        Logger::Write("Native grab: held object distance convars not found; stick distance disabled");
         return;
     }
-    std::uint32_t object;
-    std::memcpy(&object, image + at + 10, 4);
-    auto *conVar = reinterpret_cast<std::uint8_t *>(static_cast<uintptr_t>(object));
-    std::uint8_t *parent = *reinterpret_cast<std::uint8_t **>(conVar + 0x1C);
-    if (!parent) parent = conVar;
-    m_HeldObjectDistance = reinterpret_cast<float *>(parent + 0x2C);
     m_HeldObjectDistanceDefault = *m_HeldObjectDistance;
-    Logger::Write("Native grab: player_held_object_distance found (default " +
-        std::to_string(m_HeldObjectDistanceDefault) + "); right stick up/down sets it while holding");
+    m_HeldObjectDistanceVMDefault = *m_HeldObjectDistanceVM;
+    Logger::Write("Native grab: held object distance found (default " +
+        std::to_string(m_HeldObjectDistanceDefault) + ", viewmodel " +
+        std::to_string(m_HeldObjectDistanceVMDefault) + "); right stick up/down sets it while holding");
 }
 
 bool Game::Initialize()

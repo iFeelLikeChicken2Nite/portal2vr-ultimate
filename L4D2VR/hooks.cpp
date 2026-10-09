@@ -416,8 +416,8 @@ void Hooks::Initialize()
 		m_Game->m_Offsets->m_LaserAvailable = false;
 		Logger::Write("Laser pointer disabled: Precache hook enable failed.");
 	}
-	if (m_VR->m_Config.experimentalHudOverlay &&
-		m_VR->m_HUDHandle != vr::k_ulOverlayHandleInvalid) {
+	if ((m_VR->m_Config.experimentalHudOverlay &&
+		m_VR->m_HUDHandle != vr::k_ulOverlayHandleInvalid) || m_VR->m_Config.hudInEyeCentered) {
 		const auto *offsets = m_Game->m_Offsets;
 		Logger::Write("Experimental HUD symbols: PushRenderTarget=" +
 			std::string(offsets->PushRenderTargetAndViewport.address ? "OK" : "MISSING") +
@@ -1407,6 +1407,35 @@ void Hooks::dPopRenderTargetAndViewport(void *ecx, void *edx)
 
 void Hooks::dVGui_Paint(void *ecx, void *edx, int mode)
 {
+	if (Portal2VRRuntime::IsPublished(g_Game, m_Game) && !m_VR->m_Config.experimentalHudOverlay &&
+		m_VR->m_Config.hudInEyeCentered && (mode & PAINT_INGAMEPANELS) &&
+		m_Game->m_EngineClient->IsInGame() && !m_Game->m_VguiSurface->IsCursorVisible()) {
+		// The HUD is laid out for the 1280x720 window but painted into the much
+		// larger eye targets, landing small in the top-left corner. Paint the
+		// in-game panels into a centred viewport sized to a share of the eye,
+		// which also scales them up.
+		IMatRenderContext *context = m_Game->m_MaterialSystem->GetRenderContext();
+		ITexture *target = context ? context->GetRenderTarget() : nullptr;
+		const bool eyeTarget = target && (target == m_VR->m_LeftEyeTexture || target == m_VR->m_RightEyeTexture);
+		int windowWidth = 0, windowHeight = 0;
+		if (eyeTarget)
+			context->GetWindowSize(windowWidth, windowHeight);
+		if (eyeTarget && windowWidth > 0 && windowHeight > 0) {
+			const int eyeWidth = static_cast<int>(m_VR->m_RenderWidth);
+			const int eyeHeight = static_cast<int>(m_VR->m_RenderHeight);
+			const int width = static_cast<int>(eyeWidth * m_VR->m_Config.hudInEyeScale);
+			const int height = width * windowHeight / windowWidth;
+			const int x = (eyeWidth - width) / 2;
+			const int y = (eyeHeight - height) / 2 + static_cast<int>(eyeHeight * m_VR->m_Config.hudInEyeVerticalOffset);
+			hkPushRenderTargetAndViewport.fOriginal(context, target, nullptr, x, y, width, height);
+			hkVgui_Paint.fOriginal(ecx, mode);
+			hkPopRenderTargetAndViewport.fOriginal(context);
+			context->Release();
+			return;
+		}
+		if (context)
+			context->Release();
+	}
 	if (!Portal2VRRuntime::IsPublished(g_Game, m_Game) ||
 		!m_VR->m_Config.experimentalHudOverlay)
 		return hkVgui_Paint.fOriginal(ecx, mode);

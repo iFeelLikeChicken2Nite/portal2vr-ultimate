@@ -74,6 +74,10 @@ struct ConfigSnapshot {
     float sixenseHoldDepthMax = 600.0f;
     // Native VR grab: right stick up/down changes a held object's distance
     // (player_held_object_distance, game units) while it is held.
+    // HUD drawn into the eyes in a centred viewport (ExperimentalHUDOverlay off).
+    bool hudInEyeCentered = true;
+    float hudInEyeScale = 0.45f;          // share of the eye width the HUD spans
+    float hudInEyeVerticalOffset = 0.05f; // share of eye height, + = lower
     bool nativeHoldDistance = true;
     float nativeHoldDistanceSpeed = 120.0f; // units per second at full stick
     float nativeHoldDistanceMin = 30.0f;
@@ -209,6 +213,9 @@ inline ConfigParseResult ParseConfig(std::istream &stream, const ConfigSnapshot 
     readFloat("SixenseHoldDepthSpeed", result.value.sixenseHoldDepthSpeed, 0.0f, 3000.0f);
     readFloat("SixenseHoldDepthMin", result.value.sixenseHoldDepthMin, -2000.0f, 0.0f);
     readFloat("SixenseHoldDepthMax", result.value.sixenseHoldDepthMax, 0.0f, 3000.0f);
+    readBool("HUDInEyeCentered", result.value.hudInEyeCentered);
+    readFloat("HUDInEyeScale", result.value.hudInEyeScale, 0.2f, 1.0f);
+    readFloat("HUDInEyeVerticalOffset", result.value.hudInEyeVerticalOffset, -0.4f, 0.4f);
     readBool("NativeHoldDistance", result.value.nativeHoldDistance);
     readFloat("NativeHoldDistanceSpeed", result.value.nativeHoldDistanceSpeed, 0.0f, 1000.0f);
     readFloat("NativeHoldDistanceMin", result.value.nativeHoldDistanceMin, 10.0f, 500.0f);

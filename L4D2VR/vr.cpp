@@ -1064,23 +1064,31 @@ void VR::ApplySixenseHoldDepth(SixenseBridge::LegacyAllControllerData &hydra)
 // game's default comes back on release.
 void VR::UpdateNativeHoldDistance()
 {
+    float *distanceVM = m_Game->m_HeldObjectDistanceVM;
     float *distance = m_Game->m_HeldObjectDistance;
-    if (!distance || SixenseEmulationOn() || !m_Config.nativeHoldDistance)
+    if (!distanceVM || !distance || SixenseEmulationOn() || !m_Config.nativeHoldDistance)
         return;
     const auto now = GetTickCount64();
     const float dt = m_LastNativeHoldTick ? (std::min)(0.1f, (now - m_LastNativeHoldTick) / 1000.0f) : 0.0f;
     m_LastNativeHoldTick = now;
+    const float vmDefault = m_Game->m_HeldObjectDistanceVMDefault;
+    const auto apply = [&](float vm) {
+        // Viewmodel holding is what Portal 2 uses; move the plain distance
+        // by the same amount for the non-viewmodel path.
+        *distanceVM = vm;
+        *distance = m_Game->m_HeldObjectDistanceDefault + (vm - vmDefault);
+    };
     const bool holding = now - m_LastHoldTick.load() < 250;
     if (!holding) {
         if (m_NativeHoldActive) {
-            *distance = m_Game->m_HeldObjectDistanceDefault;
+            apply(vmDefault);
             m_NativeHoldActive = false;
         }
         return;
     }
     if (!m_NativeHoldActive) {
         m_NativeHoldActive = true;
-        *distance = m_Game->m_HeldObjectDistanceDefault;
+        apply(vmDefault);
         if (!m_SixenseHoldLogged) {
             m_SixenseHoldLogged = true;
             Logger::Write("Native grab: held object detected; right stick up/down sets its distance");
@@ -1088,11 +1096,10 @@ void VR::UpdateNativeHoldDistance()
     }
     vr::InputAnalogActionData_t stick{};
     if (GetAnalogActionData(m_ActionTurn, stick) && std::fabs(stick.y) > 0.2f) {
-        const float next = *distance + stick.y * m_Config.nativeHoldDistanceSpeed * dt;
-        *distance = (std::max)(m_Config.nativeHoldDistanceMin, (std::min)(m_Config.nativeHoldDistanceMax, next));
+        const float next = *distanceVM + stick.y * m_Config.nativeHoldDistanceSpeed * dt;
+        apply((std::max)(m_Config.nativeHoldDistanceMin, (std::min)(m_Config.nativeHoldDistanceMax, next)));
     }
 }
-
 bool VR::SixenseEmulationOn() const
 {
     return m_IsInitialized && m_SixenseActionsAvailable && m_Config.sixenseEmulation && GameModules::IsSixense();
