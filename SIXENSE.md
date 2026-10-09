@@ -153,8 +153,13 @@ Open questions, in the order a first test session should answer them:
    machines after single player works, starting with one VR player and one
    flat-screen player.
 7. The portal gun's blue glow effects do not line up with the gun model
-   after the viewmodel offset (low priority; `ExperimentalViewmodelAlignment`
-   is the existing option aimed at model/effect alignment, untested here).
+   after the viewmodel offset, and they move with head tracking rather than
+   with the hand (seen 2026-10-09), so they are placed from the view rather
+   than from the hand-placed viewmodel's attachments. Low priority; turning
+   the glow off is acceptable. `ExperimentalViewmodelAlignment` cannot help
+   on this build: its `DrawViewModels`, `ViewmodelCalcView`,
+   `LookupViewmodelAttachment` and `GetViewmodelOwner` patterns do not match
+   `client_sixense.dll`.
 
 ## native-vr branch: rebuilding the mechanics on VR controllers
 
