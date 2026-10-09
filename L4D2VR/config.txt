@@ -52,4 +52,4 @@ HUDInEyeVerticalOffset=0.05 # -0.4 to 0.4, share of view height; + moves the HUD
 NativeHoldDistance=true # Without Hydra emulation: while holding something, right stick up/down pushes it away or pulls it closer
 NativeHoldDistanceSpeed=250.0 # game units per second at full stick
 NativeHoldDistanceMin=30.0 # closest a held object can be pulled (game units)
-NativeHoldDistanceMax=600.0 # furthest a held object can be pushed (game units)
+NativeHoldDistanceMax=100.0 # furthest a held object can be pushed (game units); the game stops held objects at about 100, so higher values only add a dead zone

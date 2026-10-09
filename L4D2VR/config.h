@@ -81,7 +81,7 @@ struct ConfigSnapshot {
     bool nativeHoldDistance = true;
     float nativeHoldDistanceSpeed = 250.0f; // units per second at full stick
     float nativeHoldDistanceMin = 30.0f;
-    float nativeHoldDistanceMax = 600.0f;
+    float nativeHoldDistanceMax = 100.0f; // the game stops held objects about here
 };
 
 struct ConfigParseResult {
