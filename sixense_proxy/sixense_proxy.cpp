@@ -131,7 +131,15 @@ int sixenseExit() { Trace(__func__); return kSuccess; }
 
 int sixenseGetMaxBases() { Trace(__func__); return 1; }
 int sixenseSetActiveBase(int) { Trace(__func__); return kSuccess; }
-int sixenseIsBaseConnected(int) { Trace(__func__); return 1; }
+// Connected only while Portal2VR serves Hydra data (SixenseMode=Auto). With
+// emulation off the MotionPack must see no base at all, or its Hydra setup
+// screen takes over input and blocks every button.
+int sixenseIsBaseConnected(int)
+{
+    Trace(__func__);
+    const auto *api = Api();
+    return api && api->GetNumActiveControllers() > 0 ? 1 : 0;
+}
 
 int sixenseGetMaxControllers() { Trace(__func__); return SixenseBridge::kMaxControllers; }
 int sixenseGetHistorySize() { Trace(__func__); return SixenseBridge::kHistorySize; }
