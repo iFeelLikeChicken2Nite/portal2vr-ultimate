@@ -1034,9 +1034,9 @@ void VR::ApplySixenseHoldDepth(SixenseBridge::LegacyAllControllerData &hydra)
         m_SixenseGameDefaultsApplied = false;
     } else if (!m_SixenseGameDefaultsApplied && m_Config.sixenseVRDefaults && m_SixenseInputActive) {
         m_Game->ClientCmd_Unrestricted("sixense_hold_multiplier 2; sixense_aim_1to1_heading_multiplier 1; "
-            "sixense_aim_1to1_pitch_multiplier 1; sixense_hold_spin_speed 0; sixense_disable_gestures 1");
+            "sixense_aim_1to1_pitch_multiplier 1; sixense_hold_spin_speed 0");
         m_SixenseGameDefaultsApplied = true;
-        Logger::Write("Sixense: applied VR defaults (hold multiplier 2, 1:1 rotation, no hold spin, no tilt gestures)");
+        Logger::Write("Sixense: applied VR defaults (hold multiplier 2, 1:1 rotation, no hold spin)");
     }
 
     const bool holding = now - m_LastHoldTick.load() < 250;
@@ -1089,7 +1089,7 @@ SixenseBridge::HandInput VR::ReadSixenseHand(vr::ETrackedControllerRole role,
         std::memcpy(held.pose.m, pose.mDeviceToAbsoluteTracking.m, sizeof(held.pose.m));
         held.time = now;
         held.valid = true;
-    } else if (!held.valid || now - held.time > 2000) {
+    } else if (!held.valid) {
         return hand;
     }
     hand.valid = true;
