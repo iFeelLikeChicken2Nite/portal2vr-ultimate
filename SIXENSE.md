@@ -1,9 +1,20 @@
 # The 6DOF Perceptual Pack: Portal 2 Sixense Perceptual Pack in VR
 
-Work in progress: running the Sixense MotionPack (the Razer Hydra DLC, with
-the Perceptual Pack levels from the community preservation package) under
-Portal2VR, with the headset rendering the game and your VR controllers
-standing in for the Hydra.
+Work in progress: running the Steam app "Portal 2 Sixense Perceptual Pack"
+(247120) under Portal2VR, with the headset rendering the game and the VR
+controllers driving its motion mechanics.
+
+Two different Sixense releases share this install and its game DLLs
+(`client_sixense.dll`, `server_sixense.dll`):
+
+- **Perceptual Pack** (2013, Intel Perceptual Computing camera): the seven
+  `sp_a1_sx_perc_*` levels, played with hand gestures and head tracking.
+- **MotionPack** (Razer Hydra): the `sp_a2_sx_*` to `sp_a8_sx_*` levels,
+  played with the Hydra; some of them also carry Intel-camera hints in this
+  build.
+
+Below, "Hydra emulation" means feeding the shared Sixense input code fake
+Hydra data; the `native-vr` branch replaces that with VR-native mechanics.
 
 Nothing here has been run in a headset yet. Read **Status** before trying it.
 
@@ -76,9 +87,9 @@ action can be rebound in SteamVR's controller binding UI under
 ## Manual install (the launcher does not handle the MotionPack yet)
 
 The Steam app "Portal 2 Sixense Perceptual Pack" (247120) installs to
-`steamapps\common\Portal 2 Sixense Perceptual Pack` and contains both the
-Perceptual Pack levels (`sp_a1_sx_perc_*`) and the MotionPack levels
-(`sp_a2_sx_*` to `sp_a8_sx_*`), with the game DLLs in `portal2_sixense\bin`.
+`steamapps\common\Portal 2 Sixense Perceptual Pack` and ships the levels of
+both releases (Perceptual Pack `sp_a1_sx_perc_*`, MotionPack `sp_a2_sx_*`
+to `sp_a8_sx_*`), with the shared game DLLs in `portal2_sixense\bin`.
 
 1. Install it from Steam. Unmodified, it crashes at startup on any PC
    without the Intel camera; the proxy from step 3 fixes that.
@@ -172,3 +183,35 @@ From the server's `sixense_*` convars and the map list
 
 Order: distance grab (done), then 1:1 rotation and ratchet, then scaling and
 portal tweaking once their server-side entry points are mapped.
+
+### By pack
+
+The two releases use the same server mechanics, reached by different
+inputs. What each set of levels asks for (from their instructor hints and
+`sixense_*` commands in the entity lumps):
+
+**Perceptual Pack levels (`sp_a1_sx_perc_*`, Intel camera):**
+
+| Level need (hint / command) | Native VR mapping |
+|---|---|
+| Hand calibration ("Align Hands", `SIXENSE_HINT_INTEL_CALIBRATION_INSTRUCTION`) | Not needed: controllers are always tracked; skip or auto-complete the lesson |
+| Aim/look and view spin with the hand (`SIXENSE_HINT_LOOK*`, `LOOK_SPIN`) | Not needed: the headset is the view, right stick turns |
+| Grab the portal device ("Grab the Portal Device") | Normal pickup with the use button |
+| 1:1 grab and rotate (`SIXENSE_HINT_INTEL_1TO1`, `_1TO1_ROTATE`, `1TO1_STOP`) | Held object follows controller position and rotation (1:1 step) |
+| Scaling, incl. multi-axis (`SIXENSE_HINT_INTEL_SCALING`, `_SCALING_MULTI_AXIS`, `_SCALE`) | Scaling step (two-hand gesture), via the Intel scale path |
+| Portal surfing: grab and drop a portal (`SIXENSE_HINT_INTEL_SURF_GRAB`, `_SURF_DROP`, `_SURFING`) | Portal tweaking step |
+| Posture / crouch / jump / door hints | Standard Portal2VR controls |
+
+**MotionPack levels (`sp_a2_sx_*` to `sp_a8_sx_*`, Hydra):**
+
+| Level need | Native VR mapping |
+|---|---|
+| Distance grab and reach (`SIXENSE_HINT_1TO1_FURTHER_*`, `_1TO1_DEPTH`) | Done: right stick distance |
+| 1:1 manipulation, ratchet lessons (`sixense_enable_tutorial_ratchet_lesson`, `SIXENSE_HINT_RATCHET`) | 1:1 rotation step; ratchet button |
+| Scaling with reach and raise (`SIXENSE_HINT_SCALING_REACH`, `_SCALING_RAISE`, scale-reset lessons) | Scaling step |
+| Portal firing hints, gels (`SIXENSE_HINT_INTEL_*_GEL` in the gel levels) | Standard Portal2VR firing |
+| Turret scaling (sp_a8_sx_turrets) | Scaling step, turret variant |
+
+Both sets toggle the game's lessons and gestures from map logic
+(`sixense_disable_gestures`, `sixense_disable_lessons`,
+`sixense_hide_video_hint`); with Hydra input off these are inert.
