@@ -168,50 +168,26 @@ grab are active.
 
 ### Mechanics inventory
 
-From the server's `sixense_*` convars and the map list
-(`sp_a1_sx_perc_*`, `sp_a2_sx_*` to `sp_a8_sx_*`):
+One mod covers both packs' levels. Each mechanic is tagged with where it is
+used: **P** = Perceptual Pack levels (`sp_a1_sx_perc_*`), **M** = MotionPack
+levels (`sp_a2_sx_*` to `sp_a8_sx_*`). Sources: the server's `sixense_*`
+convars and each map's instructor hints and `sixense_*` commands.
 
-| Mechanic | What the pack does | Levels | Native plan |
+| Mechanic | Used in | What the pack does | Native VR plan |
 |---|---|---|---|
-| Distance grab | Held object floats ahead; Hydra reach sets distance | all | **Done (first step):** Portal2VR aims the held object along the right controller; right stick up/down changes `player_held_object_distance` while holding (`NativeHoldDistance*` in config.txt) |
-| 1:1 manipulation | Reach out while holding to move/rotate the object with the wrist (`sixense_one_to_one*`, `sixense_auto_one_to_one_*`, `sixense_dist_one_to_one_*`) | sp_a2_sx_reaching, tutorials | Rotate the held object with the controller's rotation (grab controller target angles) |
-| Ratcheting | Hold a button to re-grip without turning the object (`sixense_ratchet*`) | 1:1 levels | Comes free with 1:1 rotation: ignore wrist rotation while a button is held |
-| Cube scaling | Hold SCALE and move the other hand left/right to grow/shrink, per axis; double-tap resets (`sixense_scaling_*`) | sp_a1_sx_perc_scaling, sp_a8_sx_mass | Investigate the Intel path first: `sixense_intel_scale_key` / `sixense_intel_reset_scale_key` were keyboard-driven scaling for camera mode |
-| Turret scaling | Same for turrets (`sixense_scaling_turret_*`) | sp_a8_sx_turrets | Same as cube scaling |
-| Portal tweaking / surfing | Aim at a placed portal, hold the trigger to grab it, move/rotate it (`sixense_portal_tweaking_*`) | sp_a1_sx_perc_surfing, sp_a8_sx_tb_surf, sp_a4_sx_thru_portals | Investigate `sixense_intel_portal_tweak_key` (camera mode's key) and the tweaking server code |
-| Throwing | Release with hand velocity (`sixense_throw_*`) | throwing levels | Use controller velocity on release |
+| Distance grab | P, M (all) | Held object floats ahead; Hydra reach or hand depth sets distance (`SIXENSE_HINT_1TO1_FURTHER_*`, `_1TO1_DEPTH`) | **Done:** Portal2VR aims the held object along the right controller; right stick up/down changes `player_held_object_distance` while holding (`NativeHoldDistance*`) |
+| 1:1 manipulation | P (`INTEL_1TO1`, `_1TO1_ROTATE`, `1TO1_STOP`), M (sp_a2_sx_reaching, tutorials) | Move/rotate the held object with the hand (`sixense_one_to_one*`, `sixense_auto_one_to_one_*`) | Held object follows the controller's rotation (grab controller target angles) |
+| Ratcheting | M (`SIXENSE_HINT_RATCHET`, ratchet lessons) | Hold a button to re-grip without turning the object (`sixense_ratchet*`) | Ignore wrist rotation while a button is held |
+| Cube scaling | P (sp_a1_sx_perc_scaling, `INTEL_SCALING`, `_MULTI_AXIS`), M (sp_a8_sx_mass, `SCALING_REACH`, `_RAISE`) | Hold SCALE and move the other hand to grow/shrink, per axis; double-tap resets (`sixense_scaling_*`) | Two-hand gesture; investigate the Intel path first (`sixense_intel_scale_key`, `sixense_intel_reset_scale_key` were keyboard-driven) |
+| Turret scaling | M (sp_a8_sx_turrets) | Same for turrets (`sixense_scaling_turret_*`) | Same as cube scaling |
+| Portal tweaking / surfing | P (sp_a1_sx_perc_surfing, `INTEL_SURF_GRAB`, `_SURF_DROP`), M (sp_a8_sx_tb_surf, sp_a4_sx_thru_portals) | Grab a placed portal, move/rotate it (`sixense_portal_tweaking_*`) | Investigate `sixense_intel_portal_tweak_key` and the tweaking server code |
+| Throwing | M | Release with hand velocity (`sixense_throw_*`) | Controller velocity on release |
+| Hand calibration, look/spin with the hand | P (`INTEL_CALIBRATION_INSTRUCTION`, "Align Hands", `HINT_LOOK*`) | Camera calibration; aiming the view with the hand | Not needed in VR (tracked controllers, headset view, stick turn); skip or auto-complete those lessons |
+| Portal device pickup, posture, door, jump, crouch, gel and firing hints | P, M | Standard actions | Standard Portal2VR controls |
+
+Map logic in both sets toggles the game's lessons and gestures
+(`sixense_disable_gestures`, `sixense_disable_lessons`,
+`sixense_hide_video_hint`); with Hydra input off these are inert.
 
 Order: distance grab (done), then 1:1 rotation and ratchet, then scaling and
 portal tweaking once their server-side entry points are mapped.
-
-### By pack
-
-The two releases use the same server mechanics, reached by different
-inputs. What each set of levels asks for (from their instructor hints and
-`sixense_*` commands in the entity lumps):
-
-**Perceptual Pack levels (`sp_a1_sx_perc_*`, Intel camera):**
-
-| Level need (hint / command) | Native VR mapping |
-|---|---|
-| Hand calibration ("Align Hands", `SIXENSE_HINT_INTEL_CALIBRATION_INSTRUCTION`) | Not needed: controllers are always tracked; skip or auto-complete the lesson |
-| Aim/look and view spin with the hand (`SIXENSE_HINT_LOOK*`, `LOOK_SPIN`) | Not needed: the headset is the view, right stick turns |
-| Grab the portal device ("Grab the Portal Device") | Normal pickup with the use button |
-| 1:1 grab and rotate (`SIXENSE_HINT_INTEL_1TO1`, `_1TO1_ROTATE`, `1TO1_STOP`) | Held object follows controller position and rotation (1:1 step) |
-| Scaling, incl. multi-axis (`SIXENSE_HINT_INTEL_SCALING`, `_SCALING_MULTI_AXIS`, `_SCALE`) | Scaling step (two-hand gesture), via the Intel scale path |
-| Portal surfing: grab and drop a portal (`SIXENSE_HINT_INTEL_SURF_GRAB`, `_SURF_DROP`, `_SURFING`) | Portal tweaking step |
-| Posture / crouch / jump / door hints | Standard Portal2VR controls |
-
-**MotionPack levels (`sp_a2_sx_*` to `sp_a8_sx_*`, Hydra):**
-
-| Level need | Native VR mapping |
-|---|---|
-| Distance grab and reach (`SIXENSE_HINT_1TO1_FURTHER_*`, `_1TO1_DEPTH`) | Done: right stick distance |
-| 1:1 manipulation, ratchet lessons (`sixense_enable_tutorial_ratchet_lesson`, `SIXENSE_HINT_RATCHET`) | 1:1 rotation step; ratchet button |
-| Scaling with reach and raise (`SIXENSE_HINT_SCALING_REACH`, `_SCALING_RAISE`, scale-reset lessons) | Scaling step |
-| Portal firing hints, gels (`SIXENSE_HINT_INTEL_*_GEL` in the gel levels) | Standard Portal2VR firing |
-| Turret scaling (sp_a8_sx_turrets) | Scaling step, turret variant |
-
-Both sets toggle the game's lessons and gestures from map logic
-(`sixense_disable_gestures`, `sixense_disable_lessons`,
-`sixense_hide_video_hint`); with Hydra input off these are inert.
