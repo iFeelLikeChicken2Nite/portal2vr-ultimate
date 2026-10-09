@@ -1427,9 +1427,20 @@ void Hooks::dVGui_Paint(void *ecx, void *edx, int mode)
 			const int height = width * windowHeight / windowWidth;
 			const int x = (eyeWidth - width) / 2;
 			const int y = (eyeHeight - height) / 2 + static_cast<int>(eyeHeight * m_VR->m_Config.hudInEyeVerticalOffset);
-			hkPushRenderTargetAndViewport.fOriginal(context, target, nullptr, x, y, width, height);
+			// Only move the viewport: re-binding the eye target through a push
+			// (with no depth texture) made the HUD vanish on this build.
+			int oldX = 0, oldY = 0, oldW = 0, oldH = 0;
+			context->GetViewport(oldX, oldY, oldW, oldH);
+			context->Viewport(x, y, width, height);
+			static bool loggedRect = false;
+			if (!std::exchange(loggedRect, true))
+				Logger::Write("HUD in eye: centred viewport " + std::to_string(x) + "," + std::to_string(y) + " " +
+					std::to_string(width) + "x" + std::to_string(height) + " in eye " + std::to_string(eyeWidth) + "x" +
+					std::to_string(eyeHeight) + " (previous " + std::to_string(oldX) + "," + std::to_string(oldY) + " " +
+					std::to_string(oldW) + "x" + std::to_string(oldH) + ", window " + std::to_string(windowWidth) + "x" +
+					std::to_string(windowHeight) + ")");
 			hkVgui_Paint.fOriginal(ecx, mode);
-			hkPopRenderTargetAndViewport.fOriginal(context);
+			context->Viewport(oldX, oldY, oldW, oldH);
 			context->Release();
 			return;
 		}

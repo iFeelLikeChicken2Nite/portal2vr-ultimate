@@ -79,9 +79,9 @@ struct ConfigSnapshot {
     float hudInEyeScale = 0.45f;          // share of the eye width the HUD spans
     float hudInEyeVerticalOffset = 0.05f; // share of eye height, + = lower
     bool nativeHoldDistance = true;
-    float nativeHoldDistanceSpeed = 120.0f; // units per second at full stick
+    float nativeHoldDistanceSpeed = 250.0f; // units per second at full stick
     float nativeHoldDistanceMin = 30.0f;
-    float nativeHoldDistanceMax = 250.0f;
+    float nativeHoldDistanceMax = 600.0f;
 };
 
 struct ConfigParseResult {
